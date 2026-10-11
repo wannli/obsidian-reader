@@ -13,10 +13,6 @@
     "validate:metadata": "node scripts/validate-release.mjs",
     "vault:setup": "node scripts/setup-vault.mjs",
     "vault:update": "node scripts/setup-vault.mjs --update-plugin",
-    "vault:open": "node scripts/open-vault.mjs",
-    "main:merge": "node scripts/merge-local-main.mjs",
-    "vault:reload": "READER_RUNTIME_TARGET=acceptance node scripts/reload-local-main.mjs",
-    "test:obsidian": "node scripts/test-obsidian.mjs",
     "check": "npm run validate:metadata && npm run typecheck && npm test && npm run test:tooling && npm run build"
   },
   "dependencies": {
@@ -26,7 +22,6 @@
     "yaml": "^2.8.1"
   },
   "devDependencies": {
-    "@playwright/test": "1.63.0",
     "@types/node": "24.19.2",
     "esbuild": "0.28.2",
     "jsdom": "26.1.0",

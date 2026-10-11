@@ -55,14 +55,13 @@ Pinned sources:
    choice whenever those values need preserving.
 
 `choices.json` is a **choice-array fixture**, not a whole `data.json`, package,
-or supported QuickAdd import file. Test-tooling may merge these two entries
-into the isolated test vault's QuickAdd choices. Do not replace live settings.
+or supported QuickAdd import file. Configure the choices manually in an approved
+synthetic vault using the UI instructions; do not replace live settings.
 Its keys match the pinned release; use the UI instructions for ordinary setup.
 The delivered choices use fresh Reader IDs `reader-article-template` and
 `reader-article-quick-template`; old Reader choices/Shortcuts are not migrated.
-Setup is create-only and refuses differing installed choices/templates;
-changing repository assets alone does not update installed settings. Tooling owns
-any explicitly approved dummy-vault setup/reset, preserving unrelated settings.
+Changing repository assets alone does not update installed settings. Preserve
+unrelated choices/templates; any dummy-vault setup/reset needs explicit approval.
 No cursor token or post-open script assumes the routed leaf is a Markdown editor.
 
 The project is pre-production until the user says otherwise; that assumption
@@ -149,7 +148,8 @@ of conflict-free multi-device sync. Physical iOS and real sync: **NOT RUN**.
   through a keep-existing collision policy.
 
 `tests/quickadd-assets.test.ts` checks fixture contracts, not QuickAdd execution.
-Desktop validator should test hostile YAML input, inert template-like input,
+Native acceptance is manual; no native automation harness is provided. In an
+explicitly approved synthetic vault, test hostile YAML input, inert template-like input,
 Cancel, collisions, automatic Reader routing, native opening without Reader,
 and extraction preserving Comments using the actual pinned plugin before
 claiming runtime acceptance. No Source-editor or cursor-placement expectation

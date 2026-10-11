@@ -3,7 +3,7 @@ import { mkdtemp, readdir, rename, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { readBuild } from './artifacts.mjs';
 import { assertNoSafetyHold } from './safety-hold.mjs';
-import { seedFiles, seedSidecarPath } from './seed.mjs';
+import { seedFiles } from './seed.mjs';
 import { assertNoLegacyPlugin, assertOwnedVault, assertSafePath, createOnly, directory, isMain, markerName, ownership, pluginFiles, pluginPath, regularFile, sandboxPath, statOrNull, vaultPath } from './sandbox.mjs';
 
 export { repository, vaultPath } from './sandbox.mjs';
@@ -24,19 +24,8 @@ export async function setupVault() {
   };
   // Validate every existing destination before creating even the ownership marker.
   for (const path of Object.keys(seeds)) await assertSafePath(join(vaultPath, path), 'file');
-  // Never reseed a missing note over surviving legacy state. JSON is not a seed
-  // destination or authority here; only verified startup conversion may retire it.
-  const preservePairs = new Set();
-  for (const path of Object.keys(seeds).filter(path => /^Reading\/.*\.md$/.test(path))) {
-    const current = seedSidecarPath(path);
-    for (const relative of [current, current.replace('Reading/Metadata/', 'Reading/Pullman Metadata/')]) {
-      await assertSafePath(join(vaultPath, relative), 'file');
-      if (await statOrNull(join(vaultPath, relative))) preservePairs.add(path);
-    }
-  }
   const created = [], preserved = [];
   for (const [relative, content] of Object.entries(seeds)) {
-    if (preservePairs.has(relative)) { preserved.push(relative); continue; }
     const added = await createOnly(join(vaultPath, relative), content);
     (added ? created : preserved).push(relative);
   }

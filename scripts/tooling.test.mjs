@@ -1,16 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdir, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
+import { link, mkdir, readFile, readdir, rename, rm, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { runInNewContext } from 'node:vm';
+import { pathToFileURL } from 'node:url';
+import { parseDocument } from 'yaml';
+import { seedFiles, seedBody, seedTitle } from './seed.mjs';
 import { fixture, snapshot } from './tooling-fixture.mjs';
-import { verifyVaultPage } from './cdp.mjs';
-import { cdpPort, ownership, vaultPath } from './sandbox.mjs';
-import { startRuntimeFixture } from './runtime-fixture.mjs';
-import { isControlledURL, unsafeLiveArticles } from './runtime-scope.mjs';
-import { assertInlineWrite, assertMarked, assertPositionWrite, expectPositionRestore, verifyPositionRestore, rememberReaderPositions, parseMarkdown, positionDelta, remapPositionEvidence, replacementBody } from './runtime-storage.mjs';
-import { captureReaderFlush, expectedReadingPosition } from './runtime-position.mjs';
-import { fixtureLinkSyntax } from './runtime-actions.mjs';
 
 function succeeds(result) { assert.equal(result.status, 0, result.output); }
 function refuses(result, reason) { assert.notEqual(result.status, 0, result.output); assert.match(result.output, reason); }
@@ -27,11 +22,11 @@ test('setup is create-only, preserves all existing bytes/mtimes, and seeds clean
   for (const [name, entry] of Object.entries(before).filter(([name]) => name.endsWith('.md'))) {
     const text = Buffer.from(entry.bytes, 'base64').toString();
     if (/^Reading\/(?:Inbox|Later|Stream|Treasury|Wires)\//.test(name)) {
-      const { metadata, body } = parseMarkdown(text);
+      const { metadata, body } = parsed(text);
       assert.equal(Object.hasOwn(metadata, 'created-by'), false, name);
       if (name.startsWith('Reading/Wires/')) {
         assert.equal(metadata.type, 'feed', name);
-        assert.equal(metadata.pullmanFormat, 'inline-v1', name); assert.ok(metadata.id, name);
+        assert.equal(Object.hasOwn(metadata, 'pullmanFormat'), false, name); assert.ok(metadata.id, name);
       } else {
         assert.equal(metadata.type, 'article', name); assert.ok(body.trim(), name);
         for (const key of ['id', 'guid', 'pullmanFormat', 'content', 'extractor', 'sourceHash', 'sourceLength'])
@@ -55,6 +50,7 @@ test('explicit update backs up exactly three plugin files, changing nothing else
   const backups = join(f.root, '.sandbox', 'backups');
   const directories = await readdir(backups);
   assert.equal(directories.length, 1);
+  assert.deepEqual(await readdir(join(f.root, '.sandbox', 'staging')), []);
   const backup = join(backups, directories[0]);
   assert.deepEqual((await readdir(backup)).sort(), ['main.js', 'manifest.json', 'styles.css']);
   for (const name of Object.keys(before)) {
@@ -131,297 +127,260 @@ test('browser bundle permits only obsidian external, carries identity, and rejec
   const meta = JSON.parse(await readFile(join(f.root, 'dist', 'build-meta.json')));
   assert.deepEqual(meta.external, ['obsidian']);
   assert.equal(meta.platform, 'browser');
+  const externals = Object.values(meta.metafile.outputs).flatMap(output => output.imports.filter(entry => entry.external).map(entry => entry.path));
+  assert.deepEqual([...new Set(externals)], ['obsidian']);
+  assert.deepEqual((await readdir(join(f.root, 'dist'))).sort(), ['build-meta.json', 'main.js', 'manifest.json', 'styles.css']);
   assert.match(await readFile(join(f.root, 'dist', 'main.js'), 'utf8'), /__readerBuildId/);
   const before = await snapshot(join(f.root, 'dist'));
-  for (const name of ['node:fs', 'fs/promises', 'electron', 'node:test']) {
+  for (const name of ['node:fs', 'fs', 'fs/promises', 'electron', 'electron/main', 'node:test', 'node:unknown-builtin']) {
     await writeFile(join(f.root, 'src', 'main.ts'), `import runtime from ${JSON.stringify(name)}; console.log(runtime);\n`);
     refuses(f.run('build.mjs'), /Node\/Electron import is forbidden/);
     assert.deepEqual(await snapshot(join(f.root, 'dist')), before);
   }
 });
 
-test('CDP guard checks exact absolute vault path before reading even the marker', async () => {
-  assert.equal(cdpPort, 19224);
-  for (const path of ['/different/Reader2 Test Vault', vaultPath + '-copy', undefined]) {
-    let reads = 0;
-    const page = { waitForFunction: async () => {}, evaluate: async () => { reads++; return path; } };
-    await assert.rejects(verifyVaultPage(page), /REFUSING unexpected vault/);
-    assert.equal(reads, 1, 'No further renderer access is permitted after a path mismatch');
-  }
-});
-
-test('CDP guard additionally requires the matching repository ownership marker', async () => {
-  for (const marker of [{ ...ownership, repository: '/different' }, ownership]) {
-    let reads = 0;
-    const page = { waitForFunction: async () => {}, evaluate: async () => ++reads === 1 ? vaultPath : marker };
-    if (marker === ownership) await verifyVaultPage(page);
-    else await assert.rejects(verifyVaultPage(page), /REFUSING invalid runtime ownership marker/);
-    assert.equal(reads, 2);
-  }
-});
-
-test('runtime helper modules resolve without opening an application or writing a vault', async () => {
-  const names = (await readdir(new URL('.', import.meta.url))).filter(name => /^(runtime-|quickadd-).*\.mjs$/.test(name));
-  for (const name of names) await import(new URL(name, import.meta.url));
-});
-
-test('controlled loopback fixture gates real responses and records status/retry/query requests', async () => {
-  const fixture = await startRuntimeFixture({ gateArticle: true });
-  try {
-    const response = fetch(fixture.articleURL + '?safe=100%25');
-    for (let i = 0; i < 100 && !fixture.evidence().pendingArticleResponses; i++) await new Promise(resolve => setTimeout(resolve, 10));
-    assert.equal(fixture.evidence().pendingArticleResponses, 1);
-    assert.equal(fixture.evidence().requests[0].responseAt, undefined);
-    fixture.releaseArticle();
-    assert.ok((await (await response).text()).includes(fixture.quote));
-    assert.ok(fixture.evidence().requests[0].responseAt);
-    fixture.setArticleStatus(503);
-    assert.equal((await fetch(fixture.articleURL)).status, 503);
-    fixture.setArticleStatus(200);
-    assert.equal((await fetch(fixture.articleURL)).status, 200);
-    const feed = await fetch(fixture.feedURL), etag = feed.headers.get('etag');
-    const rss = await feed.text();
-    assert.ok(fixture.feedExcerpt.length > 0);
-    assert.ok(rss.includes(`<description>${fixture.feedExcerpt}</description>`), 'The pipeline fixture must supply a nonempty RSS summary');
-    assert.ok(!rss.includes(fixture.quote), 'The RSS summary must not contain the full-text quote');
-    assert.equal((await fetch(fixture.feedURL, { headers: { 'If-None-Match': etag } })).status, 304);
-    assert.equal(fixture.evidence().requests.length, 5);
-  } finally { await fixture.stop(); }
-});
-
-test('live-mode safety refuses public unfinished/dummy notes but leaves protected/manual/full notes alone', () => {
-  const base = { path: 'sample.md', url: 'https://example.com/article', extractor: 'dummy', content: 'ready', highlights: [] };
-  assert.deepEqual(unsafeLiveArticles([base]), [base]);
-  for (const extractor of ['pending', 'summary']) assert.equal(unsafeLiveArticles([{ ...base, extractor }]).length, 1);
-  for (const extractor of ['manual', 'defuddle']) assert.equal(unsafeLiveArticles([{ ...base, extractor }]).length, 0);
-  assert.equal(unsafeLiveArticles([{ ...base, content: 'protected' }, { ...base, highlights: [{ id: 'hl-fixture' }] }]).length, 0);
-  assert.equal(isControlledURL('http://127.0.0.1:49155/reader-runtime/unique/article'), true);
-  assert.equal(isControlledURL('http://127.0.0.1:19222/'), false);
-  assert.equal(isControlledURL('http://127.0.0.1.evil.example/reader-runtime/unique/article'), false);
-});
-
-
-function inlineFixture(body, patch = {}) {
-  const metadata = { type: 'article', id: 'article-pure-fixture', pullmanFormat: 'inline-v1',
-    'created-by': 'ai', content: 'ready', extractor: 'manual', sourceHash: 'original-owner', sourceLength: body.length,
-    reading_position: { paragraph: 'keep', offset: 2 }, custom: { keep: ['all', 'values'] }, ...patch };
-  return '---\n' + Object.entries(metadata).map(([key, value]) => key + ': ' + JSON.stringify(value)).join('\n') + '\n---\n' + body;
+function parsed(raw) {
+  const match = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(raw);
+  assert.ok(match);
+  const doc = parseDocument(match[1], { uniqueKeys: true });
+  assert.deepEqual(doc.errors, []); assert.deepEqual(doc.warnings, []);
+  return { metadata: doc.toJS(), body: raw.slice(match[0].length) };
 }
-function annotationResult(before, body, patch = {}) {
-  const metadata = { ...parseMarkdown(before).metadata, content: 'protected', ...patch };
-  delete metadata.retryAfter;
-  return inlineFixture(body, metadata);
+const day = '2026-10-09';
+test('seed library emits YAML-backed inline Markdown without active sidecars', () => {
+  const files = seedFiles(day);
+  const notes = Object.entries(files).filter(([path]) => /^Reading\/.*\.md$/.test(path));
+  assert.equal(notes.length, 5);
+  assert.equal(Object.keys(files).filter(path => /^Reading\/(?:Metadata|Pullman Metadata)\//.test(path)).length, 0);
+  for (const [path, raw] of notes) {
+    const { metadata, body } = parsed(raw);
+    assert.equal(Object.hasOwn(metadata, 'created-by'), false);
+    for (const key of ['highlights', 'queueMove']) assert.equal(Object.hasOwn(metadata, key), false);
+    assert.doesNotMatch(body, /^## (?:Comments|Highlights|Article)$/m);
+    assert.doesNotMatch(raw, /<!--/);
+    if (path.includes('/Wires/')) {
+      assert.equal(metadata.type, 'feed'); assert.equal(metadata.id, 'feed-reader-synthetic-seed');
+      assert.equal(Object.hasOwn(metadata, 'pullmanFormat'), false);
+      assert.equal(metadata.enabled, false); assert.equal(metadata.prefix, 'Synthetic');
+    } else {
+      assert.equal(metadata.type, 'article'); assert.ok(body.trim());
+      for (const key of ['id', 'guid', 'pullmanFormat', 'content', 'extractor', 'sourceHash', 'sourceLength'])
+        assert.equal(Object.hasOwn(metadata, key), false, `${path}: ${key}`);
+    }
+  }
+  const path = `Reading/Inbox/261009 ${seedTitle}.md`;
+  assert.ok(files[path].endsWith(seedBody));
+  assert.equal(parsed(files[path]).metadata.url, 'https://example.invalid/reader/quiet-library');
+  assert.equal(parsed(files[path]).metadata['test-note'], 'Preserve this unknown property');
+  assert.doesNotMatch(files['Welcome.md'], /^created-by:/m);
+  assert.equal(Object.hasOwn(parsed(files[`Daily/${day}.md`]).metadata, 'created-by'), false);
+  const settings = JSON.parse(files['.obsidian/plugins/obsidian-reader/data.json']);
+  for (const key of ['logToDailyJournal', 'articlesFolder']) assert.equal(Object.hasOwn(settings, key), false, key);
+  assert.deepEqual(seedFiles(day), files);
+});
+
+for (const legacy of ['pullman', 'obsidian-reader2']) for (const existingReader of [false, true]) {
+  for (const identity of ['installed', 'enabled']) {
+    test(`setup/update refuses legacy ${legacy} (${identity}, Reader present: ${existingReader}) without migration`, async t => {
+      const f = await fixture(t);
+      if (existingReader) assert.equal(f.run().status, 0);
+      await mkdir(join(f.vault, '.obsidian/plugins'), { recursive: true });
+      if (identity === 'installed') {
+        const plugin = join(f.vault, '.obsidian/plugins', legacy);
+        await mkdir(plugin);
+        await writeFile(join(plugin, 'data.json'), '{"preserve":"legacy settings"}');
+      } else {
+        await writeFile(join(f.vault, '.obsidian/community-plugins.json'), JSON.stringify([legacy]));
+      }
+      const before = await snapshot(f.vault);
+      for (const args of [[], ['--update-plugin']]) {
+        const result = f.run('setup-vault.mjs', args);
+        assert.notEqual(result.status, 0);
+        assert.match(result.output, /Legacy (?:pullman|obsidian-reader2) plugin.*explicit migration approval/);
+        assert.deepEqual(await snapshot(f.vault), before);
+      }
+    });
+  }
 }
-test('inline verifier checks the precise repeated-text occurrence, Unicode and CRLF without quote search', () => {
-  const originalBody = '😀 Keep this.\r\n\r\nKeep this. Tail **stays**.\r\n', quote = 'Keep this';
-  const start = originalBody.lastIndexOf(quote), body = originalBody.slice(0, start) + '==' + quote + '==' + originalBody.slice(start + quote.length);
-  const before = inlineFixture(originalBody, { retryAfter: '2026-10-10T00:00:00Z' }), after = annotationResult(before, body);
-  const highlight = { id: 'inline-v1-fixture:highlight:' + start, quote, source: { start, end: start + quote.length + 4 }, anchor: { version: 'inline-v1-fixture' } };
-  const article = { body, highlights: [highlight] };
-  assert.equal(assertMarked(before, after, article, quote), highlight);
-  assert.throws(() => assertMarked(before, annotationResult(before, body.replace('Tail', 'Lost')), article, quote));
-  assert.throws(() => assertMarked(before, after, { ...article, highlights: [{ ...highlight, source: { start: 0, end: 4 } }] }, quote));
-  assert.throws(() => assertMarked(before, after, { ...article, highlights: [{ ...highlight, id: 'stale:highlight' }] }, quote));
-});
-test('inline verification preserves ownership/custom YAML and keeps protection after unmark/unlink', () => {
-  const before = inlineFixture('Before ==words== after.\n', { content: 'protected' });
-  const body = replacementBody(parseMarkdown(before).body, { start: 7, end: 16 }, '==words==', 'words');
-  assertInlineWrite(before, annotationResult(before, body), body);
-  for (const patch of [{ content: 'ready' }, { sourceHash: 'restamped' }, { sourceLength: body.length },
-    { reading_position: null }, { custom: 'lost' }, { highlights: [] }, { queueMove: {} }, { pullmanFormat: 'old' }]) {
-    assert.throws(() => assertInlineWrite(before, annotationResult(before, body, patch), body));
-  }
-  assert.throws(() => replacementBody('same same', { start: 1, end: 5 }, 'same', '==same=='));
-  assert.throws(() => replacementBody('same', { start: -1, end: 4 }, 'same', '==same=='));
-});
-test('native fixture expectations distinguish bare wiki, aliased wiki and preserved Markdown link syntax', () => {
-  assert.equal(fixtureLinkSyntax('selected words', 'selected words'), '[[selected words]]');
-  assert.equal(fixtureLinkSyntax('selected words', 'Chosen note'), '[[Chosen note|selected words]]');
-  const external = fixtureLinkSyntax('selected words', 'https://example.invalid/article');
-  assert.equal(external, '[selected words](https://example.invalid/article)');
-  assert.equal(fixtureLinkSyntax('selected words', 'Chosen-note', 'markdown'), '[selected words](Chosen-note)');
-  const original = 'Prefix ' + external + ' suffix\r\n';
-  assert.equal(replacementBody(original, { start: 7, end: 7 + external.length }, external, 'selected words'), 'Prefix selected words suffix\r\n');
-  assert.throws(() => fixtureLinkSyntax('**formatted**', 'Target'), /plain-label/);
-  assert.throws(() => fixtureLinkSyntax('words', 'https://example.invalid/?a=1&b=2'), /simple fixture URL/);
-});
-
-test('position evidence permits only the exact captured YAML map during inline edits', () => {
-  const before = inlineFixture('Before words after.\r\n', { retryAfter: '2030-01-01T00:00:00Z' });
-  const body = 'Before ==words== after.\r\n';
-  const position = { offset: 7, exact: 'words after.', paragraph: 'Before words after.', paragraphOffset: 7 };
-  const after = annotationResult(before, body, { reading_position: position });
-  assertInlineWrite(before, after, body, position);
-  assert.throws(() => assertInlineWrite(before, after, body), /unrelated YAML/);
-  assert.throws(() => assertInlineWrite(before, after, body, { ...position, offset: 8 }));
-  for (const patch of [{ content: 'ready' }, { sourceHash: 'restamped' }, { sourceLength: 1 },
-    { custom: { keep: ['lost'] } }, { extractor: 'defuddle' }, { error: 'Hidden failure' },
-    { highlights: [] }, { queueMove: {} }, { id: 'replacement' }, { pullmanFormat: 'old' }]) {
-    assert.throws(() => assertInlineWrite(before, annotationResult(before, body, { reading_position: position, ...patch }), body, position));
-  }
-  assert.throws(() => assertInlineWrite(before, annotationResult(before, body.replace('words', 'lost'), { reading_position: position }), body, position));
-});
-
-test('position-only checks preserve body, protected state, custom YAML and all ownership fields', () => {
-  const before = inlineFixture('==words== [label](https://example.invalid)\r\n', { content: 'protected', error: 'Keep diagnostic', retryAfter: '2030-01-01T00:00:00Z' });
-  const position = { offset: 4, paragraphOffset: 4, paragraph: 'words label', exact: 's label', start: false };
-  const note = parseMarkdown(before), after = inlineFixture(note.body, { ...note.metadata, reading_position: position });
-  assertPositionWrite(before, after, position);
-  assertPositionWrite(after, after); // No evidence still means byte-identical, not ignored YAML.
-  assert.throws(() => assertPositionWrite(before, after), /explicit expected-position evidence/);
-  for (const patch of [{ content: 'ready' }, { error: '' }, { retryAfter: '' }, { custom: {} },
-    { sourceHash: 'restamped' }, { sourceLength: 0 }, { extractor: 'dummy' }, { id: 'different' }]) {
-    assert.throws(() => assertPositionWrite(before, inlineFixture(note.body, { ...note.metadata, reading_position: position, ...patch }), position));
-  }
-  assert.throws(() => assertPositionWrite(before, inlineFixture(note.body + 'Lost boundary', { ...note.metadata, reading_position: position }), position));
-  assert.throws(() => assertPositionWrite(before, inlineFixture(note.body, { ...note.metadata, reading_position: null }), position));
-});
-
-test('position-only default does not silently authorize native first-write identity allocation', () => {
-  const before = '---\ntype: article\ncustom: keep\n---\nNative body\n';
-  const after = '---\ntype: article\ncustom: keep\nid: article-new-native\npullmanFormat: inline-v1\nreading_position: {offset: 3}\n---\nNative body\n';
-  assert.throws(() => assertPositionWrite(before, after, { offset: 3 }), /unrelated YAML/);
-});
-
-test('position evidence fails closed on malformed, oversized or unexpected state', () => {
-  for (const value of [null, [], {}, { offset: -1 }, { offset: 0.5 }, { offset: NaN },
-    { offset: 100_000_001 }, { offset: 0, exact: 'x'.repeat(65) }, { offset: 0, start: 1 },
-    { offset: 0, paragraph: 'x'.repeat(257) }, { offset: 0, paragraphOffset: -1 },
-    { offset: 0, unknown: true }, { offset: 0, paragraph: undefined }]) {
-    assert.throws(() => expectedReadingPosition(value));
-  }
-  assert.deepEqual(expectedReadingPosition({ offset: 0, start: true }), { offset: 0, start: true });
-});
-
-test('position restore rejects a self-consistent wrong reopened anchor across epochs', async () => {
-  const path = 'Reading/Inbox/restore-fixture.md', outgoing = { offset: 9 }, wrong = { offset: 0, start: true };
-  let position = outgoing;
-  const page = positionPage([{ getState: () => ({ file: path, readingPosition: position }), flushPosition: async () => {} }]);
-  const before = inlineFixture('Same body\n', { reading_position: outgoing });
-  const after = inlineFixture('Same body\n', { reading_position: wrong });
-  await flushReaderPositions(page);
-  const expected = expectPositionRestore(page, path, before);
-  position = wrong;
-  await assert.rejects(flushReaderPositions(page), /differs from outgoing anchor/);
-  assert.throws(() => verifyPositionRestore(page, expected, after, [{ path, position: wrong }]), /differs from outgoing anchor/);
-  // The original outgoing ledger must remain intact after the rejected new epoch.
-  assert.throws(() => positionDelta(page, path, before, after), /differs from captured/);
-  position = outgoing;
-  const restored = await flushReaderPositions(page);
-  assert.equal(verifyPositionRestore(page, expected, before, restored), before);
-});
-
-test('position restore rejects wrong UI even when reopened persistence is a no-op and YAML stays correct', async () => {
-  const path = 'Reading/Inbox/restore-noop.md', outgoing = { offset: 19, exact: 'kept words' };
-  let position = outgoing;
-  const page = positionPage([{ getState: () => ({ file: path, readingPosition: position }), flushPosition: async () => {} }]);
-  const before = inlineFixture('Same body\n', { reading_position: outgoing });
-  await flushReaderPositions(page);
-  const expected = expectPositionRestore(page, path, before);
-  position = { offset: 0, start: true };
-  await assert.rejects(flushReaderPositions(page), /differs from outgoing anchor/);
-  assert.throws(() => verifyPositionRestore(page, expected, before, [{ path, position }]), /differs from outgoing anchor/);
-  position = outgoing;
-  const evidence = await flushReaderPositions(page);
-  assert.throws(() => verifyPositionRestore(page, expected, before.replace('Same body', 'Lost body'), evidence), /Markdown\/position snapshot/);
-  assert.throws(() => verifyPositionRestore(page, expected, inlineFixture('Same body\n', { reading_position: outgoing, custom: 'lost' }), evidence), /Markdown\/position snapshot/);
-  assert.throws(() => verifyPositionRestore(page, expected, before, []), /expected article/);
-  assert.equal(verifyPositionRestore(page, expected, before, evidence), before);
-  assert.throws(() => verifyPositionRestore(page, expected, before, evidence), /restore expectation/);
-  // Intentional later movement is a new epoch, only after the restore check passed.
-  position = { offset: 25 }; await flushReaderPositions(page);
-  const moved = inlineFixture('Same body\n', { reading_position: position });
-  assertPositionWrite(before, moved, positionDelta(page, path, before, moved));
-});
-
-test('position restore permits an unchanged initial note without a persisted position field', async () => {
-  const path = 'Reading/Inbox/restore-initial.md', position = { offset: 0, start: true };
-  const page = positionPage([{ getState: () => ({ file: path, readingPosition: position }), flushPosition: async () => {} }]);
-  const before = '---\ntype: article\ncustom: keep\n---\nInitial body\n';
-  await flushReaderPositions(page);
-  const expected = expectPositionRestore(page, path, before);
-  assert.equal(verifyPositionRestore(page, expected, before, await flushReaderPositions(page)), before);
-});
-
-// Exercise the actual callback and evidence bookkeeping without the native wrapper's
-// on-disk safety-hold check. No browser, CDP, real adapter, hold file or vault access.
-async function flushReaderPositions(page) {
-  const evidence = await page.evaluate(captureReaderFlush, vaultPath);
-  rememberReaderPositions(page, evidence);
-  return evidence;
+async function hold(f, value = { schemaVersion: 1, state: 'held', repository: f.root, vaultPath: f.vault }) {
+  await mkdir(join(f.root, '.sandbox'), { recursive: true });
+  await writeFile(join(f.root, '.sandbox/reader2-safety-hold.json'), typeof value === 'string' ? value : JSON.stringify(value));
 }
-function positionPage(readers, { errors = [], actualPath = vaultPath } = {}) {
-  const life = { disconnected: false, cleared: false, deadline: undefined, observe: undefined };
-  const context = {
-    window: { app: { vault: { adapter: { getBasePath: () => actualPath } },
-      workspace: { getLeavesOfType: () => readers.map(reader => ({ view: { getReader: () => reader } })) } } },
-    document: { body: {}, querySelectorAll: () => errors.map(textContent => ({ textContent })) },
-    MutationObserver: class {
-      constructor(callback) { life.observe = callback; }
-      observe() {}
-      disconnect() { life.disconnected = true; }
-    },
-    setTimeout: callback => { life.deadline = callback; return 1; },
-    clearTimeout: () => { life.cleared = true; },
-  };
-  return { life, evaluate: (callback, ...args) => runInNewContext('(' + callback.toString() + ')(...args)', { ...context, args }) };
-}
-
-test('position flush captures public state before drain and uses only independent exact evidence', async () => {
-  const position = { offset: 9, exact: 'words', paragraph: 'some words', paragraphOffset: 9 };
-  const calls = [], path = 'Reading/Inbox/position-fixture.md';
-  let release, started;
-  const gate = new Promise(resolve => { release = resolve; }), flushing = new Promise(resolve => { started = resolve; });
-  const reader = { getState: () => { calls.push('state'); return { file: path, readingPosition: position }; },
-    flushPosition: async () => { calls.push('flush'); started(); await gate; calls.push('retired-drained'); } };
-  const page = positionPage([reader]), pending = flushReaderPositions(page);
-  await flushing;
-  assert.deepEqual(calls, ['state', 'flush']);
-  const before = inlineFixture('some words\n'), after = inlineFixture('some words\n', { reading_position: position });
-  assert.throws(() => positionDelta(page, path, before, after), /independently captured/);
-  release(); await pending;
-  assert.deepEqual(calls, ['state', 'flush', 'retired-drained', 'state']);
-  assert.deepEqual(positionDelta(page, path, before, after), position);
-  assertPositionWrite(before, after, positionDelta(page, path, before, after));
-  assert.throws(() => positionDelta(page, path, before, inlineFixture('some words\n', { reading_position: { offset: 10 } })), /differs from captured/);
-  assert.throws(() => positionDelta(page, 'Reading/Inbox/wrong-note.md', before, after), /independently captured/);
-  assert.throws(() => positionDelta({}, path, before, after), /independently captured/);
-  assert.equal(positionDelta(page, path, before, before), undefined);
-  assert.throws(() => rememberReaderPositions(page, [{ path, position: { offset: 10 } }, { path: 'invalid.md', position: { offset: -1 } }]));
-  assert.deepEqual(positionDelta(page, path, before, after), position, 'Malformed evidence must not partially replace verified evidence');
-  const moved = 'Reading/Later/position-fixture.md';
-  remapPositionEvidence(page, path, moved);
-  assert.deepEqual(positionDelta(page, moved, before, after), position);
-  assert.throws(() => positionDelta(page, path, before, after), /independently captured/);
-  assert.equal(page.life.disconnected, true); assert.equal(page.life.cleared, true);
+const load = (f, name) => import(pathToFileURL(join(f.root, 'scripts', name)).href);
+test('hold blocks bootstrap/update and low-level restoration of a quarantined main.js', async t => {
+  const f = await fixture(t); assert.equal(f.run().status, 0);
+  await rename(join(f.plugin, 'main.js'), join(f.root, 'quarantined-main.js'));
+  await hold(f); const before = await snapshot(f.vault);
+  for (const args of [[], ['--update-plugin']]) {
+    const run = f.run('setup-vault.mjs', args); assert.notEqual(run.status, 0); assert.match(run.output, /READER SAFETY HOLD/);
+  }
+  const { createOnly } = await load(f, 'sandbox.mjs');
+  for (const name of ['main.js', 'styles.css', 'manifest.json']) {
+    await assert.rejects(createOnly(join(f.plugin, name), 'unsafe replacement'), { code: 'READER_SAFETY_HOLD' });
+  }
+  for (const id of ['pullman', 'obsidian-reader2']) for (const name of ['main.js', 'styles.css', 'manifest.json']) {
+    await assert.rejects(createOnly(join(f.vault, '.obsidian/plugins', id, name), 'unsafe legacy restoration'), { code: 'READER_SAFETY_HOLD' });
+  }
+  await assert.rejects(createOnly(join(f.vault, '.obsidian/community-plugins.json'), '["obsidian-reader"]'), { code: 'READER_SAFETY_HOLD' });
+  assert.deepEqual(await snapshot(f.vault), before);
 });
 
-test('position flush refuses visible save errors, unstable state, ambiguous leaves and missing API', async () => {
-  const state = { file: 'Reading/Inbox/position-fixture.md', readingPosition: { offset: 9 } };
-  const reader = () => ({ getState: () => state, flushPosition: async () => {} });
-  const errors = [], failed = positionPage([{ ...reader(), flushPosition: async () => { errors.push('Could not save reading position: generation changed'); } }], { errors });
-  await assert.rejects(flushReaderPositions(failed), /reported failure.*generation changed/);
-  assert.equal(failed.life.disconnected, true);
-  let retired;
-  retired = positionPage([{ ...reader(), flushPosition: async () => {
-    retired.life.observe([{ addedNodes: [], removedNodes: [{ textContent: 'Could not save reading position: retired mount failed' }] }]);
-  } }]);
-  await assert.rejects(flushReaderPositions(retired), /reported failure.*retired mount failed/);
-  const moving = positionPage([{ ...reader(), flushPosition: async () => { state.readingPosition.offset = 10; } }]);
-  await assert.rejects(flushReaderPositions(moving), /navigated or scrolled/);
-  const conflict = positionPage([reader(), { ...reader(), getState: () => ({ ...state, readingPosition: { offset: 11 } }) }]);
-  await assert.rejects(flushReaderPositions(conflict), /Conflicting Reader positions/);
-  await assert.rejects(flushReaderPositions(positionPage([{ getState: () => state }])), /Public ReaderApp.flushPosition API required/);
-  await assert.rejects(flushReaderPositions(positionPage([reader()], { actualPath: '/wrong-vault' })), /Vault changed before position flush/);
+test('invalid, released-looking and symlinked sentinels cannot bypass the hold', async t => {
+  const f = await fixture(t), guard = await load(f, 'safety-hold.mjs');
+  for (const value of ['{broken', { schemaVersion: 1, state: 'released', repository: f.root, vaultPath: f.vault }]) {
+    await hold(f, value); await assert.rejects(guard.assertNoSafetyHold('enable'), { code: 'READER_SAFETY_HOLD' });
+  }
+  const path = join(f.root, '.sandbox/reader2-safety-hold.json');
+  await rename(path, join(f.root, 'real-hold.json')); await symlink(join(f.root, 'real-hold.json'), path);
+  await assert.rejects(guard.assertNoSafetyHold('enable'), { code: 'READER_SAFETY_HOLD' });
 });
 
-test('position flush deadlines fail closed without manufacturing a timed stability baseline', async () => {
-  const reader = { getState: () => ({ file: 'Reading/Inbox/position-fixture.md', readingPosition: { offset: 0 } }),
-    flushPosition: () => new Promise(() => {}) };
-  const page = positionPage([reader]), pending = flushReaderPositions(page);
-  // Only fake microtask turns to reach the injected deadline: no real sleep or I/O.
-  for (let i = 0; i < 10 && !page.life.deadline; i++) await Promise.resolve();
-  assert.equal(typeof page.life.deadline, 'function'); page.life.deadline();
-  await assert.rejects(pending, /flush timed out/);
-  assert.equal(page.life.disconnected, true); assert.equal(page.life.cleared, true);
+
+test('missing hold allows setup; malformed and identity-mismatched holds block all mutation', async t => {
+  const f = await fixture(t);
+  const guard = await load(f, 'safety-hold.mjs');
+  assert.equal(await guard.readSafetyHold(), null);
+  await guard.assertNoSafetyHold('fixture setup');
+  succeeds(f.run());
+  const before = await snapshot(f.vault);
+  for (const value of ['{broken', null, {},
+    { schemaVersion: 1, state: 'held', repository: '/elsewhere', vaultPath: f.vault },
+    { schemaVersion: 1, state: 'held', repository: f.root, vaultPath: f.vault + '-copy' },
+    { schemaVersion: 1, state: 'released', repository: f.root, vaultPath: f.vault }]) {
+    await hold(f, value);
+    for (const args of [[], ['--update-plugin']]) refuses(f.run('setup-vault.mjs', args), /READER SAFETY HOLD/);
+    assert.deepEqual(await snapshot(f.vault), before);
+  }
+});
+
+test('hardlinked vault files, markers and hold sentinels fail closed', async t => {
+  for (const relative of ['.reader2-test-vault.json', '.obsidian/plugins/obsidian-reader/main.js', 'Welcome.md']) {
+    const f = await fixture(t);
+    succeeds(f.run());
+    const target = join(f.vault, relative), outside = join(f.root, 'hardlink');
+    await link(target, outside);
+    const before = await snapshot(f.vault), bytes = await readFile(outside);
+    for (const args of [[], ['--update-plugin']]) refuses(f.run('setup-vault.mjs', args), /unlinked|Unsafe file/);
+    assert.deepEqual(await snapshot(f.vault), before);
+    assert.deepEqual(await readFile(outside), bytes);
+  }
+  const f = await fixture(t);
+  await hold(f);
+  await link(join(f.root, '.sandbox/reader2-safety-hold.json'), join(f.root, 'hold-link'));
+  refuses(f.run(), /READER SAFETY HOLD/);
+});
+
+test('update refuses missing artifacts and unsafe backup/staging roots without mutation', async t => {
+  for (const kind of ['missing-plugin', 'backups', 'staging']) {
+    const f = await fixture(t);
+    succeeds(f.run());
+    await f.build('v2');
+    const outside = join(f.root, 'outside');
+    await mkdir(outside);
+    await writeFile(join(outside, 'keep'), 'untouched');
+    if (kind === 'missing-plugin') await rm(join(f.plugin, 'styles.css'));
+    else await symlink(outside, join(f.root, '.sandbox', kind), 'dir');
+    const before = await snapshot(f.vault), external = await snapshot(outside);
+    refuses(f.run('setup-vault.mjs', ['--update-plugin']), /ENOENT|symlink/);
+    assert.deepEqual(await snapshot(f.vault), before);
+    assert.deepEqual(await snapshot(outside), external);
+  }
+});
+
+test('build rejects unsafe output destinations before replacing any artifact', async t => {
+  for (const kind of ['directory-symlink', 'file-symlink', 'hardlink']) {
+    const f = await fixture(t);
+    await f.enableBuild();
+    await writeFile(join(f.root, 'src/main.ts'), 'export default class Reader {}\n');
+    const dist = join(f.root, 'dist'), outside = join(f.root, 'outside');
+    await mkdir(outside);
+    await writeFile(join(outside, 'keep'), 'untouched');
+    if (kind === 'directory-symlink') {
+      await rename(dist, join(f.root, 'original-dist'));
+      await symlink(outside, dist, 'dir');
+    } else if (kind === 'file-symlink') {
+      await rm(join(dist, 'styles.css'));
+      await symlink(join(outside, 'keep'), join(dist, 'styles.css'));
+    } else await link(join(dist, 'styles.css'), join(outside, 'linked.css'));
+    const before = await snapshot(dist), external = await snapshot(outside);
+    refuses(f.run('build.mjs'), /symlink|unlinked/);
+    assert.deepEqual(await snapshot(dist), before);
+    assert.deepEqual(await snapshot(outside), external);
+    assert.equal((await readdir(dist)).some(name => name.startsWith('.build-')), false);
+  }
+});
+
+test('artifact identity rejects extra externals, wrong platform and mismatched manifest before setup', async t => {
+  const f = await fixture(t);
+  for (const patch of [{ external: ['obsidian', 'electron'] }, { external: [] }, { platform: 'node' },
+    { plugin: { id: 'pullman', version: 'v1' } }, { plugin: { id: 'obsidian-reader', version: 'wrong' } }]) {
+    await f.build();
+    const path = join(f.root, 'dist/build-meta.json');
+    const metadata = JSON.parse(await readFile(path, 'utf8'));
+    await writeFile(path, JSON.stringify({ ...metadata, ...patch }));
+    refuses(f.run(), /invalid browser build identity|Unexpected Reader plugin manifest/);
+    await assert.rejects(readdir(f.vault), { code: 'ENOENT' });
+  }
+});
+
+test('path guards reject traversal and marker identity changes', async t => {
+  const f = await fixture(t), sandbox = await load(f, 'sandbox.mjs');
+  for (const path of [join(f.root, '..', 'outside'), f.root + '-copy/file']) {
+    assert.throws(() => sandbox.inside(f.root, path), /outside/);
+    await assert.rejects(sandbox.createOnly(path, 'no'), /outside/);
+  }
+  succeeds(f.run());
+  for (const [key, value] of Object.entries(sandbox.ownership)) {
+    await writeFile(join(f.vault, sandbox.markerName), JSON.stringify({ ...sandbox.ownership, [key]: `${value}-wrong` }));
+    const before = await snapshot(f.vault);
+    for (const args of [[], ['--update-plugin']]) refuses(f.run('setup-vault.mjs', args), /ownership marker/);
+    assert.deepEqual(await snapshot(f.vault), before);
+  }
+});
+
+test('acceptance target cannot bypass createOnly protection of held default-vault identities', async t => {
+  const f = await fixture(t);
+  succeeds(f.run());
+  await rename(join(f.plugin, 'main.js'), join(f.root, 'quarantined-main.js'));
+  await hold(f);
+  const before = await snapshot(f.vault);
+  // Select the environment before importing any sandbox module in a fresh process.
+  await writeFile(join(f.root, 'scripts', 'acceptance-hold-probe.mjs'), `
+    import assert from 'node:assert/strict';
+    import { join } from 'node:path';
+    process.env.READER_RUNTIME_TARGET = 'acceptance';
+    const { createOnly, defaultVaultPath, vaultPath, pluginFiles } = await import('./sandbox.mjs');
+    const { setupVault } = await import('./setup-vault.mjs');
+    assert.notEqual(vaultPath, defaultVaultPath);
+    await setupVault();
+    for (const id of ['obsidian-reader', 'pullman', 'obsidian-reader2']) {
+      for (const name of pluginFiles) {
+        await assert.rejects(createOnly(join(defaultVaultPath, '.obsidian/plugins', id, name), 'unsafe restoration'),
+          { code: 'READER_SAFETY_HOLD' });
+      }
+    }
+    await assert.rejects(createOnly(join(defaultVaultPath, '.obsidian/community-plugins.json'), '["obsidian-reader"]'),
+      { code: 'READER_SAFETY_HOLD' });
+  `);
+  succeeds(f.run('acceptance-hold-probe.mjs'));
+  assert.deepEqual(await snapshot(f.vault), before);
+  await assert.rejects(readFile(join(f.plugin, 'main.js')), { code: 'ENOENT' });
+});
+
+test('dev builds dist only without installing or changing root artifacts or vault bytes', async t => {
+  const f = await fixture(t);
+  succeeds(f.run());
+  await f.enableBuild();
+  await writeFile(join(f.root, 'src/main.ts'), "import { Plugin } from 'obsidian'; export default class Reader extends Plugin {}\n");
+  await writeFile(join(f.root, 'main.js'), 'root artifact must remain untouched');
+  const before = await snapshot(f.vault);
+  const rootFiles = ['main.js', 'manifest.json', 'styles.css'];
+  const bytes = await Promise.all(rootFiles.map(name => readFile(join(f.root, name))));
+  const entries = await readdir(f.root);
+  succeeds(f.run('dev.mjs'));
+  assert.deepEqual(await snapshot(f.vault), before);
+  assert.deepEqual(await readdir(f.root), entries);
+  for (const [i, name] of rootFiles.entries()) assert.deepEqual(await readFile(join(f.root, name)), bytes[i]);
+  assert.match(await readFile(join(f.root, 'dist/main.js'), 'utf8'), /__readerBuildId/);
+  assert.deepEqual((await readdir(join(f.root, 'dist'))).sort(), ['build-meta.json', 'main.js', 'manifest.json', 'styles.css']);
 });

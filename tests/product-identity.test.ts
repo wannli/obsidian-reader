@@ -8,7 +8,9 @@ it('uses the standalone obsidian-reader GitHub repository', () => {
   const readme = read('README.md');
   expect(readme).toContain('Enter `wannli/obsidian-reader`.');
   expect(readme).not.toContain('wannli/reader');
-  expect(read('scripts/release-install.mjs')).toContain("assert.equal(request.repo, 'wannli/obsidian-reader'");
+  const manifest = JSON.parse(read('manifest.json'));
+  expect(manifest.id).toBe('obsidian-reader');
+  expect(manifest.name).toBe('Reader');
 });
 
 it('aligns new QuickAdd assets without changing native protocol or vault identity', () => {

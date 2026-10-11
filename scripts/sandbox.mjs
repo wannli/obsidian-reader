@@ -10,16 +10,13 @@ for (const legacy of ['READER2_RUNTIME_TARGET', 'PULLMAN_RUNTIME_TARGET']) {
 }
 export const runtimeTarget = process.env.READER_RUNTIME_TARGET ?? 'default';
 if (!['default', 'acceptance'].includes(runtimeTarget)) throw new Error('Only fixed default or acceptance runtime targets are allowed');
-// Vault/profile names and ownership markers identify existing safety boundaries, not the plugin brand.
+// Vault names and ownership markers identify existing safety boundaries, not the plugin brand.
 export const defaultVaultPath = join(sandboxPath, 'Reader2 Test Vault');
 export const vaultPath = runtimeTarget === 'default' ? defaultVaultPath : join(sandboxPath, 'Reader2 Acceptance Vault');
-export const profilePath = join(sandboxPath, runtimeTarget === 'default' ? 'obsidian-profile' : 'obsidian-acceptance-profile');
 export const pluginId = 'obsidian-reader';
 export const pluginFiles = Object.freeze(['main.js', 'manifest.json', 'styles.css']);
 export const pluginPath = join(vaultPath, '.obsidian', 'plugins', pluginId);
 export const markerName = '.reader2-test-vault.json';
-export const cdpPort = runtimeTarget === 'default' ? 19224 : 19225;
-export const cdpURL = `http://127.0.0.1:${cdpPort}`;
 export const ownership = Object.freeze({
   schemaVersion: 1,
   purpose: 'Reader2 synthetic test vault',

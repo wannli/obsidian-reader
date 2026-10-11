@@ -22,11 +22,18 @@ test('supported checks use metadata validation without handwritten release notes
   }
 });
 
-test('preview-only commands and CI browser steps are retired', () => {
+test('browser and native automation commands and dependencies are retired', () => {
   assert.equal(Object.hasOwn(pkg.scripts, 'preview'), false);
   assert.equal(Object.keys(pkg.scripts).some(name => name.startsWith('test:browser')), false);
   assert.equal(Object.hasOwn(pkg.devDependencies, 'vite'), false);
-  assert.ok(pkg.devDependencies['@playwright/test'], 'Native sandbox automation still uses Playwright');
+  for (const name of ['@playwright/test', 'playwright', 'playwright-core']) {
+    assert.equal(Object.hasOwn(pkg.devDependencies, name), false);
+    assert.equal(Object.hasOwn(pkg.dependencies, name), false);
+  }
+  for (const name of ['main:merge', 'vault:reload', 'vault:open', 'test:obsidian'])
+    assert.equal(Object.hasOwn(pkg.scripts, name), false);
+  assert.equal(pkg.scripts['vault:setup'], 'node scripts/setup-vault.mjs');
+  assert.equal(pkg.scripts['vault:update'], 'node scripts/setup-vault.mjs --update-plugin');
   assert.doesNotMatch(ci, /playwright install|test:browser|browser-failure-diagnostics/);
 });
 

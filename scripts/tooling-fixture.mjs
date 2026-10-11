@@ -6,7 +6,7 @@ import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 
 const source = dirname(fileURLToPath(import.meta.url));
-const files = ['sandbox.mjs', 'safety-hold.mjs', 'artifacts.mjs', 'build.mjs', 'setup-vault.mjs', 'seed.mjs'];
+const files = ['sandbox.mjs', 'safety-hold.mjs', 'artifacts.mjs', 'build.mjs', 'dev.mjs', 'setup-vault.mjs', 'seed.mjs'];
 export async function fixture(t) {
   const root = await realpath(await mkdtemp(join(tmpdir(), 'reader-tooling-')));
   t.after(() => rm(root, { recursive: true, force: true }));
@@ -15,8 +15,11 @@ export async function fixture(t) {
   await writeFile(join(root, 'package.json'), '{"type":"module"}\n');
   const vault = join(root, '.sandbox', 'Reader2 Test Vault');
   const plugin = join(vault, '.obsidian', 'plugins', 'obsidian-reader');
+  // Never inherit a caller's target selector: every fixture owns its temp vault.
+  const env = { ...process.env };
+  for (const key of ['READER_RUNTIME_TARGET', 'READER2_RUNTIME_TARGET', 'PULLMAN_RUNTIME_TARGET']) delete env[key];
   function run(script = 'setup-vault.mjs', args = []) {
-    const result = spawnSync(process.execPath, [join(root, 'scripts', script), ...args], { cwd: root, encoding: 'utf8', timeout: 30_000 });
+    const result = spawnSync(process.execPath, [join(root, 'scripts', script), ...args], { cwd: root, env, encoding: 'utf8', timeout: 30_000 });
     return { ...result, output: result.stdout + result.stderr };
   }
   async function build(version = 'v1') {

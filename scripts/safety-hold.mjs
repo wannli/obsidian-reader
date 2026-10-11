@@ -28,17 +28,3 @@ export async function assertDefaultVaultNotHeld(operation) {
   const error = new Error(`READER SAFETY HOLD blocks ${operation}. Old queued requests/finally restoration are NOT authorization. Explicit MAIN release with a verified replacement SHA-256 required. ${safetyHoldPath}`);
   error.code = 'READER_SAFETY_HOLD'; throw error;
 }
-
-// Network cleanup remains allowed for isolated QuickAdd with Reader absent,
-// but must not wake an unexpectedly loaded Reader while the hold is active.
-export async function assertHeldReaderAbsent(page) {
-  if (vaultPath !== defaultVaultPath) return;
-  if (!await readSafetyHold()) return;
-  const state = await page.evaluate(vaultPath => {
-    const app = window.app;
-    if (app?.vault.adapter.getBasePath() !== vaultPath) throw new Error('Vault changed during held-runtime inspection');
-    const ids = ['obsidian-reader', 'pullman', 'obsidian-reader2']; // A rename never releases any held identity.
-    return { loaded: ids.some(id => Boolean(app.plugins.plugins[id])), enabled: ids.some(id => app.plugins.enabledPlugins.has(id)) };
-  }, vaultPath);
-  if (state.loaded || state.enabled) throw new Error('READER SAFETY HOLD: unexpected Reader state; refuse to resume network/activity');
-}

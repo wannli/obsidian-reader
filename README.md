@@ -140,13 +140,20 @@ mise exec -- npm run check
 ```
 
 `check` validates metadata, types, unit tests, tooling regressions, and the plugin
-build. There is no standalone browser preview or browser simulation suite.
-Playwright remains a development dependency for native Obsidian sandbox automation.
+build. There is no browser preview, browser simulation suite, or native
+automation harness.
 
-`npm run dev` builds for Obsidian hot reload. Native testing uses only the
-repository's marked synthetic vaults under `.sandbox`; never use a personal vault.
-Use `npm run vault:setup`, `npm run vault:open`, and `npm run test:obsidian` for
-that separate acceptance workflow. Synthetic checks do not prove native iOS,
+`npm run dev` watches sources and rebuilds `dist/` only. It does not install the
+plugin or install/enable Hot Reload. Use `npm run vault:setup` for initial setup
+of an explicitly approved, marked synthetic vault under `.sandbox`; ownership
+checks and safety holds still apply. Never use a personal vault or bypass a hold.
+
+Native acceptance is manual. After rebuilding, close Obsidian or disable Reader,
+then run `npm run vault:update` to explicitly install the rebuilt plugin in the
+approved synthetic vault. Open that vault and enable/reload Reader before testing;
+a rebuild alone does not update the installed plugin. Check capture, reading,
+highlights, queue moves, and persistence after reopening. Record the host/version
+and actual results separately. Automated checks do not prove native desktop/iOS,
 e-ink hardware, or cross-device sync behavior.
 
 Release Please owns version and changelog updates. Releases are published by
