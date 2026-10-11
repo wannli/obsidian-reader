@@ -1,21 +1,19 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import { MemoryStore } from '../src/storage/memory';
-import { BrowserStore } from '../preview/store';
 import { ReaderRepository } from '../src/storage/repository';
 import { DEFAULT_SETTINGS } from '../src/types';
 import { parseNote } from '../src/storage/markdown';
 import { nativeStore } from './helpers/native-store';
 import { RelationshipDraft } from '../src/ui/relationship-draft';
 import { ReaderController } from '../src/controller';
-import { sidecarPath } from '../src/storage/sidecar-format';
 const path = 'Reading/Inbox/Article.md';
 const body = '\n## Article\n\n==Words== and [[Existing]].\n\n## Comments\n\nUser notes.\n';
 const raw = '---\ntype: article\nauthor: Legacy author\nbyline: Keep this\ncustom: [keep, all]\nreading_position: "Words"\n---\n' + body;
 const person = '---\ntype: person\n---\n', topic = '---\ntype: topic\n---\n';
-const staleOrOwnershipFence = /Node changed|Storage action blocked for .*vault changed after legacy ownership review/;
-afterEach(() => { localStorage.clear(); vi.restoreAllMocks(); });
-it.each(['memory', 'browser'])('creates multiple author nodes only on explicit request and persists quoted links in %s', async kind => {
-  const store = kind === 'memory' ? new MemoryStore() : new BrowserStore('relationships'); await store.create(path, raw);
+const staleNodeFence = /Node changed/;
+afterEach(() => { vi.restoreAllMocks(); });
+it('creates multiple author nodes only on explicit request and persists quoted links', async () => {
+  const store = new MemoryStore({ [path]: raw });
   const repo = new ReaderRepository(store, DEFAULT_SETTINGS);
   const article = await repo.updateArticleAuthors(path, { create: ['Ada Lovelace', 'Charles Babbage'] });
   expect(article.authors).toEqual(['Nodes/Ada Lovelace.md', 'Nodes/Charles Babbage.md']);
@@ -25,13 +23,15 @@ it.each(['memory', 'browser'])('creates multiple author nodes only on explicit r
   expect(saved).toContain('custom: [keep, all]');
   expect(note.body).toBe(body); const { authors, ...rest } = note.doc.toJS(); expect(rest).toEqual(parseNote(raw).doc.toJS());
   expect((await repo.listArticles()).map(article => article.path)).toEqual([path]);
-  if (kind === 'browser') expect(await new BrowserStore('relationships').read(path)).toBe(saved);
 });
-it('blocks typed topic creation when historical JSON owns its target and preserves every file byte', async () => {
-  const target = 'Nodes/Reserved Topic.md', legacyPath = sidecarPath(target), legacy = JSON.stringify({ path: target, metadata: { id: 'legacy-topic' } });
-  const initial = { [path]: raw, [legacyPath]: legacy }, store = new MemoryStore(initial), repo = new ReaderRepository(store, DEFAULT_SETTINGS);
-  await expect(repo.updateArticleTopics(path, { create: ['Reserved Topic'] })).rejects.toThrow(/legacy/i);
-  expect(store.snapshot()).toEqual(initial);
+it('creates typed topics without interpreting or changing unrelated historical JSON', async () => {
+  const target = 'Nodes/Reserved Topic.md', legacyPath = 'Reading/Metadata/' + 'a'.repeat(64) + '.json';
+  const legacy = JSON.stringify({ path: target, metadata: { id: 'legacy-topic' } });
+  const store = new MemoryStore({ [path]: raw, [legacyPath]: legacy }), repo = new ReaderRepository(store, DEFAULT_SETTINGS);
+  await repo.updateArticleTopics(path, { create: ['Reserved Topic'] });
+  expect(await store.read(target)).toBe(topic);
+  expect(await store.read(legacyPath)).toBe(legacy);
+  expect(parseNote(await store.read(path)).body).toBe(body);
 });
 it('selects people and topics anywhere, reuses authored nodes, and removes assignments without touching notes', async () => {
   const store = new MemoryStore({ [path]: raw, 'People/Ada.md': person + 'Authored biography', 'Elsewhere/Computing.md': topic + 'Authored topic', 'Other.md': '---\ntype: article\n---\n' });
@@ -88,7 +88,7 @@ it('guards selected person type through the article commit boundary', async () =
   const f = nativeStore({ [path]: raw, 'People/Ada.md': person }), repo = new ReaderRepository(f.store, DEFAULT_SETTINGS);
   let count = 0;
   f.hooks.beforeProcess = async file => { if (file.path !== path || ++count < 2) return; f.hooks.beforeProcess = undefined; await f.store.process('People/Ada.md', () => topic); };
-  await expect(repo.updateArticleAuthors(path, { add: ['People/Ada.md'] })).rejects.toThrow(staleOrOwnershipFence); expect(f.disk.get(path)).toBe(raw);
+  await expect(repo.updateArticleAuthors(path, { add: ['People/Ada.md'] })).rejects.toThrow(staleNodeFence); expect(f.disk.get(path)).toBe(raw);
 });
 it('reports possible saved assignments when a target changes during native save', async () => {
   const f = nativeStore({ [path]: raw, 'People/Ada.md': person }), repo = new ReaderRepository(f.store, DEFAULT_SETTINGS), editor = f.open(path);

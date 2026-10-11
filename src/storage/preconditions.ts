@@ -2,7 +2,7 @@ import { isAcquisitionUrl } from '../acquisition-url';
 import type { Note } from './markdown';
 
 /** Transient original-request identity; never persisted in the note. */
-export interface AcquisitionWriteOptions { expectedUrl?: string; expectedId?: string; expectedBody?: string; expectedRevision?: string; expectedGeneration?: number; }
+export interface AcquisitionWriteOptions { expectedUrl?: string; expectedBody?: string; expectedRevision?: string; expectedGeneration?: number; }
 
 /** Discard this result/failure. It must not become a new error/retry write. */
 export class StaleArticleWriteError extends Error {

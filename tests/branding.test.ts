@@ -21,7 +21,6 @@ it('ships Reader under its own plugin identity with matching package versions', 
     .sort((left, right) => left.localeCompare(right, undefined, { numeric: true }))
     .at(-1)!;
   expect(versions[compatibleVersion]).toBe(manifest.minAppVersion);
-  expect(readFileSync('index.html', 'utf8')).toContain('<title>Reader</title>');
 });
 
 it('offers the branded opening command', async () => {

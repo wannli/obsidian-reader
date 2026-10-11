@@ -49,7 +49,6 @@ async function nativeFixture() {
     './settings': { ReaderSettingsTab: class {} }, './routing': { installArticleRouting: () => ({ dispose() {}, remapPath() {} }) },
     './ui/native': { NativeReaderUI }, './ui/native-popups': { nativeHighlightMenu: vi.fn(), nativeLinkMenu: vi.fn() },
     './template-exclusions': { readTemplateExclusions: async () => ({ folders: [], files: [] }) }, './storage/classifier': { isArticleTemplatePath: () => false },
-    './settings-migration': { settingsData: async (current: unknown) => ({ data: current as Record<string, unknown>, migrated: false }) },
   }).default;
   const app: any = { vault: { on: (name: string, fn: Function) => { events.set(name, fn); }, getFileByPath: (path: string) => path === file.path ? file : null, getMarkdownFiles: () => [file] } };
   app.workspace = { activeLeaf: null, getLeavesOfType: (type: string) => leaves.filter(leaf => leaf.view.getViewType() === type), iterateAllLeaves: (fn: Function) => leaves.forEach(leaf => fn(leaf)), requestSaveLayout() {}, onLayoutReady() {}, on() {}, offref() {}, getLeaf: () => leaves[0] };
@@ -117,9 +116,9 @@ it('retains captured positions through real Reader autosave without remounting t
 });
 it.each(['completely changed text', '**one** two three'])('does not dispatch a queued old-body position after external DOM refresh: %s', async replacement => {
   tracking.position = { marker: '' };
-  const article: Article = { path: 'Reading/Inbox/A.md', id: '', title: 'A', url: '', status: 'inbox', content: 'ready', extractor: 'manual', body: 'one two three', highlights: [] };
+  const article: Article = { path: 'Reading/Inbox/A.md', title: 'A', url: '', status: 'inbox', content: 'ready', extractor: 'manual', body: 'one two three', highlights: [] };
   let release!: () => void;
-  const save = vi.fn(async () => ''); save.mockImplementationOnce(async () => { await new Promise<void>(done => { release = done; }); return ''; });
+  const save = vi.fn(async () => {}); save.mockImplementationOnce(async () => { await new Promise<void>(done => { release = done; }); });
   const controller = { repository: { articleGeneration: () => 0, saveReadingPosition: save } } as unknown as ReaderController;
   const root = document.createElement('div'); document.body.append(root);
   const mount = mountReader(root, article, controller, { openNote() {}, notify() {} }, () => {}); cleanup.push(() => mount());
@@ -129,5 +128,5 @@ it.each(['completely changed text', '**one** two three'])('does not dispatch a q
   mount.update!({ ...article, body: replacement });
   document.getSelection()!.removeAllRanges(); document.dispatchEvent(new Event('selectionchange'));
   release(); await Promise.all([first, queued]);
-  expect(save.mock.calls).toEqual([[article.path, { marker: 'two' }, '', 0]]);
+  expect(save.mock.calls).toEqual([[article.path, { marker: 'two' }, 0]]);
 });

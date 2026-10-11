@@ -5,7 +5,7 @@ import { DEFAULT_SETTINGS } from '../src/types';
 import { MemoryStore } from '../src/storage/memory';
 import { ReaderRepository } from '../src/storage/repository';
 import { parseNote } from '../src/storage/markdown';
-import { displayedSource, sourceRegion, stampSource } from '../src/storage/source';
+import { displayedSource, sourceRegion } from '../src/storage/source';
 import { fingerprint } from '../src/storage/fingerprint';
 
 const capture = (body: string, metadata = '') => '---\ntype: article\nurl: https://example.com/native\n' + metadata + '---\n' + body;
@@ -52,14 +52,13 @@ describe('native Article layout boundaries without source stamps', () => {
     expect(displayedSource(sourceRegion(note))).toBe(body);
   });
 
-  it('still uses source stamps to include publisher reserved headings and exclude custom tails', () => {
+  it('uses layout-only stamps to include publisher reserved headings and exclude custom tails', () => {
     const body = source + '\n\n## Comments\nPublisher comments.\n\n## Highlights\nPublisher highlights.';
     const stamped = '\n' + body + '\n\n';
-    const note = parseNote(capture('## Article\n' + stamped + '## My notes\nPersonal tail.\n', `articleSection: Article\nsourceLength: ${stamped.length}\nsourceHash: ${fingerprint(stamped)}\n`));
+    const note = parseNote(capture('## Article\n' + stamped + '## My notes\nPersonal tail.\n', `articleSection: Article\nsourceLayoutLength: ${stamped.length}\nsourceLayoutHash: ${fingerprint(stamped)}\n`));
     expect(displayedSource(sourceRegion(note))).toBe(body);
     expect(note.body.slice(sourceRegion(note).end)).toBe('## My notes\nPersonal tail.\n');
-    stampSource(note, 'dummy', stamped);
-    expect(note.doc.get('sourceLength')).toBe(stamped.length);
-    expect(note.doc.get('sourceHash')).toBe(fingerprint(stamped));
+    expect(note.doc.get('sourceLayoutLength')).toBe(stamped.length);
+    expect(note.doc.get('sourceLayoutHash')).toBe(fingerprint(stamped));
   });
 });

@@ -99,7 +99,8 @@ describe('extraction source contract', () => {
     const original = quickAdd(), store = new MemoryStore({ 'Reading/Inbox/Capture.md': original });
     const repo = new ReaderRepository(store, DEFAULT_SETTINGS);
     const [pending] = await repo.listArticles();
-    expect(pending).toMatchObject({ body: '', id: '' });
+    expect(pending).toMatchObject({ body: '' });
+    expect(pending).not.toHaveProperty('id');
     const saved = await repo.saveContent(pending.path, live);
     expect(saved).toMatchObject({ body: live.markdown });
     expect(parseNote(await store.read(saved.path)).doc.has('id')).toBe(false);

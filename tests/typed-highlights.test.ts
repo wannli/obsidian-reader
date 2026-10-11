@@ -6,14 +6,13 @@ import { removeInlineHighlight, setInlineHighlightLink, setInlineHighlightType, 
 import { inlineMarked } from '../src/inline/syntax';
 import { ReaderRepository } from '../src/storage/repository';
 import { MemoryStore } from '../src/storage/memory';
-import { BrowserStore } from '../preview/store';
 import { ReaderController } from '../src/controller';
 import { mountReader } from '../src/ui/reader';
 const person = { name: 'person', color: '🟡' } as const;
 const path = 'Reading/Inbox/Test.md';
 const initial = '---\ntype: article\ntitle: Test\ncustom: keep\nreading_position: "Ada Lovelace"\n---\nBefore ==Ada Lovelace== after.\n';
 const node = 'Nodes/Ada Lovelace.md';
-afterEach(() => { localStorage.clear(); document.getSelection()?.removeAllRanges(); });
+afterEach(() => { document.getSelection()?.removeAllRanges(); });
 it.each(HIGHLIGHT_COLORS)('maps native %s color without counting emoji in text or source anchors', color => {
   const source = `😀 ==${color}[[Nodes/Ada Lovelace|Ada Lovelace]]== after`;
   const parsed = parseInlineMarkdown(source);
@@ -58,8 +57,8 @@ it('validates additive settings lists, reserved Reader types and colors', () => 
   for (const value of [null, {}, [{ name: 'article', color: '🟡' }], [person, person], [{ name: 'person', color: 'pink' }]])
     expect(() => validateHighlightTypes(value)).toThrow();
 });
-it.each(['memory', 'browser'])('creates exact frontmatter-only normal node and reuses it in %s store', async kind => {
-  const store = kind === 'memory' ? new MemoryStore() : new BrowserStore('typed-highlight-test');
+it('creates exact frontmatter-only normal node and reuses it', async () => {
+  const store = new MemoryStore();
   await store.create(path, initial);
   const repository = new ReaderRepository(store, DEFAULT_SETTINGS);
   const article = await repository.getArticle(path);
@@ -72,15 +71,9 @@ it.each(['memory', 'browser'])('creates exact frontmatter-only normal node and r
   await store.process(node, content => content + '\nAuthored body.\n');
   await repository.setHighlightType(path, saved.highlights[0].id, person);
   expect(await store.read(node)).toBe('---\ntype: person\n---\n\nAuthored body.\n');
-  if (kind === 'browser') {
-    const reloaded = new BrowserStore('typed-highlight-test');
-    expect(await reloaded.read(node)).toBe(await store.read(node));
-    expect(await reloaded.read(path)).toBe(await store.read(path));
-  }
 });
-it.each(['memory', 'browser'])('keeps an unreferenced empty node after unlinking its highlight in %s', async kind => {
-  const store = kind === 'memory' ? new MemoryStore({ [path]: initial }) : new BrowserStore('node-cleanup-test');
-  if (kind === 'browser') await store.create(path, initial);
+it('keeps an unreferenced empty node after unlinking its highlight', async () => {
+  const store = new MemoryStore({ [path]: initial });
   const repo = new ReaderRepository(store, DEFAULT_SETTINGS);
   const typed = await repo.setHighlightType(path, (await repo.getArticle(path)).highlights[0].id, person);
   const originalNode = await store.read(node);

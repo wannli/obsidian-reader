@@ -11,14 +11,14 @@ const selection = (body: string, quote: string, title?: string) => ({ quote, rev
 describe('Markdown-only active storage', () => {
   it('keeps retry and feed identity in YAML without retired article fields or JSON', async () => {
     const store = new MemoryStore(), reader = repo(store);
-    const article = await reader.createArticle({ title: 'Article', url: 'https://example.com/a', guid: 'rss-1', feed: '[[Reading/Wires/Feed]]', body: 'Publisher text', extractor: 'feed' });
+    const article = await reader.createArticle({ title: 'Article', url: 'https://example.com/a', feed: '[[Reading/Wires/Feed]]', body: 'Publisher text', extractor: 'feed' });
     await reader.setArticleError(article.path, 'Offline', '2030-01-01T00:00:00.000Z');
     const note = parseNote(await store.read(article.path));
     expect(note.doc.toJS()).toMatchObject({ type: 'article', feed: '[[Reading/Wires/Feed]]', error: 'Offline' });
     for (const key of ['id', 'guid', 'pullmanFormat', 'content', 'extractor', 'sourceHash', 'sourceLength']) expect(note.doc.has(key)).toBe(false);
     expect(note.doc.has('highlights')).toBe(false);
     expect((await store.list()).every(path => path.endsWith('.md'))).toBe(true);
-    expect((await reader.createArticle({ title: 'Another name', url: 'https://example.com/b', guid: 'rss-1', feed: article.feed })).path).not.toBe(article.path);
+    expect((await reader.createArticle({ title: 'Another name', url: 'https://example.com/b', feed: article.feed })).path).not.toBe(article.path);
   });
   it('adds native marks, converts to bare links, and preserves existing journals', async () => {
     const journal = '# Journal\n\nMy old entry and [[Old#^hl-old]].\n';
@@ -63,7 +63,7 @@ describe('Markdown-only active storage', () => {
 
   it('keeps verified section layout without granting extraction ownership after annotation', async () => {
     const path = 'Reading/Inbox/Article.md', source = '\nFirst source.\n\n## Publisher section\n\nMore text.\n\n';
-    const original = writeNote(newNote({ type: 'article', articleSection: 'Article', extractor: 'summary', content: 'partial', sourceHash: fingerprint(source), sourceLength: source.length },
+    const original = writeNote(newNote({ type: 'article', articleSection: 'Article', extractor: 'summary', content: 'partial', sourceLayoutHash: fingerprint(source), sourceLayoutLength: source.length },
       '## Article\n' + source + '## Authored footer\n\nLeave this outside Reader.'));
     const store = new MemoryStore({ [path]: original }), reader = repo(store);
     const initial = await reader.getArticle(path);
@@ -71,12 +71,12 @@ describe('Markdown-only active storage', () => {
     expect(marked.body).toBe('==First source==.\n\n## Publisher section\n\nMore text.');
     expect(marked.body).not.toContain('Authored footer');
     const note = parseNote(await store.read(path));
-    expect(note.doc.get('sourceHash')).toBe(fingerprint(source));
-    expect(note.doc.get('sourceLength')).toBe(source.length);
+    expect(note.doc.has('sourceHash')).toBe(false);
+    expect(note.doc.has('sourceLength')).toBe(false);
     expect(note.doc.get('sourceLayoutHash')).not.toBe(fingerprint(source));
     await reader.deleteHighlight(path, marked.highlights[0].id);
     expect((await reader.getArticle(path)).body).toBe(initial.body);
-    expect((await reader.getArticle(path)).content).toBe('partial');
+    expect((await reader.getArticle(path)).content).toBe('protected');
     expect(await store.read(path)).toContain('## Authored footer\n\nLeave this outside Reader.');
   });
 
@@ -88,7 +88,7 @@ describe('Markdown-only active storage', () => {
     const before = store.snapshot();
     await expect(reader.addHighlight(article.path, stale)).rejects.toThrow(/changed/i);
     await expect(reader.saveContent(article.path, { title: 'No', markdown: 'Replacement', status: 'ready', extractor: 'defuddle' }, { expectedUrl: 'https://example.com/b' })).rejects.toThrow();
-    await expect(reader.setArticleError(article.path, 'No', undefined, { expectedId: 'other' })).rejects.toThrow();
+    await expect(reader.setArticleError(article.path, 'No', undefined, { expectedRevision: 'stale raw note' })).rejects.toThrow();
     expect(store.snapshot()).toEqual(before);
   });
 

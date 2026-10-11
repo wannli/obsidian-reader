@@ -126,18 +126,18 @@ export class ReaderController {
     return this.queueExtraction(path, async () => {
       if (this.repository.articleGeneration(path) !== generation) throw new StaleArticleWriteError();
       const article = await this.repository.getArticle(path);
-      const options = { expectedUrl: article.url, expectedId: article.id, expectedBody: article.body, expectedRevision: article.revision, expectedGeneration: generation };
+      const options = { expectedUrl: article.url, expectedBody: article.body, expectedRevision: article.revision, expectedGeneration: generation };
       const assertCurrent = () => { if (this.repository.articleGeneration(path) !== generation) throw new StaleArticleWriteError(); };
       assertCurrent();
       if (this.stopped || !this.online || acquisitionState(article, this.settings.useDummyContent) !== 'pending' || (!retry && !this.retryDue(article))) return article;
       let result: Awaited<ReturnType<typeof extractArticle>>;
       try { result = await extractArticle(article.url, this.get, this.settings.useDummyContent ? 'dummy' : 'defuddle'); }
       catch (error) {
-        await this.refreshEligibility(); assertCurrent(); const latest = await this.repository.getArticle(path); if (!isAcquisitionUrl(latest.url) || latest.url !== article.url || latest.id !== article.id) throw new StaleArticleWriteError();
+        await this.refreshEligibility(); assertCurrent(); const latest = await this.repository.getArticle(path); if (!isAcquisitionUrl(latest.url) || latest.url !== article.url) throw new StaleArticleWriteError();
         await this.repository.setArticleError(path, String(error instanceof Error ? error.message : error), new Date(Date.now() + 300000).toISOString(), options);
         this.failedUntil.set(path, Date.now() + 300000); return this.repository.getArticle(path);
       }
-      await this.refreshEligibility(); assertCurrent(); const latest = await this.repository.getArticle(path); if (!isAcquisitionUrl(latest.url) || latest.url !== article.url || latest.id !== article.id) throw new StaleArticleWriteError();
+      await this.refreshEligibility(); assertCurrent(); const latest = await this.repository.getArticle(path); if (!isAcquisitionUrl(latest.url) || latest.url !== article.url) throw new StaleArticleWriteError();
       const saved = await this.repository.saveContent(path, result.extractor === 'dummy' ? { ...result, title: article.title } : result, options); this.failedUntil.delete(path); this.deferredWrites.delete(path); return saved;
     });
   }
@@ -164,9 +164,9 @@ export class ReaderController {
         const result = await extractArticle(article.url, this.get, 'defuddle'); await this.refreshEligibility();
         if (this.repository.articleGeneration(path) !== generation) throw new StaleArticleWriteError();
         const latest = await this.repository.getArticle(path);
-        if (!isAcquisitionUrl(latest.url) || latest.url !== article.url || latest.id !== article.id) throw new StaleArticleWriteError();
+        if (!isAcquisitionUrl(latest.url) || latest.url !== article.url) throw new StaleArticleWriteError();
         if (latest.extractor === 'defuddle') return latest;
-        const saved = await this.repository.saveContent(path, result, { allowFeedReplacement: true, expectedUrl: article.url, expectedId: article.id, expectedBody: article.body, expectedRevision: article.revision, expectedGeneration: generation });
+        const saved = await this.repository.saveContent(path, result, { allowFeedReplacement: true, expectedUrl: article.url, expectedBody: article.body, expectedRevision: article.revision, expectedGeneration: generation });
         if (saved.body === article.body || !saved.body.includes(result.markdown) || saved.error?.startsWith('Snapshot protected:') || !saved.body.trim()) throw new Error('Text changed or gained highlights while fetching; the saved snapshot was preserved.');
         // Only the explicit action promotes Stream, and only after usable text is persisted.
         const completed = saved.status === 'feed' ? await this.repository.setStatus(saved.path, 'inbox') : saved;
@@ -222,7 +222,7 @@ export class ReaderController {
   }
   private async importEntries(feed: Feed, entries: ReturnType<typeof parseFeed>['entries']): Promise<void> {
     for (const entry of entries.slice(0, this.settings.maxFeedItems)) {
-      await this.repository.createArticle({ title: entry.title, url: entry.url, guid: entry.id, feed: '[[' + feed.path.replace(/\.md$/, '') + ']]', feedPrefix: feed.prefix?.trim() || feed.title, published: entry.published, summary: entry.summary, extractor: entry.summary ? 'summary' : 'pending', status: 'feed', feedText: entry.feedText });
+      await this.repository.createArticle({ title: entry.title, url: entry.url, feed: '[[' + feed.path.replace(/\.md$/, '') + ']]', feedPrefix: feed.prefix?.trim() || feed.title, published: entry.published, summary: entry.summary, status: 'feed', feedText: entry.feedText });
     }
   }
   refreshFeeds(force = true): Promise<void> {

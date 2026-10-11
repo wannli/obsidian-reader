@@ -36,7 +36,7 @@ describe('explicit selected-article live replacement of full feed text', () => {
     expect(parseNote(await store.read(article.path)).body).toBe(parseNote(before).body);
   });
 
-  it('preserves Comments, custom sections, raw status and topics when explicitly replacing verified legacy feed text', async () => {
+  it('preserves Comments, custom sections, raw status and topics without trusting historical extraction stamps', async () => {
     const { store, repo, article } = await fixture();
     await rawStore(store).process(article.path, raw => {
       const note = parseNote(raw), prefix = '\n' + markdown + '\n\n';
@@ -47,7 +47,7 @@ describe('explicit selected-article live replacement of full feed text', () => {
     });
     const result = await repo.saveContent(article.path, live, { allowFeedReplacement: true });
     const note = parseNote(await readNoteRaw(store, article.path));
-    expect(result.body).toBe(live.markdown); expect(result.title).toBe('Publisher title'); expect(result.status).toBe('inbox');
+    expect(result.body).toBe(markdown); expect(result.title).toBe('Publisher title'); expect(result.status).toBe('inbox');
     expect(note.doc.get('status')).toBe('later'); // Unrelated extraction must not rewrite stale user metadata.
     expect(note.body).toContain('## Comments\n\nMy comments.\n\n## Other\n\nKeep this.\n');
     expect(note.doc.get('custom')).toBe('keep'); expect(note.doc.toJS().topics).toEqual(['[[Topics/Existing|Alias]]']);
@@ -99,8 +99,8 @@ describe('explicit selected-article live replacement of full feed text', () => {
     const store = new LateStore(), repo = new ReaderRepository(store, DEFAULT_SETTINGS);
     const pending = await repo.createArticle({ title: 'Publisher title', url });
     store.inject = true;
-    expect((await repo.saveContent(pending.path, live)).extractor).toBe('feed');
-    expect(await store.read(pending.path)).toBe(store.fullRaw);
+    expect((await repo.saveContent(pending.path, live)).extractor).toBe('manual');
+    expect(parseNote(await store.read(pending.path)).body).toBe(parseNote(store.fullRaw).body);
   });
 
   it('does not use the flag to overwrite manual authorship or bypass invalid URL guards', async () => {

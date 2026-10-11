@@ -43,36 +43,3 @@ it.each(['- ==authored highlight==', '> ==authored highlight==', '==math $x$ hig
   expect(result.body).toBe(body);
   expect(result.content).toBe('protected');
 });
-
-it('retains legacy JSON when the converted durable body changes but its receipt survives', async () => {
-  const jsonPath = sidecarPath(path);
-  const legacyRaw = '---\ntype: article\ntitle: Review\n---\n## Highlights\n\n> word\n\n^hl-old\n\n## Article\n\nword\n';
-  const legacyJson = JSON.stringify({ schema: 1, path, metadata: { id: 'legacy', highlights: [{ id: 'hl-old', created: '2026-10-09T00:00:00.000Z', day: '2026-10-09', dailyPath: '' }] } });
-  class ChangedDurableStore extends MemoryStore {
-    override async read(file: string) {
-      const current = await super.read(file);
-      if (file === path && current.includes('pullmanLegacyHash:')) {
-        // Sync/native writer lands after acknowledged process, before durable verification.
-        const changed = current.replace('==word==', 'word').replace('id: legacy\n', '');
-        await super.process(file, () => changed);
-        return changed;
-      }
-      return current;
-    }
-  }
-  const store = new ChangedDurableStore({ [path]: legacyRaw, [jsonPath]: legacyJson });
-  const result = await repository(store).prepareStorage();
-  expect(result.errors.length).toBeGreaterThan(0);
-  expect(await store.read(jsonPath)).toBe(legacyJson);
-});
-
-it('reports unknown historical JSON fields without changing its exact bytes', async () => {
-  const jsonPath = sidecarPath(path);
-  const note = '---\ntype: article\n---\nReadable words.';
-  const json = JSON.stringify({ schema: 1, path, metadata: {}, pendingOperation: { kind: 'unrecognized', payload: 'must survive' } });
-  const store = new MemoryStore({ [path]: note, [jsonPath]: json }), before = store.snapshot();
-  const report = await repository(store).prepareStorage();
-  expect(report.errors.length).toBeGreaterThan(0);
-  await expect(repository(store).setArticleError(path, 'blocked')).rejects.toThrow(/blocked|legacy/i);
-  expect(store.snapshot()).toEqual(before);
-});

@@ -142,7 +142,7 @@ it('double taps and native moves share one token; archive preserves inline marks
   await mark(f.repo, f.articles[0].path, { quote: 'Preserved article text.' });
   await mark(f.repo, f.articles[0].path, { quote: 'Another quote.' });
   await f.reader.refresh(); await f.reader.open(f.articles[0].path);
-  await f.repo.saveReadingPosition(f.articles[0].path, { marker: 'Another quote.' }, f.articles[0].id, f.repo.articleGeneration(f.articles[0].path));
+  await f.repo.saveReadingPosition(f.articles[0].path, { marker: 'Another quote.' }, f.repo.articleGeneration(f.articles[0].path));
   const raw = await f.store.read(f.articles[0].path);
   const before = await f.repo.getArticle(f.articles[0].path), daily = await f.store.read('Daily/test.md');
   const control = f.button('Archive & next'), gate = deferred<void>(), original = f.controller.move.bind(f.controller);

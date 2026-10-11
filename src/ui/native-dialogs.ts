@@ -1,6 +1,4 @@
 import { FuzzySuggestModal, Modal, Setting, Notice, type App } from 'obsidian';
-import type { Article, ArticleStatus } from '../types';
-import { queueLabel } from '../reading-layout';
 import type { ReaderController } from '../controller';
 export class ReaderPicker<T> extends FuzzySuggestModal<T> {
   finished?: () => void;
@@ -9,9 +7,6 @@ export class ReaderPicker<T> extends FuzzySuggestModal<T> {
   getItemText(item: T): string { return this.label(item); }
   onChooseItem(item: T): void { this.choose(item); }
   onClose() { super.onClose(); this.finished?.(); }
-}
-export function pickArticle(app: App, articles: Article[], queue: ArticleStatus, choose: (path: string) => void): void {
-  new ReaderPicker(app, 'Reading list · ' + queueLabel(queue), articles, article => article.title, article => choose(article.path)).open();
 }
 export class ReaderInput extends Modal {
   finished?: () => void;

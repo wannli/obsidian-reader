@@ -6,8 +6,6 @@ import type { ObsidianStore } from '../../src/obsidian-store';
 import * as bridge from '../../src/editor-transaction';
 import * as preconditions from '../../src/storage/preconditions';
 import * as safety from '../../src/storage/safety';
-import * as legacyDiscovery from '../../src/storage/legacy-discovery';
-import * as sidecarFormat from '../../src/storage/sidecar-format';
 export function gate() { let release!: () => void; const promise = new Promise<void>(resolve => { release = resolve; }); return { promise, release }; }
 function offset(text: string, pos: EditorPosition) { const rows = text.split('\n'); return rows.slice(0, pos.line).reduce((sum, row) => sum + row.length + 1, 0) + pos.ch; }
 function position(text: string, index: number) { const prefix = text.slice(0, index); return { line: prefix.split('\n').length - 1, ch: index - prefix.lastIndexOf('\n') - 1 }; }
@@ -79,7 +77,7 @@ export function nativeStore(initial: Record<string, string>) {
     }),
   };
   const output = ts.transpileModule(readFileSync('src/obsidian-store.ts', 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
-  const exports: any = {}; new Function('require', 'exports', output)((name: string) => ({ obsidian: { TFile, TFolder, normalizePath: (path: string) => path }, './editor-transaction': bridge, './storage/preconditions': preconditions, './storage/safety': safety, './storage/legacy-discovery': legacyDiscovery, './storage/sidecar-format': sidecarFormat } as Record<string, unknown>)[name], exports);
+  const exports: any = {}; new Function('require', 'exports', output)((name: string) => ({ obsidian: { TFile, TFolder, normalizePath: (path: string) => path }, './editor-transaction': bridge, './storage/preconditions': preconditions, './storage/safety': safety } as Record<string, unknown>)[name], exports);
   const store: ObsidianStore = new exports.ObsidianStore(vault, workspace);
   function open(path: string, text = disk.get(path)!) {
     const editor = new NativeEditor(text);

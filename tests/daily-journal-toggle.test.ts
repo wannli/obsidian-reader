@@ -9,7 +9,6 @@ it('annotations and restart preserve existing journal bytes without creating cop
   const article = await repo.createArticle({ title: 'Source', url: '', body: 'Readable words.' });
   const saved = await mark(repo, article.path, { quote: 'Readable' });
   await repo.setHighlightLink(article.path, saved.highlights[0].id, 'Target');
-  await new ReaderRepository(store, DEFAULT_SETTINGS).prepareStorage();
   expect(await store.read(daily)).toBe(journal);
   expect(Object.keys(store.snapshot()).sort()).toEqual([article.path, daily].sort());
 });

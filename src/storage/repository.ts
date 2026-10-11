@@ -9,7 +9,6 @@ import * as highlights from './highlights';
 import * as highlightMutations from './highlight-mutations';
 import * as topics from './topics';
 import { newNote, parseNote, writeNote } from './markdown';
-import { assertInlineNote, LegacyStorageError, prepareInlineStorage, type ConversionReport } from './legacy-import';
 import { checkStatus } from './models';
 import { normalizeUrl, queued, sameUrl } from './safety';
 import { articlePath, knownPublication } from './article-path';
@@ -29,25 +28,10 @@ export class ReaderRepository {
   disposeStorage(): void { this.context.store.dispose?.(); }
   async articleRenamed(from: string, to: string): Promise<void> {
     invalidatePaths(this.context.store, from, to);
-    try {
-      await this.context.assertWritable(from);
-      assertInlineNote(await this.context.read(to), to);
-    } catch (error) {
-      if (!(error instanceof LegacyStorageError) && !(await this.context.store.exists(from))) return;
-      this.context.blockLegacy(from, 'a renamed note has legacy ownership evidence at its previous path');
-      this.context.blockLegacy(to, 'a renamed note may still be owned by legacy data at its previous path');
-    }
   }
 
   async articleDeleted(path: string): Promise<void> {
     invalidatePaths(this.context.store, path);
-    try { await this.context.assertWritable(path); }
-    catch { this.context.blockLegacy(path, 'deleted note path is still implicated by legacy ownership evidence; do not recreate it before review'); }
-  }
-
-  /** Read-only inventory of unsupported legacy data; files are never normalized or deleted. */
-  prepareStorage(): Promise<ConversionReport> {
-    return queued(this.context.store, () => prepareInlineStorage(this.context));
   }
 
   async listArticles(): Promise<Article[]> {
@@ -63,18 +47,18 @@ export class ReaderRepository {
     const raw = await this.context.store.read(path);
     return { ...this.context.article(parseNote(raw), path, await this.context.store.list()), revision: raw };
   }
-  saveReadingPosition(path: string, position: ReadingPosition, expectedId: string, expectedGeneration = this.articleGeneration(path)): Promise<string> {
+  saveReadingPosition(path: string, position: ReadingPosition, expectedGeneration = this.articleGeneration(path)): Promise<void> {
     const valid = validReadingPosition(position);
     if (!valid) return Promise.reject(new Error('Invalid reading position'));
-    const options = { expectedId, expectedGeneration };
-    return queued(this.context.store, async () => (await this.context.saveReadingPosition(path, valid, options)).id);
+    const options = { expectedGeneration };
+    return queued(this.context.store, async () => { await this.context.saveReadingPosition(path, valid, options); });
   }
   /** Return the committed raw bytes to guard the next debounced position write. */
-  saveReadingPositionRevision(path: string, position: ReadingPosition, expectedId: string, expectedGeneration: number, expectedRevision: string): Promise<{ id: string; revision: string }> {
+  saveReadingPositionRevision(path: string, position: ReadingPosition, expectedGeneration: number, expectedRevision: string): Promise<{ revision: string }> {
     const valid = validReadingPosition(position);
     if (!valid) return Promise.reject(new Error('Invalid reading position'));
     return queued(this.context.store, () => this.context.saveReadingPosition(path, valid,
-      { expectedId, expectedGeneration, expectedRevision }));
+      { expectedGeneration, expectedRevision }));
   }
 
   listTopics(): Promise<topics.TopicOption[]> { return topics.listTopics(this.context); }
@@ -122,9 +106,9 @@ export class ReaderRepository {
       if (input.summary !== undefined) properties.summary = input.summary;
       const note = newNote(properties, body);
       const article = this.context.article(note, path);
-      const ownershipRevision = await this.context.assertWritable(path);
+      const revision = await this.context.assertWritable(path);
       await this.context.store.create(path, writeNote(note), { guard: () => {
-        this.context.assertOwnershipRevision(path, ownershipRevision);
+        this.context.assertRevision(path, revision);
         this.context.assertWritableNow(path);
         if (this.articleGeneration(path) !== generationAtRequest(path)) throw new StaleArticleWriteError();
       } });

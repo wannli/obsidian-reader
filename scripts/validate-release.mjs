@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import assert from 'node:assert/strict';
-import { lstat, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -13,10 +13,9 @@ const compareVersions = (left, right) => {
   }
   return 0;
 };
-const sections = ['Features', 'Installation', 'Limitations', 'Verification'];
 const json = async path => JSON.parse(await readFile(path, 'utf8'));
 
-export async function validateRelease(root, { refType, refName, release = true } = {}) {
+export async function validateRelease(root, { refType, refName } = {}) {
   const manifest = await json(join(root, 'manifest.json'));
   const pkg = await json(join(root, 'package.json'));
   const lock = await json(join(root, 'package-lock.json'));
@@ -48,42 +47,11 @@ export async function validateRelease(root, { refType, refName, release = true }
   assert.equal(versions[compatibleVersion], manifest.minAppVersion, 'Minimum host version mismatch');
   if (refType === 'tag') assert.equal(refName, manifest.version, 'Tag must exactly equal manifest.version, without v');
 
-  if (!release && refType !== 'tag') return { version: manifest.version, minAppVersion: manifest.minAppVersion };
-  const source = await readFile(join(root, 'releases', manifest.version + '.md'), 'utf8');
-  const frontmatter = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(source);
-  // Existing release drafts may still contain frontmatter; new drafts are plain Markdown.
-  const notes = (frontmatter ? source.slice(frontmatter[0].length) : source).trim() + '\n';
-  assert.ok(!/\b(?:TODO|TBD|RELEASE_DRAFT)\b/i.test(notes), 'Release notes contain unresolved placeholders');
-  assert.equal(notes.split(/\r?\n/)[0], '# Reader ' + manifest.version, 'Release heading must match the version');
-  const content = new Map();
-  for (const match of notes.matchAll(/^## ([^\r\n]+)\r?\n([\s\S]*?)(?=^## |$(?![\s\S]))/gm)) {
-    assert.ok(!content.has(match[1]), 'Duplicate release section: ' + match[1]);
-    content.set(match[1], match[2].replace(/<!--[\s\S]*?-->/g, '').trim());
-  }
-  for (const heading of sections) {
-    const text = content.get(heading);
-    assert.ok(text && text.length >= 40 && /[A-Za-z]{3,}/.test(text), `Release ${heading} must have substantive content`);
-    assert.ok(!/^(?:[-*]\s*)?(?:TODO|TBD|N\/A|none|pending|not run)[.!]?$/i.test(text), `Release ${heading} is a placeholder`);
-  }
-  for (const asset of ['main.js', 'manifest.json', 'styles.css', '.obsidian/plugins/obsidian-reader/'])
-    assert.ok(content.get('Installation').includes(asset), 'Installation must specify ' + asset);
-  return { version: manifest.version, minAppVersion: manifest.minAppVersion, notes };
-}
-
-async function writeNotes(notes) {
-  const dist = join(repository, 'dist'), target = join(dist, 'release-notes.md');
-  for (const [path, directory] of [[dist, true], [target, false]]) {
-    const stat = await lstat(path).catch(error => { if (error.code !== 'ENOENT') throw error; });
-    if (stat) assert.ok(!stat.isSymbolicLink() && (directory ? stat.isDirectory() : stat.isFile() && stat.nlink === 1), 'Unsafe generated release-notes path');
-  }
-  await mkdir(dist, { recursive: true });
-  await writeFile(target, notes);
+  return { version: manifest.version, minAppVersion: manifest.minAppVersion };
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  const args = process.argv.slice(2);
-  assert.ok(args.every(arg => ['--release', '--write-notes'].includes(arg)) && new Set(args).size === args.length, 'Only --release and --write-notes are accepted');
-  const result = await validateRelease(repository, { release: args.length > 0, refType: process.env.GITHUB_REF_TYPE, refName: process.env.GITHUB_REF_NAME });
-  if (args.includes('--write-notes')) await writeNotes(result.notes);
+  assert.equal(process.argv.length, 2, 'No arguments accepted');
+  const result = await validateRelease(repository, { refType: process.env.GITHUB_REF_TYPE, refName: process.env.GITHUB_REF_NAME });
   console.log(`Validated Reader ${result.version}; minimum Obsidian ${result.minAppVersion}`);
 }

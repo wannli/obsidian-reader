@@ -18,7 +18,7 @@ function fixture() {
 describe('transient supplied feed text persistence', () => {
   it('retains exact summary bytes as the only restart-safe proof for excerpt upgrade', async () => {
     const { store, repo } = fixture();
-    const article = await repo.createArticle({ title: 'Publisher title', url, body: feedText.markdown, summary: feedText.markdown, content: 'partial', feed: 'Feeds/Publisher.md', guid: 'stable-guid' });
+    const article = await repo.createArticle({ title: 'Publisher title', url, body: feedText.markdown, summary: feedText.markdown, content: 'partial', feed: 'Feeds/Publisher.md' });
     const note = parseNote(await readNoteRaw(store, article.path));
     expect(note.doc.get('summary')).toBe(feedText.markdown);
     expect(note.doc.toJS()).toMatchObject({ type: 'article', feed: 'Feeds/Publisher.md' });
@@ -133,7 +133,7 @@ describe('transient supplied feed text persistence', () => {
 
   it('deduplicates feed imports by URL, but preserves a changed-URL entry as a distinct article', async () => {
     const { store, repo } = fixture();
-    const input = { title: 'Publisher title', url, feed: '[[Wires/Publisher]]', guid: 'shared-guid', feedText };
+    const input = { title: 'Publisher title', url, feed: '[[Wires/Publisher]]', feedText };
     const first = await repo.createArticle(input);
     const before = await store.read(first.path);
     expect((await repo.createArticle(input)).path).toBe(first.path);

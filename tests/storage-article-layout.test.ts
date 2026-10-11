@@ -37,10 +37,10 @@ it('keeps publisher reserved headings and authored Comments through mark/link/un
   expect(parseNote(await store.read(path)).body).toBe(before);
   expect(await store.read(path)).toContain('My comments.');
 });
-it('startup retains untracked authored legacy quote blocks for explicit review', async () => {
+it('reading preserves authored quote blocks and backlinks', async () => {
   const path = 'Legacy.md', raw = '---\ntype: article\ncustom: keep\n---\n## Article\n\nSource.\n\n## Highlights\n\n> Edited excerpt\n\n^hl-old\n\n## Comments\n\nMy writing.';
   const store = new MemoryStore({ [path]: raw, 'Daily/old.md': '[[Legacy#^hl-old]]' }), repo = new ReaderRepository(store, DEFAULT_SETTINGS), before = store.snapshot();
-  expect((await repo.prepareStorage()).errors.length).toBeGreaterThan(0);
+  await repo.getArticle(path);
   expect(store.snapshot()).toEqual(before);
 });
 it('annotation edits never bless newly authored source as replaceable', async () => {

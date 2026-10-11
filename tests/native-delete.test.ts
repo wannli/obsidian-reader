@@ -28,7 +28,7 @@ it('deletion invalidates acquisition, preserves journals, and allows fresh Markd
   const generation = repo.articleGeneration(path); await repo.articleDeleted(path);
   expect(repo.articleGeneration(path)).not.toBe(generation);
   await store.create(path, raw);
-  expect((await repo.getArticle(path)).id).toBe('');
+  expect(await repo.getArticle(path)).not.toHaveProperty('id');
   expect(await store.read('Daily/day.md')).toBe('User journal.');
   expect(Object.keys(store.snapshot()).sort()).toEqual(['Daily/day.md', path].sort());
 });
@@ -42,7 +42,7 @@ it('duplicate delete events allow filename reuse with fresh Markdown while inval
   expect(fresh.path).toBe(old.path);
   expect(repo.articleGeneration(fresh.path)).not.toBe(generation);
   expect(await store.read(fresh.path)).not.toContain('Unrelated placeholder');
-  await expect(repo.saveReadingPosition(fresh.path, { marker: 'Stale position' }, old.id, generation)).rejects.toThrow();
+  await expect(repo.saveReadingPosition(fresh.path, { marker: 'Stale position' }, generation)).rejects.toThrow();
   expect((await repo.getArticle(fresh.path)).readingPosition).toBeUndefined();
   expect(Object.keys(store.snapshot()).every(path => path.endsWith('.md'))).toBe(true);
 });
@@ -58,11 +58,11 @@ it('controller awaits invalidation before notifying/scheduling and does not anno
   await expect(controller.articleDeleted(path)).rejects.toThrow('Invalidation failed');
   expect(changed).not.toHaveBeenCalled(); expect(schedule).not.toHaveBeenCalled(); await controller.shutdown();
 });
-it.each(['{invalid', JSON.stringify({ schema: 1, path, metadata: { queueMove: {} } })])('deletion preserves legacy JSON and blocks unsafe path reuse: %s', async json => {
+it.each(['{invalid', JSON.stringify({ schema: 1, path, metadata: { queueMove: {} } })])('deletion preserves unrelated JSON without blocking fresh Markdown: %s', async json => {
   const jsonPath = sidecarPath(path), store = new MemoryStore({ [jsonPath]: json }), repo = new ReaderRepository(store, DEFAULT_SETTINGS);
   await repo.articleDeleted(path);
-  await expect(store.create(path, raw)).rejects.toThrow(/legacy JSON sidecar owns this path/i);
-  expect(await store.exists(path)).toBe(false);
+  await store.create(path, raw);
+  expect(await store.read(path)).toBe(raw);
   expect(await store.read(jsonPath)).toBe(json);
 });
 it.each(['acquire', 'fetchFullText'] as const)('%s cannot write late network failure onto a recreated note', async method => {

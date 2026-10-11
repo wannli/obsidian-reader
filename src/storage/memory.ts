@@ -1,14 +1,12 @@
 import type { FileStore } from '../types';
 import { assertUnambiguousNotePath, safePath } from './safety';
-import { assertNoLegacyOwnership } from './legacy-discovery';
-import { isSidecarPath } from './sidecar-format';
 
 /** In-memory FileStore; snapshot returns a detached, serializable copy. */
 export class MemoryStore implements FileStore {
   private readonly files = new Map<string, string>();
   private revisions = new Map<string, number>();
   private bumpObservedRevision(path: string) {
-    if (/\.md$/i.test(path) || isSidecarPath(path)) this.revisions.set(path, (this.revisions.get(path) ?? 0) + 1);
+    if (/\.md$/i.test(path)) this.revisions.set(path, (this.revisions.get(path) ?? 0) + 1);
   }
   revision(excludingPath?: string): number {
     let total = 0;
@@ -35,10 +33,6 @@ export class MemoryStore implements FileStore {
   assertAbsent(path: string): void { if (this.files.has(safePath(path))) throw new Error('File already exists: ' + path); }
   async create(path: string, content: string, options?: { guard?: () => void }): Promise<void> {
     safePath(path); options?.guard?.();
-    const revision = this.revision(path);
-    if (/\.md$/i.test(path)) await assertNoLegacyOwnership(this, path);
-    if (this.revision(path) !== revision) throw new Error('Vault changed during legacy ownership review; retry creation.');
-    options?.guard?.();
     if (this.files.has(path)) throw new Error('File already exists: ' + path);
     this.files.set(path, content); this.bumpObservedRevision(path);
   }
@@ -58,19 +52,6 @@ export class MemoryStore implements FileStore {
     if ([...this.files.keys()].some(path => path.normalize('NFC').toLowerCase() === to.normalize('NFC').toLowerCase())) throw new Error('Move destination already exists: ' + to);
     this.files.set(to, current);
     this.files.delete(from); this.bumpObservedRevision(from); this.bumpObservedRevision(to);
-  }
-  async remove(path: string, options: { expectedContent: string; expectedSource?: { path: string; content: string }; guard?: () => void }): Promise<void> {
-    safePath(path);
-    if (!/^Reading\/(?:Metadata|Pullman Metadata)\/[a-f0-9]{64}\.json$/.test(path))
-      throw new Error('Only verified legacy metadata JSON can be retired');
-    options.guard?.();
-    if (this.files.get(path) !== options.expectedContent) throw new Error('File changed before legacy retirement: ' + path);
-    if (options.expectedSource) {
-      safePath(options.expectedSource.path, true);
-      if (this.files.get(options.expectedSource.path) !== options.expectedSource.content)
-        throw new Error('Converted source changed before legacy retirement');
-    }
-    this.files.delete(path); this.bumpObservedRevision(path);
   }
   snapshot(): Record<string, string> { return Object.fromEntries(this.files); }
 }

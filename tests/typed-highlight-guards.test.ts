@@ -2,13 +2,12 @@ import { expect, it, vi } from 'vitest';
 import { nativeStore } from './helpers/native-store';
 import { ReaderRepository } from '../src/storage/repository';
 import { MemoryStore } from '../src/storage/memory';
-import { BrowserStore } from '../preview/store';
 import { DEFAULT_SETTINGS } from '../src/types';
 const path = 'Reading/Inbox/Guard.md', node = 'Nodes/Ada Lovelace.md';
 const source = '---\ntype: article\n---\n==Ada Lovelace==';
 const nodeText = '---\ntype: person\n---\n';
 const person = { name: 'person', color: '🟡' } as const;
-const staleOrOwnershipFence = /Node changed|Storage action blocked for .*vault changed after legacy ownership review/;
+const staleNodeFence = /Node changed/;
 
 it('linking an existing typed node rejects a type change before the article commit', async () => {
   const f = nativeStore({ [path]: source, [node]: nodeText }), repo = new ReaderRepository(f.store, DEFAULT_SETTINGS);
@@ -32,8 +31,8 @@ it('native unhighlight keeps an unreferenced empty typed node unchanged', async 
   expect(f.disk.get(path)).not.toContain('[[Nodes/');
 });
 
-it.each(['memory', 'browser'])('rejects target type changes after preflight but before article callback in %s', async kind => {
-  const store = kind === 'memory' ? new MemoryStore() : new BrowserStore('typed-guard-browser');
+it('rejects target type changes after preflight but before article callback', async () => {
+  const store = new MemoryStore();
   await store.create(path, source); await store.create(node, nodeText);
   const repo = new ReaderRepository(store, DEFAULT_SETTINGS), article = await repo.getArticle(path), process = store.process.bind(store);
   vi.spyOn(store, 'process').mockImplementation(async (target, update) => {
@@ -41,9 +40,9 @@ it.each(['memory', 'browser'])('rejects target type changes after preflight but 
     return process(target, update);
   });
   try {
-    await expect(repo.setHighlightType(path, article.highlights[0].id, person)).rejects.toThrow(staleOrOwnershipFence);
+    await expect(repo.setHighlightType(path, article.highlights[0].id, person)).rejects.toThrow(staleNodeFence);
     expect(await store.read(path)).toBe(source); expect(await store.read(node)).toContain('type: topic');
-  } finally { localStorage.removeItem('typed-guard-browser'); vi.restoreAllMocks(); }
+  } finally { vi.restoreAllMocks(); }
 });
 
 it.each(['type', 'delete', 'replace', 'buffer', 'rename'])('native target %s change immediately before article process blocks the write', async change => {
@@ -63,7 +62,7 @@ it.each(['type', 'delete', 'replace', 'buffer', 'rename'])('native target %s cha
       if (change === 'replace') await f.vault.create(node, nodeText);
     }
   };
-  await expect(repo.setHighlightType(path, article.highlights[0].id, person)).rejects.toThrow(staleOrOwnershipFence);
+  await expect(repo.setHighlightType(path, article.highlights[0].id, person)).rejects.toThrow(staleNodeFence);
   expect(f.disk.get(path)).toBe(source);
   expect(f.events.filter(event => event.path === path)).toEqual([]);
 });

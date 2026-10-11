@@ -33,7 +33,7 @@ Article text.`;
   const store = new MemoryStore({ [path]: original }), repo = new ReaderRepository(store, { ...DEFAULT_SETTINGS });
   const viewport = document.createElement('div'), report = vi.fn(); let position = { marker: '' };
   const tracker = persistPosition(viewport, () => position,
-    value => repo.saveReadingPosition(path, value, 'article-id').then(() => undefined), report);
+    value => repo.saveReadingPosition(path, value).then(() => undefined), report);
   position = { marker: 'new words' }; viewport.dispatchEvent(new Event('scroll'));
   await vi.runAllTimersAsync();
   position = { marker: 'next words' }; window.dispatchEvent(new Event('pagehide')); await tracker.flush();

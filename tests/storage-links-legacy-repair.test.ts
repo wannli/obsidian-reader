@@ -9,7 +9,7 @@ const raw = '---\ntype: article\nhighlights: [{id: hl-old, pending: {op: link}}]
 it('preserves pending legacy link work and quote/backlink bytes rather than repairing it', async () => {
   const store = new MemoryStore({ [path]: raw, 'Daily/2020-01-01.md': 'Edited journal [[Reading/Inbox/Legacy#^hl-old]].\n' });
   const before = store.snapshot(), repo = new ReaderRepository(store, DEFAULT_SETTINGS);
-  expect((await repo.prepareStorage()).errors.join(' ')).toMatch(/highlight array|legacy/i);
-  await expect(repo.setStatus(path, 'later')).rejects.toThrow(/blocked|legacy/i);
+  await repo.getArticle(path);
+  await expect(repo.setStatus(path, 'later')).rejects.toThrow(/links|reference/i);
   expect(store.snapshot()).toEqual(before);
 });

@@ -42,7 +42,9 @@ location determines an article's queue, while frontmatter describes the source a
 reading state. New article notes omit `id`, `guid`, `pullmanFormat`, `content`,
 `extractor`, `sourceHash`, and `sourceLength`; feed IDs remain. Unknown nonempty
 article text is protected from automatic replacement unless its current bytes
-independently prove it is a replaceable sample or excerpt.
+independently prove it is a replaceable sample or excerpt. Historical article IDs,
+extraction stamps, and conversion metadata are preserved as unknown properties,
+not interpreted or migrated. Legacy sidecars are left untouched and ignored.
 
 ### Articles
 
@@ -127,3 +129,25 @@ Reader uses the `obsidian-reader` plugin ID. It is installed independently and
 does not import settings or workspace state from another plugin.
 
 BRAT can also check for and install future Reader updates.
+
+## Development
+
+Use the Node version pinned in `.mise.toml`:
+
+```sh
+mise exec -- npm ci
+mise exec -- npm run check
+```
+
+`check` validates metadata, types, unit tests, tooling regressions, and the plugin
+build. There is no standalone browser preview or browser simulation suite.
+Playwright remains a development dependency for native Obsidian sandbox automation.
+
+`npm run dev` builds for Obsidian hot reload. Native testing uses only the
+repository's marked synthetic vaults under `.sandbox`; never use a personal vault.
+Use `npm run vault:setup`, `npm run vault:open`, and `npm run test:obsidian` for
+that separate acceptance workflow. Synthetic checks do not prove native iOS,
+e-ink hardware, or cross-device sync behavior.
+
+Release Please owns version and changelog updates. Releases are published by
+merging its PR, not by authoring separate release notes or manually creating tags.

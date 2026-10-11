@@ -7,13 +7,8 @@
   "scripts": {
     "build": "node scripts/build.mjs",
     "dev": "node --watch --watch-preserve-output --watch-path=src --watch-path=manifest.json --watch-path=styles.css scripts/dev.mjs",
-    "preview": "vite --host 127.0.0.1 --port 5184",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "test:browser": "playwright test",
-    "test:browser:inline": "playwright test --config playwright.inline.config.ts",
-    "test:browser:eink": "playwright test --config playwright.eink.config.ts",
-    "test:browser:ci": "playwright test --config playwright.ci.config.ts",
     "test:tooling": "node --test scripts/*.test.mjs",
     "validate:metadata": "node scripts/validate-release.mjs",
     "vault:setup": "node scripts/setup-vault.mjs",
@@ -22,14 +17,12 @@
     "main:merge": "node scripts/merge-local-main.mjs",
     "vault:reload": "READER_RUNTIME_TARGET=acceptance node scripts/reload-local-main.mjs",
     "test:obsidian": "node scripts/test-obsidian.mjs",
-    "check": "npm run validate:metadata && npm run typecheck && npm test && npm run test:tooling && npm run build && npm run test:browser:ci"
+    "check": "npm run validate:metadata && npm run typecheck && npm test && npm run test:tooling && npm run build"
   },
   "dependencies": {
     "defuddle": "0.19.4",
     "dompurify": "3.4.16",
-    "fast-xml-parser": "5.11.2",
     "marked": "^18.1.0",
-    "moment": "2.31.0",
     "yaml": "^2.8.1"
   },
   "devDependencies": {
@@ -39,7 +32,6 @@
     "jsdom": "26.1.0",
     "obsidian": "1.14.4",
     "typescript": "5.9.3",
-    "vite": "8.3.3",
     "vitest": "5.0.3"
   }
 }

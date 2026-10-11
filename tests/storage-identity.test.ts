@@ -10,16 +10,16 @@ describe('path and URL identity without article IDs or GUIDs', () => {
   it('does not deduplicate different URLs merely because feed and GUID agree', async () => {
     const store = new MemoryStore(), repo = new ReaderRepository(store, DEFAULT_SETTINGS);
     const url = 'https://EXAMPLE.com:443/original/?utm_source=first#source';
-    let original = await repo.createArticle({ title: 'Original', url, feed: '[[Feeds/First]]', guid: 'stable-guid', status: 'later', body: 'Saved snapshot' });
+    let original = await repo.createArticle({ title: 'Original', url, feed: '[[Feeds/First]]', status: 'later', body: 'Saved snapshot' });
     original = await mark(repo, original.path, { quote: 'Saved snapshot' });
     const before = store.snapshot();
-    const repeated = await repo.createArticle({ title: 'Changed', url: 'https://example.com/different-link', feed: '[[Feeds/First]]', guid: 'stable-guid', status: 'feed', body: 'Overwritten' });
+    const repeated = await repo.createArticle({ title: 'Changed', url: 'https://example.com/different-link', feed: '[[Feeds/First]]', status: 'feed', body: 'Overwritten' });
     expect(repeated.path).not.toBe(original.path);
     expect(repeated.url).toBe('https://example.com/different-link');
     expect(original.url).toBe(url);
     expect(parseNote(await store.read(original.path)).doc.has('guid')).toBe(false);
     expect(store.snapshot()[original.path]).toBe(before[original.path]);
-    const otherFeed = await repo.createArticle({ title: 'Other feed', url: 'https://example.com/other-feed', feed: '[[Feeds/Second]]', guid: 'stable-guid' });
+    const otherFeed = await repo.createArticle({ title: 'Other feed', url: 'https://example.com/other-feed', feed: '[[Feeds/Second]]' });
     expect(otherFeed.path).not.toBe(original.path);
     expect(await repo.listArticles()).toHaveLength(3);
   });
@@ -29,16 +29,15 @@ describe('path and URL identity without article IDs or GUIDs', () => {
     const articles = await Promise.all([
       repo.createArticle({ title: 'Manual', url: '' }),
       repo.createArticle({ title: 'Manual', url: '   ' }),
-      repo.createArticle({ title: 'Unscoped', url: '', guid: 'same' }),
-      repo.createArticle({ title: 'Unscoped', url: '', guid: 'same' }),
-      repo.createArticle({ title: 'Blank GUID', url: '', feed: 'Feed', guid: '   ' }),
-      repo.createArticle({ title: 'Blank GUID', url: '', feed: 'Feed', guid: '' }),
+      repo.createArticle({ title: 'Unscoped', url: '' }),
+      repo.createArticle({ title: 'Unscoped', url: '' }),
+      repo.createArticle({ title: 'Blank GUID', url: '', feed: 'Feed' }),
+      repo.createArticle({ title: 'Blank GUID', url: '', feed: 'Feed' }),
     ]);
     expect(new Set(articles.map(article => article.path)).size).toBe(6);
     expect(articles.every(article => parseNote(store.snapshot()[article.path]).doc.has('guid') === false)).toBe(true);
     expect(await repo.listArticles()).toHaveLength(6);
     expect(articles.every(article => article.url === '')).toBe(true);
-    expect(articles[4].guid).toBeUndefined();
   });
 
   it('distinguishes repeated passages by current source position, not persisted random IDs', async () => {

@@ -10,7 +10,7 @@ const topic = 'Topics/Philosophy.md';
 const topicNote = '---\ntype: topic\n---\nUser topic writing.\n';
 
 describe('topic assignment source and YAML safety', () => {
-  it('preserves a verifiably tracked legacy source including publisher-authored Topics headings without protecting it', async () => {
+  it('preserves a verifiably tracked legacy source including publisher-authored Topics headings as protected unknown text', async () => {
     const path = 'Reading/Inbox/Tracked.md';
     const body = 'Publisher text.\n\n## Topics\n\nA publisher-authored heading.';
     const raw = `---\ntype: article\nurl: https://example.com/tracked\nextractor: defuddle\ncontent: ready\nsourceLength: ${body.length}\nsourceHash: ${fingerprint(body)}\n---\n${body}`;
@@ -19,7 +19,7 @@ describe('topic assignment source and YAML safety', () => {
     const before = parseNote(await readNoteRaw(store, path));
     const result = await repository.updateArticleTopics(path, { add: [topic] });
     const after = parseNote(await readNoteRaw(store, path));
-    expect(result.content).toBe('ready'); expect(result.extractor).toBe('defuddle');
+    expect(result.content).toBe('protected'); expect(result.extractor).toBe('manual');
     expect(after.body).toBe(before.body);
     expect(result.body).toBe((await repository.getArticle(path)).body);
     const { topics: _topics, ...other } = after.doc.toJS();

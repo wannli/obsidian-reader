@@ -27,7 +27,7 @@ it.each(['https://example.com/?a=1&amp;b=2', 'https://example.com/&#65;'])('rend
 
 it('does not rebind a pending selection to an external same-text formatting revision', async () => {
   vi.useFakeTimers();
-  let article: Article = { path: 'Reading/Inbox/Test.md', id: 'test', title: 'Test', body: 'one two', highlights: [], url: '', status: 'inbox', content: 'ready', extractor: 'manual' };
+  let article: Article = { path: 'Reading/Inbox/Test.md', title: 'Test', body: 'one two', highlights: [], url: '', status: 'inbox', content: 'ready', extractor: 'manual' };
   const options = { stripTitle: article.title };
   const highlight = vi.fn(async (_path: string, quote: string, anchor: CompactAnchor) => {
     article = { ...article, body: addInlineHighlight(article.body, { quote, anchor }, options) };

@@ -20,7 +20,7 @@ export function replaceAnnotationSource(note: Note, path: string, next: string):
   if (source.region.section) {
     if (!note.doc.has('articleSection')) note.doc.set('articleSection', 'Article');
     // Layout-only stamp keeps publisher H2s and authored footers distinct.
-    // Never update sourceHash/sourceLength: those grant extraction ownership.
+    // Retired extraction properties remain opaque and unchanged.
     const length = source.region.text.length + next.length - source.markdown.length;
     note.doc.set('sourceLayoutLength', length);
     note.doc.set('sourceLayoutHash', fingerprint(note.body.slice(source.region.start, source.region.start + length)));

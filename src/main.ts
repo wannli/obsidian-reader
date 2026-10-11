@@ -19,12 +19,6 @@ import { isArticleTemplatePath, type ArticleTemplateExclusions } from './storage
 const VIEW = 'reader';
 const BARRIER = Symbol.for('reader.shutdown');
 const RESUME = Symbol.for('reader.view-resume');
-export function storagePreparationMessage(report: { errors: string[]; warnings?: string[] }): string {
-  return [
-    report.errors.length ? 'Reader preserved notes with storage preparation errors:\n' + report.errors.join('\n') : '',
-    report.warnings?.length ? 'Reader storage preparation warnings:\n' + report.warnings.join('\n') : '',
-  ].filter(Boolean).join('\n\n');
-}
 /** Open only an existing file object: never delegate to create-capable openLinkText. */
 export async function openExistingNote(app: App, target: string, source = ''): Promise<void> {
   if (!target.trim()) throw new Error('The linked note is missing. No note was created.');
@@ -142,7 +136,6 @@ class ReaderView extends FileView {
     return this.plugin.trackReaderDisposal(flushed);
   }
   async onClose() { await this.disposeReader(); await super.onClose(); }
-  async openArticle(path: string) { this.savedState = { file: path }; await this.reader?.open(path); }
 }
 export default class ReaderPlugin extends Plugin {
   settings: ReaderSettings = { ...DEFAULT_SETTINGS };
@@ -158,7 +151,6 @@ export default class ReaderPlugin extends Plugin {
     void write.finally(() => this.readerDisposals.delete(write)).catch(() => {});
     return write;
   }
-  private storagePreparation?: Promise<unknown>;
   private routing?: ArticleRouting;
   native?: NativeReaderUI;
   private routeChecks = new WeakMap<WorkspaceLeaf, () => boolean>();
@@ -209,11 +201,6 @@ export default class ReaderPlugin extends Plugin {
     const context = this.app as unknown as Record<symbol, Promise<void> | undefined>;
     await context[BARRIER];
     if (this.closing) return;
-    const plugins = (this.app as unknown as { plugins?: { plugins?: Record<string, unknown>; enabledPlugins?: Set<string> } }).plugins;
-    if (plugins?.plugins?.pullman || plugins?.enabledPlugins?.has('pullman')) {
-      const error = new Error('Disable the previously installed reader plugin before enabling Reader.');
-      new Notice(error.message, 0); throw error;
-    }
     this.einkDevice = readEinkDevice(window);
     const saved = await this.loadData();
     if (this.closing) return;
@@ -231,17 +218,7 @@ export default class ReaderPlugin extends Plugin {
     this.settings.maxFeedItems = Math.max(1, Math.min(500, Number(this.settings.maxFeedItems) || 50));
     await this.refreshExclusions().catch(error => { new Notice(error.message); throw error; }); if (this.closing) return;
     const repository = new ReaderRepository(new ObsidianStore(this.app.vault, this.app.workspace), this.settings, () => this.exclusions());
-    // Inventory unsupported legacy records before acquisition; never rewrite them.
-    const preparation = repository.prepareStorage(); this.storagePreparation = preparation;
-    const prepared = await preparation.catch(error => {
-      new Notice('Reader storage preparation failed: ' + String(error), 0); throw error;
-    });
-    if (this.closing) return;
     this.controller = new ReaderController(repository, obsidianGet, this.settings, () => this.refreshExclusions());
-    const preparationMessage = storagePreparationMessage(prepared);
-    if (preparationMessage) {
-      this.controller.message = preparationMessage; new Notice(preparationMessage, 0);
-    }
     this.registerView(VIEW, leaf => new ReaderView(leaf, this));
     this.native = new NativeReaderUI(this, this.controller, () => {
       const view = this.app.workspace.activeLeaf?.view; return view instanceof ReaderView ? view.getReader() : undefined;
@@ -364,7 +341,6 @@ export default class ReaderPlugin extends Plugin {
     const context = this.app as unknown as Record<symbol, Promise<void> | undefined>;
     context[BARRIER] = Promise.allSettled([
       ...(this.controller ? [this.controller.shutdown()] : []),
-      ...(this.storagePreparation ? [this.storagePreparation] : []),
       ...this.nativeRenames, ...this.readerDisposals, ...restoring,
     ]).then(() => { this.controller?.repository?.disposeStorage(); });
   }

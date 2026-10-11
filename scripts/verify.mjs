@@ -28,8 +28,8 @@ async function sourceSnapshot() {
       else hashes[name] = sha256(await regularFile(join(repository, name)));
     }
   }
-  for (const folder of ['src', 'preview', 'tests', 'scripts', 'integrations']) await collect(folder);
-  for (const name of ['package.json', 'package-lock.json', 'manifest.json', 'styles.css', 'tsconfig.json', 'vitest.config.ts', 'vite.config.ts', 'playwright.config.ts']) {
+  for (const folder of ['src', 'tests', 'scripts', 'integrations']) await collect(folder);
+  for (const name of ['package.json', 'package-lock.json', 'manifest.json', 'styles.css', 'tsconfig.json', 'vitest.config.ts']) {
     hashes[name] = sha256(await regularFile(join(repository, name)));
   }
   return hashes;
@@ -57,7 +57,6 @@ try {
   const build = await readBuild();
   result.buildId = build.metadata.buildId;
   await createOnly(join(evidence, 'build-meta.json'), `${JSON.stringify(build.metadata, null, 2)}\n`);
-  await run('browser', 'npm', ['run', 'test:browser']);
   if (!staticOnly) {
     runtimeStarted = true;
     await run('vault-setup', 'npm', ['run', 'vault:setup']);

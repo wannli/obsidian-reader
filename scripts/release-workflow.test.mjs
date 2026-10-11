@@ -14,12 +14,20 @@ test('supported checks use metadata validation without handwritten release notes
   assert.equal(pkg.scripts['validate:metadata'], 'node scripts/validate-release.mjs');
   assert.deepEqual(pkg.scripts.check.split(' && '), [
     'npm run validate:metadata', 'npm run typecheck', 'npm test',
-    'npm run test:tooling', 'npm run build', 'npm run test:browser:ci',
+    'npm run test:tooling', 'npm run build',
   ]);
   for (const workflow of [ci, release]) {
     assert.equal(workflow.split('npm run validate:metadata').length - 1, 1);
     assert.doesNotMatch(workflow, /validate:release|--write-notes|releases\//);
   }
+});
+
+test('preview-only commands and CI browser steps are retired', () => {
+  assert.equal(Object.hasOwn(pkg.scripts, 'preview'), false);
+  assert.equal(Object.keys(pkg.scripts).some(name => name.startsWith('test:browser')), false);
+  assert.equal(Object.hasOwn(pkg.devDependencies, 'vite'), false);
+  assert.ok(pkg.devDependencies['@playwright/test'], 'Native sandbox automation still uses Playwright');
+  assert.doesNotMatch(ci, /playwright install|test:browser|browser-failure-diagnostics/);
 });
 
 test('CI retains PR/manual checks without an independent tag publication path', () => {
@@ -28,7 +36,7 @@ test('CI retains PR/manual checks without an independent tag publication path', 
   assert.match(triggers, /  workflow_dispatch:/);
   assert.doesNotMatch(triggers, /  push:/);
   assert.doesNotMatch(ci, /\n  release:\n/);
-  for (const command of ['npm run typecheck', 'npm test', 'npm run test:tooling', 'npm run build', 'npm run test:browser:ci'])
+  for (const command of ['npm run typecheck', 'npm test', 'npm run test:tooling', 'npm run build'])
     assert.equal(ci.split(command).length - 1, 1, command);
 });
 

@@ -108,15 +108,15 @@ describe('Markdown repository', () => {
     const { store, repo } = setup({ 'Outside/Manual.md': '---\ntype: article\n# Keep this comment\ncustom: &settings\n  rating: 5\n  nested: [one, two]\ncopy: *settings\nsummary: |\n  multiline\n  user prose\n---\n' + body });
     expect(await repo.listArticles()).toEqual([]);
     const manual = await repo.getArticle('Outside/Manual.md');
-    expect(manual.url).toBe(''); expect(manual.title).toBe('Manual'); expect(manual.id).toBe(''); expect(manual.status).toBeUndefined();
+    expect(manual.url).toBe(''); expect(manual.title).toBe('Manual'); expect(manual).not.toHaveProperty('id'); expect(manual.status).toBeUndefined();
     const updated = await repo.setStatus(manual.path, 'archive');
-    expect(updated.id).toBe(manual.id);
+    expect(updated).not.toHaveProperty('id');
     const raw = await store.read(updated.path), note = parseNote(raw);
     expect(note.body).toBe(body);
     expect(raw).toContain('# Keep this comment');
     expect(note.doc.toJS()).toMatchObject({ custom: { rating: 5, nested: ['one', 'two'] }, copy: { rating: 5 }, summary: 'multiline\nuser prose\n' });
     const highlighted = await mark(repo, updated.path, { quote: 'User paragraph.' });
-    expect(highlighted.id).toBe('');
+    expect(highlighted).not.toHaveProperty('id');
     expect(highlighted.body).toBe(body.replace('User paragraph.', '==User paragraph.=='));
     expect(parseNote(await store.read(updated.path)).body).toBe(body.replace('User paragraph.', '==User paragraph.=='));
   });

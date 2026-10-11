@@ -52,7 +52,7 @@ export function mountReader(target: HTMLElement, initial: Article, controller: R
   let resolved: ResolvedHighlight[] = [];
   let pagination: EinkPagination | undefined, stopPageKeys = () => {};
   let positionChanged = () => {};
-  let positionPath = initial.path, positionId = initial.id, positionGeneration = controller.repository.articleGeneration(initial.path);
+  let positionPath = initial.path, positionGeneration = controller.repository.articleGeneration(initial.path);
   // Raw bytes from getArticle: two idless notes can occupy the same filename
   // before a native generation event reaches the reader.
   let positionRevision = initial.revision;
@@ -96,11 +96,10 @@ export function mountReader(target: HTMLElement, initial: Article, controller: R
       if (positionRevision === undefined) {
         // Synthetic mounts without a raw revision retain the legacy test adapter;
         // real ReaderApp mounts always originate from repository.getArticle.
-        positionId = await controller.repository.saveReadingPosition(positionPath, position, positionId, positionGeneration);
+        await controller.repository.saveReadingPosition(positionPath, position, positionGeneration);
       } else {
         const expected = positionRevision;
-        const saved = await controller.repository.saveReadingPositionRevision(positionPath, position, positionId, positionGeneration, expected);
-        positionId = saved.id;
+        const saved = await controller.repository.saveReadingPositionRevision(positionPath, position, positionGeneration, expected);
         if (positionRevision === expected) positionRevision = saved.revision;
       }
     },

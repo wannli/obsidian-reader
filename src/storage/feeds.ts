@@ -4,7 +4,6 @@ import { newNote, noteType, writeNote } from './markdown';
 import { feedFrom } from './models';
 import { normalizeUrl, notePath, sameUrl } from './safety';
 import { WIRES_FOLDER } from '../reading-layout';
-import { INLINE_FORMAT } from './legacy-import';
 import { capturePathGenerations, pathGeneration } from './path-generation';
 import { StaleArticleWriteError } from './preconditions';
 
@@ -20,10 +19,10 @@ export async function createFeed(context: StorageContext, title: string, value: 
   }
   const name = title.trim() || new URL(url).hostname;
   const path = notePath(context.settings.feedsFolder || WIRES_FOLDER, name, await context.store.list());
-  const note = newNote({ type: 'feed', pullmanFormat: INLINE_FORMAT, id: await context.freshId('feed'), title: name, prefix: name, url, enabled: false });
-  const ownershipRevision = await context.assertWritable(path);
+  const note = newNote({ type: 'feed', id: await context.freshId('feed'), title: name, prefix: name, url, enabled: false });
+  const revision = await context.assertWritable(path);
   await context.store.create(path, writeNote(note), { guard: () => {
-    context.assertOwnershipRevision(path, ownershipRevision);
+    context.assertRevision(path, revision);
     context.assertWritableNow(path);
     if (pathGeneration(context.store, path) !== generationAtRequest(path)) throw new StaleArticleWriteError();
   } });

@@ -6,8 +6,6 @@ dist/
 coverage/
 .vite/
 .cache/
-playwright-report/
-test-results/
 *.tsbuildinfo
 /main.js
 /main.js.map

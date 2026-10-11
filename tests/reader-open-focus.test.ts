@@ -6,7 +6,6 @@ import { validateHighlightTypes } from '../src/typed-highlights';
 import { validReadingPosition as readingPosition } from '../src/reading-position';
 import { queueLabel } from '../src/reading-layout';
 import { readerCommands } from '../src/ui/commands';
-import { isSidecarPath } from '../src/storage/sidecar-format';
 import { nativeDeleteHandler } from '../src/native-delete';
 import * as einkDevice from '../src/eink-device';
 // SDK contract fixture: revealLeaf deliberately neither activates nor focuses.
@@ -68,9 +67,9 @@ async function fixture(existing: boolean, savedData?: Record<string, unknown>) {
   const NativeReaderUI = load('src/ui/native.ts', { obsidian: sdk, '../reading-layout': { queueLabel }, './commands': { readerCommands }, './native-dialogs': { ReaderPicker: class {}, ReaderInput: class {}, ReaderFeeds: class {} }, './native-topics': { ReaderTopics: class {} }, './highlight-link-picker': { HighlightLinkPicker: class {} } }).NativeReaderUI;
   const ReaderPlugin = load('src/main.ts', {
     './native-delete': { nativeDeleteHandler }, './reading-position': { validReadingPosition: readingPosition },
-    './storage/sidecar-format': { isSidecarPath }, './eink-device': einkDevice,
-    obsidian: sdk, './typed-highlights': { validateHighlightTypes }, './types': { DEFAULT_SETTINGS }, './storage/repository': { ReaderRepository: class { async prepareStorage() { return { converted: 0, errors: [] }; } } }, './obsidian-store': { ObsidianStore: class {} }, './controller': { ReaderController }, './transport': { obsidianGet: vi.fn() }, './ui/app': { ReaderApp }, './settings': { ReaderSettingsTab: class {} },
-    './routing': { installArticleRouting: (options: unknown) => { route = options; return { dispose() {}, preserveMarkdown() { return () => {}; } }; } }, './ui/native': { NativeReaderUI }, './ui/native-popups': { nativeHighlightMenu: vi.fn(), nativeLinkMenu: vi.fn() }, './settings-migration': { settingsData: async (data: unknown) => ({ data }) }, './template-exclusions': { readTemplateExclusions: async () => ({ folders: [], files: [] }) }, './storage/classifier': { isArticleTemplatePath: () => false },
+    './eink-device': einkDevice,
+    obsidian: sdk, './typed-highlights': { validateHighlightTypes }, './types': { DEFAULT_SETTINGS }, './storage/repository': { ReaderRepository: class {} }, './obsidian-store': { ObsidianStore: class {} }, './controller': { ReaderController }, './transport': { obsidianGet: vi.fn() }, './ui/app': { ReaderApp }, './settings': { ReaderSettingsTab: class {} },
+    './routing': { installArticleRouting: (options: unknown) => { route = options; return { dispose() {}, preserveMarkdown() { return () => {}; } }; } }, './ui/native': { NativeReaderUI }, './ui/native-popups': { nativeHighlightMenu: vi.fn(), nativeLinkMenu: vi.fn() }, './template-exclusions': { readTemplateExclusions: async () => ({ folders: [], files: [] }) }, './storage/classifier': { isArticleTemplatePath: () => false },
   }).default;
   const files = new Map<string, { path: string; basename: string }>();
   const leaves: any[] = [], app: any = { vault: { on: vi.fn(), getFileByPath: (path: string) => {
@@ -163,7 +162,7 @@ it('exposes a native file identity so repeated article opens reuse the viewer', 
   expect(first.view.fileTransitions).toBe(1);
   expect(first.view.navigation).toBe(true);
   expect(first.view.canAcceptExtension('md')).toBe(false);
-  await first.view.openArticle('Reading/Inbox/Other.md');
+  await first.view.getReader().open('Reading/Inbox/Other.md');
   expect(f.workspace.getLeavesOfFile(path)).toHaveLength(0);
   expect(f.workspace.getLeavesOfFile('Reading/Inbox/Other.md')).toEqual([first]);
   expect(first.view.fileTransitions).toBe(2);
@@ -206,7 +205,7 @@ it('uses the article title for the native viewer title, with a Reader fallback',
   const f = await fixture(false), target = f.leaf();
   await target.setViewState({ type: 'reader' });
   expect(target.view.getDisplayText()).toBe('Reader');
-  await target.view.openArticle('Reading/Inbox/261009 Filename.md');
+  await target.view.getReader().open('Reading/Inbox/261009 Filename.md');
   expect(target.view.getDisplayText()).toBe('Article');
   expect(target.updateHeader).toHaveBeenCalled();
   expect(target.view.titleEl.textContent).toBe('Article');

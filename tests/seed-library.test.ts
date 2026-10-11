@@ -17,7 +17,6 @@ it('synthetic seeds use actual YAML state, no active sidecars, and preserve sour
     expect(note.doc.has('id')).toBe(note.doc.get('type') === 'feed');
     if (note.doc.get('type') === 'article') for (const key of ['guid', 'pullmanFormat', 'content', 'extractor', 'sourceHash', 'sourceLength']) expect(note.doc.has(key)).toBe(false);
   }
-  await repo.prepareStorage(); expect(store.snapshot()).toEqual(files);
   expect(await repo.listArticles()).toHaveLength(4); expect(await repo.listFeeds()).toHaveLength(1);
   expect((await repo.getArticle(path)).body).toBe(seedBody);
   const highlighted = await mark(repo, path, { quote: 'Small observations become durable knowledge' });

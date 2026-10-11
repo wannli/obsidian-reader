@@ -12,13 +12,11 @@ export interface Highlight {
 }
 export interface Article {
   path: string;
-  id: string;
   /** Ephemeral raw-note revision for acquisition compare-and-swap; never persisted. */
   revision?: string;
   title: string;
   url: string;
   feed?: string;
-  guid?: string;
   published?: string;
   status?: ArticleStatus;
   content: ContentState;
@@ -74,17 +72,16 @@ export interface FileStore {
   dispose?(): void;
   /** Synchronous indexed absence check, used inside a metadata CAS callback. */
   assertAbsent?(path: string): void;
-  /** Recheck legacy ownership even for direct clients, then run the final adapter guard before dispatch. */
+  /** Run the final adapter guard before dispatch. */
   create(path: string, content: string, options?: { guard?: () => void }): Promise<void>;
   process(path: string, update: (current: string) => string): Promise<void>;
   /** Inspect the latest native buffer without saving it; the later write must recheck it. */
   inspect?(path: string, read: (current: string) => void): Promise<void>;
   /** Preserve exact bytes; no implicit link updates. Reject stale source, collisions and unsafe editors. */
   rename(from: string, to: string, options: { expectedContent: string; guard?: () => void }): Promise<void>;
-  /** Retire verified legacy JSON only after rechecking the converted source and lifecycle guard. */
-  remove?(path: string, options: { expectedContent: string; expectedSource?: { path: string; content: string }; guard?: () => void }): Promise<void>;
+
 }
-export interface NewArticle { title: string; url: string; status?: ArticleStatus; feed?: string; feedPrefix?: string; guid?: string; published?: string; body?: string; content?: ContentState; extractor?: ArticleExtractor; summary?: string; feedText?: { markdown: string; isExcerpt: boolean }; }
+export interface NewArticle { title: string; url: string; status?: ArticleStatus; feed?: string; feedPrefix?: string; published?: string; body?: string; content?: ContentState; extractor?: ArticleExtractor; summary?: string; feedText?: { markdown: string; isExcerpt: boolean }; }
 export interface ExtractedArticle { title: string; markdown: string; status: 'ready' | 'partial'; extractor: 'dummy' | 'defuddle'; warning?: string; }
 export interface FeedEntry { id: string; title: string; url: string; published?: string; summary?: string; feedText?: { markdown: string; isExcerpt: boolean }; }
 export interface ParsedFeed { title: string; entries: FeedEntry[]; }

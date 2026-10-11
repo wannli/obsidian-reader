@@ -23,7 +23,7 @@ export class RelationshipDraft {
     // The revision binds YAML entries AND their resolved targets from this same
     // article snapshot, so a later shadowing note cannot turn removal into a no-op.
     return new RelationshipDraft(property, path, options.map(option => ({ ...option })), article[property] ?? [], controller,
-      { expectedId: article.id, expectedGeneration, revision: article.relationshipRevisions?.[property], current });
+      { expectedGeneration, revision: article.relationshipRevisions?.[property], current });
   }
   stage(name: string): void {
     const path = typedNodeTarget(name) + '.md';

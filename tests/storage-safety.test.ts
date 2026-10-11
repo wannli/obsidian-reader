@@ -25,8 +25,6 @@ describe('storage safety', () => {
       const store = new MemoryStore({ 'Damaged.md': raw }), repo = new ReaderRepository(store, DEFAULT_SETTINGS);
       await expect(repo.setStatus('Damaged.md', 'archive')).rejects.toThrow();
       expect(await store.read('Damaged.md')).toBe(raw);
-      const report = await repo.prepareStorage();
-      expect(report.converted).toBe(0); expect(report.errors).toHaveLength(1);
     },
   );
 
@@ -36,20 +34,14 @@ describe('storage safety', () => {
     expect(await repo.listArticles()).toEqual([]);
     await expect(repo.getArticle('Elsewhere/Manual.md')).resolves.toMatchObject({ path: 'Elsewhere/Manual.md', url: '', status: undefined });
     const saved = await mark(repo, 'Elsewhere/Manual.md', { quote: 'Actual source' });
-    expect(saved.id).toBe(''); expect(saved.highlights).toHaveLength(1);
+    expect(saved).not.toHaveProperty('id'); expect(saved.highlights).toHaveLength(1);
     expect(parseNote(await store.read('Elsewhere/Manual.md')).doc.has('id')).toBe(false);
   });
-  it('rejects duplicate note identities before any mutation or daily repair', async () => {
+  it('preserves duplicate historical IDs as unknown properties', async () => {
     const store = new MemoryStore({ 'One.md': articleNote(), 'Two.md': articleNote() }), repo = new ReaderRepository(store, DEFAULT_SETTINGS);
-    const before = store.snapshot();
-    await expect(repo.setStatus('One.md', 'archive')).rejects.toThrow(/Duplicate (?:note|article) ID/);
-    await expect(repo.setArticleError('One.md', 'Do not write')).rejects.toThrow(/Duplicate/);
-    expect(store.snapshot()).toEqual(before);
-  });
-  it('refuses ambiguous legacy block ownership without erasing either excerpt', async () => {
-    const raw = articleNote('highlights: [{id: hl-old}]\n', '## Highlights\n\n> First\n\n^hl-old\n\n> Second\n\n^hl-old\n\n## Article\n\nFirst Second');
-    const store = new MemoryStore({ 'Legacy.md': raw }), repo = new ReaderRepository(store, DEFAULT_SETTINGS), before = store.snapshot();
-    expect((await repo.prepareStorage()).errors.length).toBeGreaterThan(0); expect(store.snapshot()).toEqual(before);
+    await repo.setArticleError('One.md', 'Retry');
+    expect(parseNote(await store.read('One.md')).doc.get('id')).toBe('manual-id');
+    expect(await store.read('Two.md')).toBe(articleNote());
   });
   it('same inline syntax in different articles needs no global annotation identity', async () => {
     const store = new MemoryStore({ 'One.md': articleNote('', '==Quote=='), 'Two.md': articleNote('', '==Quote==').replace('manual-id', 'other-id') });

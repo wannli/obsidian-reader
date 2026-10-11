@@ -8,30 +8,6 @@ import { sidecarPath } from './sidecar-helpers';
 const path = 'Reading/Articles/Typing.md';
 const raw = '---\ntype: article\nurl: https://example.com/article\nstatus: inbox\ncustom: untouched\n---\n\n## Article\n\n## Comments\n\nExisting comments.\n\n## Custom\n\nKeep custom exactly.\n';
 const replace = (text: string) => text.replace('## Article\n\n', '## Article\n\nNew acquired article.\n\n').replace('status: inbox', 'status: inbox\nid: allocated');
-it('inventories historical JSON for ownership while retaining its exact bytes', async () => {
-  const opaque = 'Reading/Metadata/old-record.json', nested = 'reading/metadata/archive/OLD.JSON', json = '{"legacy":true}';
-  const f = nativeStore({ [opaque]: json, [nested]: json });
-  expect(await f.store.list()).toEqual([opaque, nested]);
-  expect(await f.store.read(opaque)).toBe(json); expect(await f.store.read(nested)).toBe(json);
-});
-it('rechecks orphan JSON ownership at the final create boundary after awaited folder preparation', async () => {
-  const target = 'Reading/Topics/Owned topic.md', jsonPath = sidecarPath(target);
-  const json = JSON.stringify({ path: target, metadata: { id: 'legacy-topic' } });
-  const f = nativeStore({}), originalCreateFolder = f.vault.createFolder.getMockImplementation()!;
-  let injected = false;
-  f.vault.createFolder.mockImplementation(async folder => {
-    await originalCreateFolder(folder);
-    if (folder === 'Reading/Topics' && !injected) {
-      injected = true;
-      await f.store.create(jsonPath, json);
-    }
-  });
-  await expect(f.store.create(target, '---\\ntype: topic\\n---\\n'))
-    .rejects.toThrow(/legacy JSON sidecar owns this path/i);
-  expect(injected).toBe(true);
-  expect(f.files.has(target)).toBe(false);
-  expect(await f.store.read(jsonPath)).toBe(json);
-});
 it('allows clean article/feed creates through ordinary native folder-create events', async () => {
   const f = nativeStore({}), repo = new ReaderRepository(f.store, DEFAULT_SETTINGS);
   const article = await repo.createArticle({ title: 'Folder event', url: 'https://example.com/folder-event', body: 'Saved text.' });
@@ -43,14 +19,14 @@ it('allows clean article/feed creates through ordinary native folder-create even
   expect(f.events.some(event => event.kind === 'create' && event.path === article.path)).toBe(true);
   expect(f.events.some(event => event.kind === 'create' && event.path === feed.path)).toBe(true);
 });
-it('fences Markdown/JSON ownership events but ignores ordinary folder creation, then releases observers', () => {
+it('fences Markdown revisions but ignores ordinary folder creation, then releases observers', () => {
   const f = nativeStore({ [path]: raw }), start = f.store.revision();
   f.emit('create', { path: 'Reading/Articles' }); expect(f.store.revision(path)).toBe(start);
   f.emit('modify', { path: 'Reading/Articles/Other.md' }); expect(f.store.revision(path)).toBe(start + 1);
-  f.emit('create', { path: 'Reading/Metadata/new.json' }); expect(f.store.revision(path)).toBe(start + 2);
-  f.emit('editor-change'); expect(f.store.revision(path)).toBe(start + 3);
+  f.emit('create', { path: 'Reading/Metadata/new.json' }); expect(f.store.revision(path)).toBe(start + 1);
+  f.emit('editor-change'); expect(f.store.revision(path)).toBe(start + 2);
   f.store.dispose(); f.emit('modify', { path: 'Reading/Articles/Other.md' }); f.emit('create', { path: 'Reading/Metadata/new.json' });
-  f.emit('editor-change'); expect(f.store.revision(path)).toBe(start + 3);
+  f.emit('editor-change'); expect(f.store.revision(path)).toBe(start + 2);
 });
 it('reads durable bytes, but atomically updates the latest buffer and preserves backward selection, custom sections, and leaf', async () => {
   const f = nativeStore({ [path]: raw }), { editor, leaf } = f.open(path, raw.replace('Existing comments.', 'UNSAVED Existing comments.'));

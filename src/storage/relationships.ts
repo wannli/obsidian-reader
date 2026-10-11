@@ -1,6 +1,6 @@
 import { isAlias, isScalar, isSeq } from 'yaml';
 import type { StorageContext } from './context';
-import { noteType, parseNote, stringField, type Note } from './markdown';
+import { noteType, parseNote, type Note } from './markdown';
 import { safePath } from './safety';
 import { pathGeneration } from './path-generation';
 import type { AcquisitionWriteOptions } from './preconditions';
@@ -73,14 +73,12 @@ export async function updateRelationships(context: StorageContext, path: string,
   if ((options.revision !== undefined || creations.size) && !context.store.indexedPaths)
     throw new Error('This store cannot safely guard relationship link resolution.');
   const currentFiles = () => context.store.indexedPaths?.() ?? files;
-  let expectedId = options.expectedId, revision = options.revision;
+  let revision = options.revision;
   const validate = (note: Note, paths: readonly string[] = currentFiles()) => {
     guard();
     if (!context.isArticle(note, path)) throw new Error('The source is no longer an article.');
-    const id = stringField(note, 'id') ?? '';
-    expectedId ??= id;
     if (creations.size) revision ??= relationshipRevision(note, property, path, paths);
-    if (id !== expectedId || (revision !== undefined && relationshipRevision(note, property, path, paths) !== revision))
+    if (revision !== undefined && relationshipRevision(note, property, path, paths) !== revision)
       throw new Error(`Article ${property} changed or its links resolve differently. Reopen the assignment dialog.`);
   };
   const inspect = (raw: string) => {
@@ -107,7 +105,7 @@ export async function updateRelationships(context: StorageContext, path: string,
       const changed = applyDelta(note, path, property, paths, add, remove);
       written = note; writtenRevision = relationshipRevision(note, property, path, paths);
       dispatched = changed; return changed;
-    }, { ...options, expectedId });
+    }, options);
     await nodes.verify();
     if (written && relationshipRevision(written, property, path, currentFiles()) !== writtenRevision)
       throw new Error(`Article ${property} link resolution changed during save.`);

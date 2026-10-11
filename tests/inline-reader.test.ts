@@ -11,7 +11,7 @@ afterEach(() => { stops.splice(0).forEach(stop => stop()); document.getSelection
 function fixture(source = 'one two three', extra: Partial<ReaderHost> = {}) {
   vi.useFakeTimers();
   let generation = 0;
-  let article: Article = { path: 'Reading/Inbox/Test.md', id: 'test', title: 'Test', body: source, highlights: [], url: '', status: 'inbox', content: 'ready', extractor: 'manual' };
+  let article: Article = { path: 'Reading/Inbox/Test.md', title: 'Test', body: source, highlights: [], url: '', status: 'inbox', content: 'ready', extractor: 'manual' };
   const target = document.createElement('div'); document.body.append(target);
   const options = { stripTitle: article.title };
   function update(body: string) { article = { ...article, body, highlights: parseInlineMarkdown(body, options).highlights }; return article; }

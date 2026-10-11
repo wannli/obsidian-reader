@@ -102,13 +102,15 @@ describe('seven retired article fields', () => {
     expect((await repo.createArticle({ title: 'Manual', url })).path).not.toBe((await repo.createArticle({ title: 'Manual', url })).path);
   });
 
-  it('reads historical markers without deleting or rewriting them on unrelated saves', async () => {
+  it('preserves unknown historical markers without deleting or rewriting them on unrelated saves', async () => {
     const body = 'Legacy publisher body';
     const path = 'Reading/Inbox/261011 Legacy.md';
     const original = `---\ntype: article\nurl: ${url}\nid: article-old\nguid: old-guid\npullmanFormat: inline-v1\ncontent: ready\nextractor: defuddle\nsourceHash: ${fingerprint(body)}\nsourceLength: ${body.length}\ncustom: preserved\n---\n${body}`;
     const { store, repo } = repoFor(new MemoryStore({ [path]: original }));
     const old = await repo.getArticle(path);
-    expect(old.extractor).toBe('defuddle');
+    expect(old.extractor).toBe('manual');
+    expect(old.content).toBe('protected');
+    expect(old).not.toHaveProperty('id');
     await repo.setArticleError(path, 'Retry later');
     const after = parseNote(await store.read(path));
     for (const key of retired) expect(after.doc.get(key)).toBe(parseNote(original).doc.get(key));

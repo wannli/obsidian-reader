@@ -1,6 +1,5 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import { MemoryStore } from '../src/storage/memory';
-import { BrowserStore } from '../preview/store';
 import { ReaderRepository } from '../src/storage/repository';
 import { ReaderController } from '../src/controller';
 import { RelationshipDraft } from '../src/ui/relationship-draft';
@@ -8,21 +7,20 @@ import { DEFAULT_SETTINGS } from '../src/types';
 import { nativeStore } from './helpers/native-store';
 const path = 'Reading/Inbox/Resolution.md';
 const controllers: ReaderController[] = [];
-afterEach(async () => { for (const controller of controllers.splice(0)) await controller.shutdown(); localStorage.clear(); vi.restoreAllMocks(); });
+afterEach(async () => { for (const controller of controllers.splice(0)) await controller.shutdown(); vi.restoreAllMocks(); });
 const source = (property: string) => `---\ntype: article\n${property}: ["[[Ada]]"]\ncustom: keep\n---\nUnchanged body.`;
-const resolutionOrOwnershipFence = /links resolve differently|Storage action blocked for .*vault changed after legacy ownership review/;
+const resolutionFence = /links resolve differently/;
 const node = (property: string) => `---\ntype: ${property === 'authors' ? 'person' : 'topic'}\n---\n`;
 function controller(repository: ReaderRepository) { const result = new ReaderController(repository, vi.fn(), DEFAULT_SETTINGS); controllers.push(result); return result; }
 for (const property of ['authors', 'topics'] as const) {
-  it.each(['memory', 'browser', 'other browser instance'])(`${property} removal rejects a new root note shadowing the displayed target in %s`, async kind => {
-    const store = kind === 'memory' ? new MemoryStore() : new BrowserStore('resolution');
+  it(`${property} removal rejects a new root note shadowing the displayed target`, async () => {
+    const store = new MemoryStore();
     await store.create(path, source(property)); await store.create('People/Ada.md', node(property));
     const repo = new ReaderRepository(store, DEFAULT_SETTINGS), draft = await RelationshipDraft.load(controller(repo), path, property);
     expect([...draft.initial]).toEqual(['People/Ada.md']); draft.selected.delete('People/Ada.md');
-    const writer = kind === 'other browser instance' ? new BrowserStore('resolution') : store;
-    await writer.create('Ada.md', node(property));
+    await store.create('Ada.md', node(property));
     await expect(draft.save()).rejects.toThrow('links resolve differently');
-    expect(await store.read(path)).toBe(source(property)); expect(await writer.read('Ada.md')).toBe(node(property));
+    expect(await store.read(path)).toBe(source(property)); expect(await store.read('Ada.md')).toBe(node(property));
   });
   it(`${property} rejects changed resolution before creating any staged nodes`, async () => {
     const store = new MemoryStore({ [path]: source(property), 'People/Ada.md': node(property) });
@@ -39,7 +37,7 @@ for (const property of ['authors', 'topics'] as const) {
       if (file.path !== path || ++processes < 2) return;
       f.hooks.beforeProcess = undefined; await f.vault.create('Ada.md', node(property));
     };
-    await expect(draft.save()).rejects.toThrow(resolutionOrOwnershipFence);
+    await expect(draft.save()).rejects.toThrow(resolutionFence);
     expect(f.disk.get(path)).toBe(source(property)); expect(f.events.some(event => event.path === path)).toBe(false);
   });
   it.each(['ambiguous', 'renamed', 'unchanged selection'])(`${property} draft rejects a changed target: %s`, async change => {

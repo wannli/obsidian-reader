@@ -20,12 +20,7 @@
   },
   "include": [
     "src",
-    "preview",
     "tests",
-    "vite.config.ts",
-    "vitest.config.ts",
-    "playwright.config.ts",
-    "playwright.ci.config.ts",
-    "playwright.inline.config.ts"
+    "vitest.config.ts"
   ]
 }

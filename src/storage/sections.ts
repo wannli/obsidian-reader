@@ -42,29 +42,7 @@ export function headings(body: string): Heading[] {
   return result;
 }
 
-export function headingSpec(value: string): { title: string; level: number; explicit: boolean } {
-  if (!value.trim() || /[\r\n]/.test(value)) throw new Error('Daily heading must be a single nonempty line');
-  const match = /^(#{1,6})\s+(.+)$/.exec(value.trim());
-  const title = (match?.[2] ?? value.trim()).replace(/\s+#+$/, '').trim();
-  if (!title) throw new Error('Daily heading must have a title');
-  return { title, level: match?.[1].length ?? 2, explicit: !!match };
-}
-
 export function gap(text: string): string {
   if (!text || /\r?\n\r?\n$/.test(text)) return '';
   return /\n$/.test(text) ? '\n' : '\n\n';
 }
-
-export function appendSection(body: string, heading: string, block: string, snapshotSeparators = false): string {
-  const spec = headingSpec(heading), all = headings(body);
-  const found = all.find(h => h.title === spec.title && (!(spec.explicit || snapshotSeparators) || h.level === spec.level));
-  // Never append inside an unfinished user code fence. Insert before it instead.
-  const safeEnd = structure(body).openFence ?? body.length;
-  const end = found ? Math.min(all.find(h => h.start > found.start && h.level <= found.level)?.start ?? body.length, safeEnd) : safeEnd;
-  const before = body.slice(0, end), after = body.slice(end);
-  const title = found ? '' : '#'.repeat(spec.level) + ' ' + spec.title + '\n\n';
-  // Fixed article separators are reversible without storing body lengths or hidden markers.
-  return before + (snapshotSeparators ? '\n\n' : gap(before)) + title + block + (after ? '\n\n' : '\n') + after;
-}
-
-export function blockquote(quote: string): string { return quote.split('\n').map(line => '> ' + line).join('\n'); }

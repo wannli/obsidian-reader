@@ -1,6 +1,6 @@
 import { readingPosition } from '../reading-position';
 import { statusFromPath } from '../reading-layout';
-import type { Article, ArticleStatus, CompactAnchor, ContentState, Feed, Highlight } from '../types';
+import type { Article, ArticleStatus, ContentState, Feed, Highlight } from '../types';
 import { expectType, stringField, titleOf, type Note } from './markdown';
 import { parseInlineMarkdown } from '../inline/parser';
 import { displayedSource, extractorOf, sourceRegion } from './source';
@@ -12,12 +12,6 @@ const states: ContentState[] = ['pending', 'ready', 'partial', 'error', 'protect
 export function checkStatus(status: ArticleStatus): void {
   if (!statuses.includes(status)) throw new Error('Invalid article status');
 }
-export function checkAnchor(anchor: CompactAnchor): void {
-  if (!Number.isSafeInteger(anchor.start) || !Number.isSafeInteger(anchor.end) || anchor.start < 0 || anchor.end <= anchor.start ||
-      typeof anchor.prefix !== 'string' || typeof anchor.suffix !== 'string' ||
-      (anchor.version !== undefined && typeof anchor.version !== 'string')) throw new Error('Invalid highlight anchor');
-}
-
 export function articleFrom(note: Note, path: string, files: readonly string[] = [], exclusions: ArticleTemplateExclusions = {}): Article {
   if (!isArticleNote(path, note.doc.toJS({ maxAliasCount: 50 }), exclusions))
     throw new Error('Expected an article note; templates and ordinary notes are preserved');
@@ -42,8 +36,8 @@ export function articleFrom(note: Note, path: string, files: readonly string[] =
     (templateHold || sourceBody.trim() && extractor === 'manual') ? 'protected' :
     !sourceBody.trim() && error ? 'error' : sourceBody.trim() ? (extractor === 'summary' ? 'partial' : 'ready') : 'pending';
   return {
-    path, id: stringField(note, 'id') ?? '', title: titleOf(note, path), url: stringField(note, 'url') ?? '',
-    feed: stringField(note, 'feed'), guid: stringField(note, 'guid'), published: stringField(note, 'published'), error,
+    path, title: titleOf(note, path), url: stringField(note, 'url') ?? '',
+    feed: stringField(note, 'feed'), published: stringField(note, 'published'), error,
     status: statusFromPath(path), content: inferredContent === 'protected' || content === 'protected' ? 'protected' :
       inferredContent === 'error' || !states.includes(content) ? inferredContent : content,
     extractor, summary: stringField(note, 'summary'), retryAfter: stringField(note, 'retryAfter'),

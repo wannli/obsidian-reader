@@ -108,7 +108,6 @@ describe('legacy queue-move intent is retained, never silently repaired', () => 
     const { store, repo } = fixture({ [path]: raw, 'Daily/old.md': 'Edited journal with [[Legacy#^hl-old]]' });
     const before = store.snapshot();
     await expect(repo.setStatus(path, 'archive')).rejects.toThrow();
-    expect((await repo.prepareStorage()).errors.length).toBeGreaterThan(0);
-    expect(store.snapshot()).toEqual(before);
+        expect(store.snapshot()).toEqual(before);
   });
 });

@@ -47,7 +47,7 @@ for (const changedUrl of ['not-a-url', 'https://example.com/new-source']) {
       const save = vi.spyOn(repo, 'saveContent'), error = vi.spyOn(repo, 'setArticleError');
       const result = mode === 'manual success' ? controller.fetchFullText(path) : controller.acquire(path);
       await expect(result).rejects.toBeInstanceOf(StaleArticleWriteError); await controller.shutdown(); expect(await store.read(path)).toBe(edited); expect(edited).toContain(changedUrl); expect(edited).not.toContain('id:');
-      const expectedSource = { expectedUrl: originalUrl, expectedId: '', expectedGeneration: 0 };
+      const expectedSource = { expectedUrl: originalUrl, expectedBody: '', expectedRevision: '---\ntype: article\nurl: ' + originalUrl + '\n---\n## Article\n\n## Comments\n', expectedGeneration: 0 };
       if (mode === 'automatic failure') expect(error).toHaveBeenCalledExactlyOnceWith(path, 'HTTP 503', expect.any(String), expect.objectContaining(expectedSource));
       else { expect(error).not.toHaveBeenCalled(); expect(save.mock.calls[0][2]).toMatchObject({ ...expectedSource, ...(mode === 'manual success' ? { allowFeedReplacement: true } : {}) }); }
     });

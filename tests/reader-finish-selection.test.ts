@@ -55,7 +55,7 @@ async function fixture(options: { mobile?: boolean; eink?: boolean; source?: str
   const settings = DEFAULT_SETTINGS, store = new MemoryStore(), repository = new ReaderRepository(store, settings);
   let article = await repository.createArticle({ title: 'Finish safely', url: '', body: options.source ?? 'one two three', status: 'inbox', extractor: 'manual' });
   if (options.position) {
-    await repository.saveReadingPosition(article.path, options.position, article.id, repository.articleGeneration(article.path));
+    await repository.saveReadingPosition(article.path, options.position, repository.articleGeneration(article.path));
     article = await repository.getArticle(article.path);
   }
   const controller = new ReaderController(repository, vi.fn<HttpGet>(), settings); controller.setActive(false);

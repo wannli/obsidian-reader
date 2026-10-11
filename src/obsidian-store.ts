@@ -3,8 +3,6 @@ import type { FileStore } from './types';
 import { assertUnambiguousNotePath, safePath } from './storage/safety';
 import { editorEdits, editorTransaction, EditorWriteDeferredError, retainsEditorPatch } from './editor-transaction';
 import { StaleArticleWriteError } from './storage/preconditions';
-import { assertNoLegacyOwnership } from './storage/legacy-discovery';
-import { isSidecarPath } from './storage/sidecar-format';
 export class ObsidianStore implements FileStore {
   private moving = new Set<string>();
   private writes = new Map<string, number>();
@@ -12,10 +10,10 @@ export class ObsidianStore implements FileStore {
   private unattributedRevision = 0;
   private detachEvents: Array<() => void> = [];
   constructor(private vault: Vault, private workspace: Workspace) {
-    // Native Markdown/JSON edits can add late path ownership evidence.
+    // Track Markdown revisions for cross-note commit guards.
     // Track cross-path changes while the target has its own write guards.
     const changed = (path?: string) => {
-      if (path && (/\.md$/i.test(path) || isSidecarPath(path)))
+      if (path && (/\.md$/i.test(path)))
         this.pathRevisions.set(path, (this.pathRevisions.get(path) ?? 0) + 1);
       else if (!path) this.unattributedRevision++;
     };
@@ -37,10 +35,6 @@ export class ObsidianStore implements FileStore {
   indexedPaths(): readonly string[] { return this.vault.getMarkdownFiles().map(file => file.path); }
   async list(): Promise<string[]> {
     const paths = this.vault.getMarkdownFiles().map(file => file.path);
-    // Include all historical JSON evidence paths, nested and case-insensitive,
-    // without recursing into unrelated folders or interpreting its bytes.
-    for (const file of this.vault.getAllLoadedFiles())
-      if (file instanceof TFile && isSidecarPath(file.path) && /\.json$/i.test(file.path)) paths.push(file.path);
     return paths;
   }
   assertNotePath(path: string): void {
@@ -93,11 +87,6 @@ export class ObsidianStore implements FileStore {
       }
     }
     if (this.moving.has(clean)) throw new EditorWriteDeferredError('Reader is moving this note; creation is deferred.');
-    // This is the final ownership boundary for callers that create directly
-    // through FileStore, including typed-node batches bypassing StorageContext.
-    const ownershipRevision = this.revision(clean);
-    if (/\.md$/i.test(clean)) await assertNoLegacyOwnership(this, clean);
-    if (this.revision(clean) !== ownershipRevision) throw new StaleArticleWriteError();
     options?.guard?.();
     await this.vault.create(clean, content);
   }
@@ -144,48 +133,6 @@ export class ObsidianStore implements FileStore {
       assertSource(); assertDestination();
       await this.vault.rename(file, to);
     } finally { this.moving.delete(from); this.moving.delete(to); }
-  }
-  /** One-time retirement only, not a general note deletion API. */
-  async remove(path: string, options: { expectedContent: string; expectedSource?: { path: string; content: string }; guard?: () => void }): Promise<void> {
-    if (!/^Reading\/(?:Metadata|Pullman Metadata)\/[a-f0-9]{64}\.json$/.test(path))
-      throw new Error('Only verified legacy metadata JSON can be retired');
-    safePath(path);
-    const sourcePath = options.expectedSource?.path;
-    if (sourcePath) safePath(sourcePath, true);
-    if ([path, ...(sourcePath ? [sourcePath] : [])].some(key => this.moving.has(key) || this.writes.has(key))) throw new EditorWriteDeferredError();
-    const file = this.file(path), source = sourcePath ? this.file(sourcePath) : undefined;
-    const revision = (target: TFile) => target.stat && `${target.stat.mtime}:${target.stat.size}`;
-    const jsonRevision = revision(file), sourceRevision = source && revision(source);
-    let observedChange = false;
-    // Local retirement-window observation catches same-size/same-timestamp
-    // native writes while the other durable file is being read.
-    const observe = (changed: { path: string }) => {
-      if (changed === file || changed === source || changed.path === path || changed.path === sourcePath) observedChange = true;
-    };
-    const refs = typeof this.vault.on === 'function' ? [this.vault.on('modify', observe), this.vault.on('delete', observe), this.vault.on('rename', observe)] : [];
-    const unchanged = () => {
-      options.guard?.();
-      if (observedChange) throw new EditorWriteDeferredError('Legacy JSON or converted source changed during retirement.');
-      if (file.path !== path || this.vault.getAbstractFileByPath(path) !== file || this.views(file).length || revision(file) !== jsonRevision)
-        throw new EditorWriteDeferredError('Legacy JSON changed or is open; retirement is deferred.');
-      if (source && (source.path !== sourcePath || this.vault.getAbstractFileByPath(sourcePath!) !== source || revision(source) !== sourceRevision ||
-          this.views(source).length > 1 || this.editable(source).length || this.views(source).some(view => view.getViewData() !== options.expectedSource!.content)))
-        throw new EditorWriteDeferredError('Converted source changed or has an editable Markdown view; close it before legacy retirement.');
-    };
-    this.moving.add(path); if (sourcePath) this.moving.add(sourcePath);
-    try {
-      unchanged();
-      if (await this.vault.read(file) !== options.expectedContent) throw new Error('Legacy JSON changed before retirement');
-      unchanged();
-      if (source && await this.vault.read(source) !== options.expectedSource!.content) throw new Error('Converted source changed before legacy retirement');
-      // Final identity/editor/lifecycle checks immediately precede dispatch;
-      // source preparation must not introduce another asynchronous gap here.
-      unchanged();
-      await this.vault.delete(file);
-    } finally {
-      this.moving.delete(path); if (sourcePath) this.moving.delete(sourcePath);
-      for (const ref of refs) this.vault.offref(ref);
-    }
   }
   private views(file: TFile): MarkdownView[] {
     const result: MarkdownView[] = [];

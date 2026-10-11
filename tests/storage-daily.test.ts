@@ -18,7 +18,6 @@ it.each([
   const marked = await mark(repo, article.path, { quote: 'useful quote' });
   const linked = await repo.setHighlightLink(article.path, marked.highlights[0].id, 'Target');
   await repo.deleteLink(article.path, parseInlineMarkdown(linked.body, { stripTitle: linked.title }).links[0].id);
-  await new ReaderRepository(store, DEFAULT_SETTINGS).prepareStorage();
   expect(await store.read(daily)).toBe(journal);
   expect(Object.keys(store.snapshot()).sort()).toEqual([daily, article.path].sort());
 });
