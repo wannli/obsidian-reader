@@ -1,0 +1,54 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Build and verify
+        run: |
+          npm ci
+          npm run validate:metadata
+          npm run typecheck
+          npm run build
+
+      - name: Prepare release
+        id: release
+        uses: googleapis/release-please-action@v5
+
+      - name: Upload and publish Obsidian release
+        if: ${{ steps.release.outputs.release_created }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.release.outputs.tag_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION=$(node -p "JSON.parse(require('fs').readFileSync('dist/manifest.json')).version")
+          test "$VERSION" = "$TAG"
+          test -s dist/main.js
+          test -s dist/manifest.json
+
+          files=(dist/main.js dist/manifest.json)
+          if [[ -f dist/styles.css ]]; then
+            files+=(dist/styles.css)
+          fi
+
+          gh release upload "$TAG" "${files[@]}"
+          gh release edit "$TAG" --draft=false

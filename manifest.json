@@ -1,0 +1,9 @@
+{
+  "id": "obsidian-reader",
+  "name": "Reader",
+  "version": "0.1.0",
+  "minAppVersion": "1.8.0",
+  "description": "Read RSS and saved articles, highlight passages, and link notes. All in Markdown.",
+  "author": "Reader",
+  "isDesktopOnly": false
+}

@@ -1,0 +1,30 @@
+# Dependencies (also ignore a worktree dependency symlink)
+node_modules
+
+# Generated build and test output
+dist/
+coverage/
+.vite/
+.cache/
+playwright-report/
+test-results/
+*.tsbuildinfo
+/main.js
+/main.js.map
+
+# Local Obsidian development marker, vaults, profiles, user data, and credentials
+.hotreload
+.sandbox/
+.obsidian/
+.env
+.env.*
+secrets/
+*.pem
+*.key
+
+# Temporary diagnostics and operating-system files
+*.log
+/screenshots/
+/tmp/
+/temp/
+.DS_Store
