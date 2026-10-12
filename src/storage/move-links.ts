@@ -16,6 +16,27 @@ function matches(target: string, owner: string, paths: readonly string[]): strin
   const key = lower(stem(target.replace(/^\//, '')));
   return paths.filter(path => lower(stem(path)) === key || lower(stem(path)).endsWith('/' + key));
 }
+// Deliberately narrow: other Markdown destinations (escapes, entities, fragments,
+// titles, attachments, etc.) still require review. Consider both vault/suffix and
+// owner-relative interpretations so accepting a bare path cannot hide a shadow.
+function markdownTargets(target: string, owner: string, paths: readonly string[]): string[] {
+  const relative = matches(/^\.{1,2}\//.test(target) ? target : './' + target, owner, paths);
+  return /^\.{1,2}\//.test(target) ? relative : [...new Set([...matches(target, owner, paths), ...relative])];
+}
+function stripStableMarkdownLinks(raw: string, from: string, to: string, paths: string[], after: string[]): string {
+  return raw.replace(/\]\((?:<([\p{L}\p{M}\p{N}_ .\/-]+\.md)>|([\p{L}\p{M}\p{N}_.\/-]+\.md))\)/gu, (syntax, bracketed: string | undefined, bare: string | undefined) => {
+    const target = bracketed ?? bare!;
+    // Only explicit directory-relative or folder-qualified paths; do not guess
+    // at basename resolution, absolute paths or normalization of internal dots.
+    const tail = target.replace(/^(?:\.\.?\/)+/, '');
+    if (!target.includes('/') || target.startsWith('/') || tail.split('/').some(part => !part || part === '.' || part === '..' || part.trim() !== part)) return syntax;
+    const parents = target.match(/\.\.\//g)?.length ?? 0;
+    if (parents > Math.min(from.split('/').length, to.split('/').length) - 1) return syntax;
+    const beforeTargets = markdownTargets(target, from, paths), afterTargets = markdownTargets(target, to, after);
+    return beforeTargets.length === 1 && afterTargets.length === 1 &&
+      (beforeTargets[0] === from ? to : beforeTargets[0]) === afterTargets[0] ? ']' : syntax;
+  });
+}
 /** Conservative incoming-reference check before recoverable Stream removal. */
 export function referencesArticle(raw: string, owner: string, target: string, paths: readonly string[]): boolean {
   for (const match of raw.matchAll(/\[\[([^\]\r\n]+)\]\]/g)) {
@@ -47,7 +68,7 @@ export async function assertMoveLinks(store: FileStore, from: string, to: string
         throw failure('a wikilink in ' + path + ' would change or ambiguously resolve its target');
     }
     if (path === from) {
-      const stripped = raw.replace(/\]\(\s*(?:<(?:[a-z][a-z0-9+.-]*:|#)[^<>\r\n]*>|(?:[a-z][a-z0-9+.-]*:|#)[^\s)]+)(?:\s+["'][^\r\n]*?["'])?\s*\)/gi, ']');
+      const stripped = stripStableMarkdownLinks(raw, from, to, paths, after).replace(/\]\(\s*(?:<(?:[a-z][a-z0-9+.-]*:|#)[^<>\r\n]*>|(?:[a-z][a-z0-9+.-]*:|#)[^\s)]+)(?:\s+["'][^\r\n]*?["'])?\s*\)/gi, ']');
       if (/\]\s*\(|^ {0,3}\[[^\]\r\n]+\]:|<(?:a|img|audio|video|source)\b/im.test(stripped) || /\]\s*\[/m.test(raw))
         throw failure('relative or unsupported source links require review');
     } else {
