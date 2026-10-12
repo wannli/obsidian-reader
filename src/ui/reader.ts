@@ -15,7 +15,7 @@ import type { ReadingPosition } from './eink-types';
 import { canTurnEinkPage, watchEinkKeys } from './eink-input';
 export interface ReaderHost {
   nodeForLink?(target: string, source: string): import('../nodes-api').NodeResult | null;
-  pickNode?(quote: string, source: string, current: () => boolean, choose: (node: import('../nodes-api').NodeResult, guard: () => void) => Promise<void>, finished?: () => void, preflight?: () => Promise<void>): () => void;
+  pickNode?(quote: string, source: string, current: () => boolean, choose: (node: import('../nodes-api').NodeResult, guard: () => void) => Promise<void | (() => void)>, finished?: () => void, preflight?: () => Promise<void>): () => void;
   openNote(path: string, source?: string): void | Promise<void>;
   pickLinkTarget?(quote: string, choose: (target: string | null) => void): (() => void) | void;
   visibleOverlays?(): readonly HTMLElement[];

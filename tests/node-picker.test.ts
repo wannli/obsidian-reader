@@ -103,3 +103,26 @@ it('closing the short-title input aborts a pending Nodes form and ignores late r
   resolve(f.node); await pending;
   expect(f.choose).not.toHaveBeenCalled(); expect(f.finished).toHaveBeenCalledOnce();
 });
+it('opts into Nodes lifecycle and defers self-disposing refresh until registration completes', async () => {
+  const f = fixture(), order: string[] = [];
+  f.choose.mockImplementation(async () => { order.push('save'); return (() => { order.push('refresh'); f.picker.dispose(); }) as any; });
+  const createNodeForLink = vi.fn(async (options, link) => {
+    await link(f.node);
+    expect(options.signal.aborted).toBe(false);
+    order.push('register'); return f.node;
+  });
+  Object.assign(f.api, { createNodeForLink });
+  f.picker.onChooseSuggestion({ create: true }); f.children[0].select();
+  await vi.waitFor(() => expect(f.finished).toHaveBeenCalled());
+  expect(order).toEqual(['save', 'register', 'refresh']);
+  expect(f.api.createNode).not.toHaveBeenCalled();
+});
+it('disposal during opt-in link save aborts registration and does not refresh', async () => {
+  const f = fixture(), refresh = vi.fn();
+  f.choose.mockImplementation(async () => { f.picker.dispose(); return refresh as any; });
+  Object.assign(f.api, { createNodeForLink: vi.fn(async (options, link) => {
+    await link(f.node); expect(options.signal.aborted).toBe(true); return f.node;
+  }) });
+  f.picker.onChooseSuggestion({ create: true }); f.children[0].select();
+  await vi.waitFor(() => expect(f.choose).toHaveBeenCalled()); expect(refresh).not.toHaveBeenCalled();
+});

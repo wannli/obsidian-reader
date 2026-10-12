@@ -11,7 +11,7 @@ export class NodePicker extends SuggestModal<Choice> {
   onClose() { super.onClose(); queueMicrotask(() => { if (!this.selected) this.finish(); }); }
   private child?: { close(): void };
   dispose() { this.abort.abort(); this.child?.close(); this.close(); this.finish(); }
-  constructor(app: App, private quote: string, private sourcePath: string, private current: () => boolean, private choose: (node: NodeResult) => Promise<void>, private finished: () => void = () => {}, private preflight: () => Promise<void> = async () => {}) { super(app); this.setPlaceholder('Find a node by name or alias'); }
+  constructor(app: App, private quote: string, private sourcePath: string, private current: () => boolean, private choose: (node: NodeResult) => Promise<void | (() => void)>, private finished: () => void = () => {}, private preflight: () => Promise<void> = async () => {}) { super(app); this.setPlaceholder('Find a node by name or alias'); }
   onOpen() { super.onOpen(); this.inputEl.value = this.quote; this.inputEl.dispatchEvent(new Event('input')); }
   getSuggestions(query: string): Choice[] { return [...(nodesApi(this.app)?.searchNodes(query).slice(0, 100) ?? []), { create: true }]; }
   renderSuggestion(item: Choice, el: HTMLElement) {
@@ -25,7 +25,7 @@ export class NodePicker extends SuggestModal<Choice> {
   private async select(item: Choice) {
     if (!this.active()) { this.finish(); return; }
     const api = nodesApi(this.app); if (!api) { this.finish(); new Notice(NODES_UNAVAILABLE); return; }
-    if (!('create' in item)) { const node = api.getNode(item.path); if (!node) throw new Error('Node no longer exists. Reopen the picker.'); await this.choose(node); this.finish(); return; }
+    if (!('create' in item)) { const node = api.getNode(item.path); if (!node) throw new Error('Node no longer exists. Reopen the picker.'); const refresh = await this.choose(node); refresh?.(); this.finish(); return; }
     const types = api.listTypes();
     if (!types.length) { this.finish(); new Notice('Create a schema in Nodes first.'); return; }
     const create = async (type: string, title?: string) => {
@@ -34,11 +34,19 @@ export class NodePicker extends SuggestModal<Choice> {
       await this.preflight();
       if (!this.active()) { this.finish(); return; }
       const live = nodesApi(this.app); if (!live) throw new Error(NODES_UNAVAILABLE);
-      const node = await live.createNode({ type, suggestedTitle: title, sourcePath: this.sourcePath, signal: this.abort.signal });
-      if (!node) { this.finish(); return; }
-      if (nodesApi(this.app) !== live) { new Notice('Node kept. Nodes was disabled or reloaded; reopen the highlight.'); return; }
-      if (!this.active()) { new Notice('Node created and kept. The highlight changed; reopen it to link.'); return; }
-      try { await this.choose(node); } catch (error) { new Notice('Node created and kept; linking failed. ' + String(error)); }
+      const options = { type, suggestedTitle: title, sourcePath: this.sourcePath, signal: this.abort.signal };
+      const saved: { refresh?: () => void } = {};
+      const link = async (node: NodeResult) => {
+        if (nodesApi(this.app) !== live) throw new Error('Nodes was disabled or reloaded; reopen the highlight.');
+        if (!this.active()) throw new Error('The highlight changed; reopen it to link.');
+        saved.refresh = (await this.choose(node)) || undefined;
+      };
+      try {
+        if (typeof live.createNodeForLink === 'function') await live.createNodeForLink(options, link);
+        else { const node = await live.createNode(options); if (node) await link(node); }
+      } catch (error) { new Notice('Node created and kept; linking failed. ' + String(error)); }
+      // Publish the saved article only after Nodes finishes its optional lifecycle.
+      if (this.active()) saved.refresh?.();
       } finally { this.finish(); }
     };
     let choseType = false;

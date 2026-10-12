@@ -39,10 +39,15 @@ export function highlightMenu(parent: HTMLElement, article: Article, highlight: 
     panel.style.left = Math.max(left + 8, Math.min(at.x, right - panel.offsetWidth - 8)) - bounds.left + 'px';
     panel.style.top = Math.max(top + 8, Math.min(at.y + 10, bottom - panel.offsetHeight - 8)) - bounds.top + 'px';
   }
-  async function act(action: () => Promise<Article>, propagate = false) {
+  async function act(action: () => Promise<Article>, propagate = false, deferRefresh = false) {
     if (busy || closed || !current()) return; busy = true; error.textContent = ''; panel.setAttribute('aria-busy', 'true');
     panel.querySelectorAll<HTMLInputElement | HTMLButtonElement>('button,input').forEach(control => control.disabled = true);
-    try { const next = await runWrite(action); if (!closed && current()) updated(next); close(); }
+    try {
+      const next = await runWrite(action);
+      const refresh = () => { if (!closed && current()) updated(next); close(); };
+      if (deferRefresh) return refresh;
+      refresh();
+    }
     catch (e) {
       if (!closed) {
         error.textContent = messageOf(e); panel.querySelectorAll<HTMLInputElement | HTMLButtonElement>('button,input').forEach(control => control.disabled = false);
@@ -87,8 +92,7 @@ export function highlightMenu(parent: HTMLElement, article: Article, highlight: 
     if (!host.pickNode) { error.textContent = 'Enable a compatible Nodes plugin to link nodes. Ordinary links still work.'; return; }
     choosing = true;
     closePicker = host.pickNode(highlight.quote, article.path, () => !closed && current(), async (node, guard) => {
-      choosing = false;
-      await act(() => controller.linkNode(article.path, highlight.id, node, guard), true);
+      return act(() => controller.linkNode(article.path, highlight.id, node, guard), true, true);
     }, () => { choosing = false; }, () => controller.repository.validateNodeHighlight(article.path, highlight.id));
   }));
   if (linkedNode) {

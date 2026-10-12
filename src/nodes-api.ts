@@ -7,6 +7,7 @@ export interface NodesApi {
   searchNodes(query: string): NodeResult[];
   getNode(path: string): NodeResult | null;
   createNode(options: { type?: string; suggestedTitle?: string; sourcePath?: string; signal?: AbortSignal }): Promise<NodeResult | null>;
+  createNodeForLink?(options: { type?: string; suggestedTitle?: string; sourcePath: string; signal?: AbortSignal }, link: (node: NodeResult) => Promise<void>): Promise<NodeResult | null>;
 }
 export const NODES_UNAVAILABLE = 'Enable a compatible Nodes plugin (API version 1) to link nodes. Ordinary highlights and links still work.';
 /** Optional public API only; no Nodes implementation imports or vault assumptions. */

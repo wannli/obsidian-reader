@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import ts from 'typescript';
 import { isAcquisitionUrl } from '../src/acquisition-url';
 import { defaultHighlightTarget } from '../src/ui/default-highlight-target';
+import { highlightMenu } from '../src/ui/highlight-menu';
 import type { HighlightLinkPicker } from '../src/ui/highlight-link-picker';
 import type { nativeHighlightMenu, nativeLinkMenu } from '../src/ui/native-popups';
 // A scoped SDK contract fixture, NOT native focus/Escape/touch acceptance.
@@ -62,6 +63,24 @@ function fixture() {
   return { Picker, menu, linkMenu, app, menus, pickers, click };
 }
 afterEach(() => document.body.replaceChildren());
+it.each([false, true])('node-link save defers refresh but removal stays immediate (native=%s)', async native => {
+  const f = fixture(), updated = vi.fn(), saved = { path: 'Article.md' }, node = { path: 'Nodes/Ada.md' };
+  let choose!: (node: any, guard: () => void) => Promise<void | (() => void)>;
+  const controller = { linkNode: vi.fn().mockResolvedValue(saved), deleteHighlight: vi.fn().mockResolvedValue(saved) };
+  const host = { pickNode: (_q: string, _s: string, _current: unknown, callback: typeof choose) => { choose = callback; return () => {}; } };
+  const menu = native ? f.menu(f.app) : highlightMenu;
+  const stop = menu(document.body, saved as never, { id: 'h', quote: 'Ada' } as never, controller as never, host as never, { x: 0, y: 0 }, updated);
+  const click = (label: string) => native ? f.menus[0].actions.get(label)!() : f.click(label);
+  click('Link to node…');
+  const refresh = await choose(node, () => {});
+  expect(controller.linkNode).toHaveBeenCalled(); expect(updated).not.toHaveBeenCalled();
+  expect(typeof refresh).toBe('function'); refresh!(); expect(updated).toHaveBeenCalledWith(saved); stop();
+  updated.mockClear();
+  const stop2 = menu(document.body, saved as never, { id: 'h', quote: 'Ada', link: 'Nodes/Ada.md', color: '🔵' } as never, controller as never, host as never, { x: 0, y: 0 }, updated);
+  if (native) await f.menus[1].actions.get('Remove highlight')!(); else f.click('Remove highlight');
+  await vi.waitFor(() => expect(updated).toHaveBeenCalled());
+  expect(controller.deleteHighlight).toHaveBeenCalledWith('Article.md', 'h', true); stop2();
+});
 it('native Save as article remains available without a custom URI or reader navigation', async () => {
   const { linkMenu, menus } = fixture(), saved = vi.fn(), capture = vi.fn().mockResolvedValue({ path: 'Reading/Articles/Saved.md' });
   const dispose = linkMenu(document.body, 'https://example.com/article', 'Publisher title', { capture } as never, { x: 0, y: 0 }, saved);

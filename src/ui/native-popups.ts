@@ -20,7 +20,7 @@ export function nativeHighlightMenu(app: App): NonNullable<ReaderHost['highlight
       if (!_host.pickNode) { new Notice('Enable a compatible Nodes plugin to link nodes.'); return; }
       closeNode = _host.pickNode(highlight.quote, article.path, () => !disposed && current(), async (node, guard) => {
         if (disposed || busy || !current()) return; busy = true;
-        try { const saved = await runWrite(() => controller.linkNode(article.path, highlight.id, node, guard)); if (!disposed) updated(saved); }
+        try { const saved = await runWrite(() => controller.linkNode(article.path, highlight.id, node, guard)); return () => { if (!disposed && current()) updated(saved); }; }
         finally { busy = false; }
       }, undefined, () => controller.repository.validateNodeHighlight(article.path, highlight.id));
     }));

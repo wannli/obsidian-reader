@@ -98,7 +98,7 @@ class ReaderView extends FileView {
             const live = api.getNode(node.path);
             if (!live || live.type !== node.type || live.color !== node.color) throw new Error('Node or schema changed. Reopen the picker.');
           };
-          guard(); await choose(node, guard);
+          guard(); return choose(node, guard);
         }, finished, preflight);
         picker.open(); return () => { active = false; picker.dispose(); };
       },
