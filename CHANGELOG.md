@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.1](https://github.com/wannli/obsidian-reader/compare/0.3.0...0.3.1) (2026-10-12)
+
+
+### Fixed
+
+* **nodes:** delegate linked node cleanup to nodes ([90d04fe](https://github.com/wannli/obsidian-reader/commit/90d04fe34f193c906ea5c20aef51820eb3aedb71))
+
 ## [0.3.0](https://github.com/wannli/obsidian-reader/compare/0.2.1...0.3.0) (2026-10-12)
 
 
