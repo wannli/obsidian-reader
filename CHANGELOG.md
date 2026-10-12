@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.5.0](https://github.com/wannli/obsidian-reader/compare/0.4.0...0.5.0) (2026-10-12)
+
+
+### Added
+
+* **reader:** add safe deletion actions and quieter feed refreshes ([f753123](https://github.com/wannli/obsidian-reader/commit/f753123c15e3178d197f1807358d363282f8ada8))
+* **stream:** add standalone cleanup command ([ff11a10](https://github.com/wannli/obsidian-reader/commit/ff11a10d1315868b0f563b84c488879ed5cf5543))
+
+
+### Fixed
+
+* **reader:** allow stable node links when archiving ([24bd99a](https://github.com/wannli/obsidian-reader/commit/24bd99a49fca3473a717e60158768c47d2871282))
+
 ## [0.4.0](https://github.com/wannli/obsidian-reader/compare/0.3.3...0.4.0) (2026-10-12)
 
 
