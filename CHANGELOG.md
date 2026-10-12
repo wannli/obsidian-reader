@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.2](https://github.com/wannli/obsidian-reader/compare/0.3.1...0.3.2) (2026-10-12)
+
+
+### Fixed
+
+* **reader:** reduce library scan work and restore desktop navigation ([da3c333](https://github.com/wannli/obsidian-reader/commit/da3c3338b0d3a907d52434a076efa174cf9d46b6))
+
 ## [0.3.1](https://github.com/wannli/obsidian-reader/compare/0.3.0...0.3.1) (2026-10-12)
 
 
