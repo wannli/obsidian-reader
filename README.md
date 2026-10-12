@@ -29,7 +29,7 @@ Reader organizes reading through folders in your vault:
 | `Reading/Wires` | RSS and Atom subscriptions |
 
 Use **Add URL** to save an article directly. Feed entries arrive in Stream. Move an
-article between folders as its place in your reading workflow changes.
+article between folders as its place in your reading workflow changes. **Clean up Stream** in the command palette runs the same automatic one-calendar-month expiry without fetching feeds and reports deleted/retained/promoted-to-Inbox counts.
 
 Articles open in Reader by default. Use **Open Markdown** whenever you want to
 edit the source note directly. QuickAdd can also be used for richer capture flows

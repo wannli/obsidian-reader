@@ -41,10 +41,10 @@ export class ReaderController {
   constructor(readonly repository: ReaderRepository, readonly get: HttpGet, readonly settings: ReaderSettings, private readonly refreshEligibility: () => Promise<void> = async () => {}) {}
   subscribe(fn: () => void): () => void { this.listeners.add(fn); return () => this.listeners.delete(fn); }
   changed(): void { if (!this.stopped) for (const fn of this.listeners) fn(); }
-  private run<T>(fn: () => Promise<T>): Promise<T> {
+  private run<T>(fn: () => Promise<T>, scheduleAcquisition = true): Promise<T> {
     if (this.stopped) return Promise.reject(new Error('Reader is closing. Please reopen it.'));
     const task = Promise.resolve().then(() => this.refreshEligibility()).then(fn); this.tasks.add(task);
-    void task.finally(() => { this.tasks.delete(task); this.changed(); this.scheduleAcquisition(); }).catch(() => {});
+    void task.finally(() => { this.tasks.delete(task); this.changed(); if (scheduleAcquisition) this.scheduleAcquisition(); }).catch(() => {});
     return task;
   }
   async articleRenamed(from: string, to: string): Promise<void> {
@@ -224,16 +224,27 @@ export class ReaderController {
   unlink(path: string, id: string): Promise<Article> {
     return this.annotate(path, () => this.repository.deleteLink(path, id));
   }
-  private async pruneStream(cutoff: number): Promise<string[]> {
+  private async pruneStream(cutoff: number) {
     const result = await this.repository.cleanupStream(cutoff, path => this.fetching.has(path) || this.manual.has(path));
     for (const path of result.deleted) { this.failedUntil.delete(path); this.deferredWrites.delete(path); }
-    return result.retained.length ? [`Stream cleanup retained ${result.retained.length} protected, referenced or busy notes (or failed removals); review them manually.`] : [];
+    const issues = result.retained.length ? [`Stream cleanup retained ${result.retained.length} protected, referenced or busy notes (or failed removals); review them manually.`] : [];
+    return { ...result, issues };
+  }
+  cleanupStream(): Promise<string> {
+    // Storage serializes cleanup with other mutations; keep queued/in-flight extraction
+    // protected via pruneStream, without starting acquisition or feed polling here.
+    return this.run(async () => {
+      const result = await this.pruneStream(streamCutoff());
+      this.message = `Stream cleanup: deleted ${result.deleted.length}; retained ${result.retained.length}; promoted ${result.promoted.length} to Inbox.`;
+      if (result.issues.length) this.message += ' ' + result.issues.join(' · ');
+      return this.message;
+    }, false);
   }
   subscribeFeed(url: string): Promise<Feed> {
     return this.run(async () => {
       if (!isAcquisitionUrl(url)) throw new Error('Enter a complete HTTP(S) feed URL, not a template placeholder.');
       const cutoff = streamCutoff();
-      this.message = (await this.pruneStream(cutoff)).join(' · ');
+      this.message = (await this.pruneStream(cutoff)).issues.join(' · ');
       const canonical = normalizeUrl(url.trim());
       const response = await this.get(canonical);
       if (response.status < 200 || response.status >= 300) throw new Error('Feed returned HTTP ' + response.status);
@@ -256,7 +267,7 @@ export class ReaderController {
     const task = this.run(async () => {
       const cutoff = streamCutoff();
       this.message = 'Refreshing feeds…'; this.changed();
-      const issues = await this.pruneStream(cutoff);
+      const { issues } = await this.pruneStream(cutoff);
       const feeds = await this.repository.listFeeds();
       for (const feed of feeds.filter(f => f.enabled && isAcquisitionUrl(f.url))) {
         const key = this.feedScheduleKey(feed), attempted = this.feedAttempts.get(key);

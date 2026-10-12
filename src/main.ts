@@ -263,6 +263,7 @@ export default class ReaderPlugin extends Plugin {
       void this.openReader().then(view => view?.getReader()?.openLibrary()).catch(error => new Notice(error instanceof Error ? error.message : String(error)));
     });
     this.addCommand({ id: 'refresh-feeds', name: 'Refresh feeds', callback: () => { void this.controller.refreshFeeds().catch(e => new Notice(String(e))); } });
+    this.addCommand({ id: 'clean-up-stream', name: 'Clean up Stream', callback: () => { void this.controller.cleanupStream().then(message => new Notice(message)).catch(e => new Notice(String(e))); } });
     this.addSettingTab(new ReaderSettingsTab(this.app, this));
     const activate = () => this.controller.setActive(!this.closing && !document.hidden && !this.nativeRenames.size);
     const reportStorageError = (error: unknown) => {

@@ -66,7 +66,7 @@ export class ReaderRepository {
     return queued(this.context.store, () => trashStreamCandidate(this.context, candidate, guard));
   }
 
-  cleanupStream(cutoff: number, busy?: (path: string) => boolean): Promise<{ deleted: string[]; retained: string[] }> {
+  cleanupStream(cutoff: number, busy?: (path: string) => boolean): ReturnType<typeof cleanupStream> {
     return queued(this.context.store, () => cleanupStream(this.context, cutoff, busy));
   }
 

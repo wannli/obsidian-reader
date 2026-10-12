@@ -8,8 +8,8 @@ import { moveArticle } from './moves';
 import { hasStreamAnnotation } from './stream-promotion';
 
 import { disposableStreamNote } from './stream-disposal';
-export async function cleanupStream(context: StorageContext, cutoff: number, busy: (path: string) => boolean = () => false): Promise<{ deleted: string[]; retained: string[] }> {
-  const result = { deleted: [] as string[], retained: [] as string[] };
+export async function cleanupStream(context: StorageContext, cutoff: number, busy: (path: string) => boolean = () => false): Promise<{ deleted: string[]; retained: string[]; promoted: string[] }> {
+  const result = { deleted: [] as string[], retained: [] as string[], promoted: [] as string[] };
   let paths = await context.store.list();
   for (const path of paths.filter(path => statusFromPath(path) === 'feed')) {
     try {
@@ -22,8 +22,9 @@ export async function cleanupStream(context: StorageContext, cutoff: number, bus
       // Authored annotation evidence, not arbitrary publisher links/full text.
       // A refused safe move falls through the catch into retained, never trash.
       if (hasStreamAnnotation(article)) {
-        await moveArticle(context, path, 'inbox', { expectedGeneration: generation, expectedRevision: raw, expectedStorageRevision: revision,
+        const moved = await moveArticle(context, path, 'inbox', { expectedGeneration: generation, expectedRevision: raw, expectedStorageRevision: revision,
           guard: () => { if (busy(path) || !context.isArticle(note, path)) throw new Error('Article eligibility changed'); } });
+        result.promoted.push(moved.path);
         paths = await context.store.list();
         continue;
       }
