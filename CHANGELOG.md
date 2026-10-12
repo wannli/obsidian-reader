@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.3](https://github.com/wannli/obsidian-reader/compare/0.3.2...0.3.3) (2026-10-12)
+
+
+### Fixed
+
+* **images:** prevent background loads and cool down failed requests ([1a57483](https://github.com/wannli/obsidian-reader/commit/1a57483c9e6de646d80d500b9d08d678d6120241))
+
 ## [0.3.2](https://github.com/wannli/obsidian-reader/compare/0.3.1...0.3.2) (2026-10-12)
 
 

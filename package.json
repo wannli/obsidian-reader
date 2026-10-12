@@ -1,6 +1,6 @@
 {
   "name": "obsidian-reader",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "private": true,
   "type": "module",
   "description": "A Markdown-first RSS and saved-article reader for Obsidian desktop and iOS",
