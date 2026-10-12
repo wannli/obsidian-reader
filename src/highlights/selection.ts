@@ -1,4 +1,4 @@
-import { createAnchor } from './selectors';
+import { createAnchorFromIndex } from './selectors';
 import { buildCanonicalTextIndex, rangeFromPosition } from './text-index';
 import type { SelectionSnapshot } from './types';
 
@@ -8,8 +8,9 @@ export function captureSelection(
 ): SelectionSnapshot | null {
   if (!selection || selection.rangeCount !== 1 || selection.isCollapsed) return null;
   try {
-    const anchor = createAnchor(root, selection.getRangeAt(0), articleVersion);
-    const range = rangeFromPosition(buildCanonicalTextIndex(root), anchor.position);
+    const index = buildCanonicalTextIndex(root);
+    const anchor = createAnchorFromIndex(index, selection.getRangeAt(0), articleVersion);
+    const range = rangeFromPosition(index, anchor.position);
     const rect = typeof range.getBoundingClientRect === 'function' ? range.getBoundingClientRect() : null;
     return { anchor, range: range.cloneRange(), rect };
   } catch {

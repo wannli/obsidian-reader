@@ -67,14 +67,13 @@ export class ReaderApp {
   constructor(target: HTMLElement, private controller: ReaderController, private host: ReaderHost) {
     this.root.dataset.mobile = String(host.isMobile === true);
     this.root.append(this.pane);
-    if (host.isMobile === true) {
-      // Callbacks read live state, never the article from the first mount.
-      this.articleEnd = createArticleEnd({
-        archive: () => this.runArticleEnd(() => this.moveArticle('archive', true)),
-        next: () => this.runArticleEnd(() => { this.navigate(1); }),
-        library: () => this.runArticleEnd(() => this.openLibrary()),
-      });
-    }
+    // Completion controls belong to every reading mode, not just mobile.
+    // Callbacks read live state, never the article from the first mount.
+    this.articleEnd = createArticleEnd({
+      archive: () => this.runArticleEnd(() => this.moveArticle('archive', true)),
+      next: () => this.runArticleEnd(() => { this.navigate(1); }),
+      library: () => this.runArticleEnd(() => this.openLibrary()),
+    });
     target.replaceChildren(this.root);
     this.empty('Reader'); this.syncNavigation();
     this.stopViewport = watchReaderViewport(this.root, host.visibleOverlays, host.isMobile === true);

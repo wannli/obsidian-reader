@@ -25,7 +25,12 @@ export function articleFrom(note: Note, path: string, files: readonly string[] =
       if (source.trim() || !/(?:```|~~~)[^\n]*\n(?:[^\n]*\n)*?## Article\s*\n/.test(note.body.slice(0, region.start))) body = source;
     }
   } catch (error) { sectionError = String(error); }
-  const highlights: Highlight[] = parseInlineMarkdown(body, { stripTitle: titleOf(note, path) }).highlights;
+  // Every Reader highlight token requires a literal == delimiter. Library scans
+  // need highlight metadata, not rendered DOM: avoid rendering every unmarked
+  // article (including full feed bodies) just to discover an empty highlight list.
+  // Keep the full parser for candidates; HTML/entities/code are not shortcuts.
+  const highlights: Highlight[] = body.includes('==')
+    ? parseInlineMarkdown(body, { stripTitle: titleOf(note, path) }).highlights : [];
   const content = stringField(note, 'content') as ContentState;
   const templateText = /\{\{[\s\S]*?\}\}|<%[\s\S]*?%>|\$\{[^}]*\}/.test(note.body);
   if (templateText && !sourceBody.trim()) body = note.body;

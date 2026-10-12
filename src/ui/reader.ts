@@ -291,7 +291,7 @@ export function mountReader(target: HTMLElement, initial: Article, controller: R
     setArticleEnd: (element: HTMLElement) => {
       // UI only, outside the source/selection/position index. In Boox mode
       // page keys reach a separate completion page after the text columns.
-      if (disposed || !host.isMobile) return;
+      if (disposed) return;
       if (articleEnd !== element) articleEnd?.remove();
       articleEnd = element;
       if (pagination) pagination.setEndPage(element);

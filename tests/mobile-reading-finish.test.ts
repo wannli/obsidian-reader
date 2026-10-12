@@ -634,8 +634,27 @@ it.each([false, true])('early native rename observes an idless next note while t
   expect(f.reader.getArticle()?.path).toBe(to); expect(f.notify).not.toHaveBeenCalled();
 });
 
-it.each([[false, false], [false, true]])('has no completion footer or hidden toolbar for desktop mobile=%s, eink=%s', async (mobile, eink) => {
-  const f = await fixture(['inbox'], mobile, eink); expect(f.root.querySelector('.r2-article-end,.r2-reader-toolbar')).toBeNull();
+it.each([false, true])('offers guarded desktop completion controls (eink=%s)', async eink => {
+  const f = await fixture(['inbox', 'inbox', 'inbox', 'later'], false, eink);
+  expect(f.root.querySelector('.r2-reader-toolbar')).toBeNull();
+  expect(f.root.querySelector('.r2-article-end')?.parentElement?.className).toBe('r2-reading-page');
+  const before = f.store.snapshot();
+  mount.canLeave.mockReturnValue(false);
+  f.button('Next without archiving').click();
+  expect(f.reader.getArticle()?.path).toBe(f.articles[0].path);
+  await vi.waitFor(() => expect(f.root.querySelector('.r2-article-end-error')?.textContent).toContain('unfinished'));
+  mount.canLeave.mockReturnValue(true);
+  f.button('Next without archiving').click();
+  await vi.waitFor(() => expect(f.reader.getArticle()?.path).toBe(f.articles[1].path));
+  expect(f.store.snapshot()).toEqual(before);
+  f.button('Archive & next').click();
+  await vi.waitFor(() => expect(f.reader.getArticle()?.path).toBe(f.articles[2].path));
+  expect(f.reader.getState().queue).toBe('inbox');
+  expect((await f.repo.listArticles()).find(article => article.title === f.articles[1].title)?.status).toBe('archive');
+  expect(f.root.querySelector<HTMLButtonElement>('.r2-article-end-next')?.hidden).toBe(true);
+  f.button('Archive & return to list').click();
+  await vi.waitFor(() => expect(f.pickArticle).toHaveBeenCalledOnce());
+  expect(f.pickArticle.mock.calls[0][1]).toBe('inbox');
 });
 it('mounts the mobile completion actions in Boox mode without a toolbar', async () => {
   const f = await fixture(['inbox'], true, true);

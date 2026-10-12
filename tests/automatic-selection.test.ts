@@ -87,6 +87,46 @@ it.each(['collapse', 'outside', 'pointercancel', 'touchcancel', 'Escape', 'blur'
     expect(callback).not.toHaveBeenCalled();
   },
 );
+it('recovers a missed mouse release from a later zero-button move without changing selection', () => {
+  const { choose, callback, selection } = automatic({ settleMs: 100 });
+  fire('pointerdown', { pointerId: 1, pointerType: 'mouse', buttons: 1 });
+  const range = choose(); vi.advanceTimersByTime(1000); expect(callback).not.toHaveBeenCalled();
+  fire('pointermove', { pointerId: 1, pointerType: 'mouse', buttons: 0 });
+  vi.advanceTimersByTime(99); expect(callback).not.toHaveBeenCalled();
+  vi.advanceTimersByTime(1); expect(callback).toHaveBeenCalledTimes(1);
+  expect(selection.getRangeAt(0)).toBe(range);
+  fire('pointermove', { pointerId: 1, pointerType: 'mouse', buttons: 0 });
+  vi.advanceTimersByTime(1000); expect(callback).toHaveBeenCalledTimes(1);
+});
+it.each(['touch', 'pen', 'unknown mouse'])('does not infer release from a zero-button %s move', kind => {
+  const { choose, callback } = automatic({ settleMs: 100 });
+  const pointerType = kind === 'unknown mouse' ? 'mouse' : kind;
+  fire('pointerdown', { pointerId: 1, pointerType, buttons: 1 }); choose();
+  fire('pointermove', { pointerId: kind === 'unknown mouse' ? 2 : 1, pointerType, buttons: 0 });
+  vi.advanceTimersByTime(1000); expect(callback).not.toHaveBeenCalled();
+  fire('pointerup', { pointerId: 1, pointerType, buttons: 0 });
+  vi.advanceTimersByTime(100); expect(callback).toHaveBeenCalledTimes(1);
+});
+it('a recovered mouse release cannot release another held pointer or key', () => {
+  const { choose, callback } = automatic({ settleMs: 100 });
+  fire('pointerdown', { pointerId: 1, pointerType: 'mouse', buttons: 1 });
+  fire('pointerdown', { pointerId: 2, pointerType: 'touch', buttons: 1 });
+  fire('keydown', { code: 'ShiftLeft', key: 'Shift' }); choose();
+  fire('pointermove', { pointerId: 1, pointerType: 'mouse', buttons: 0 });
+  vi.advanceTimersByTime(1000); expect(callback).not.toHaveBeenCalled();
+  fire('pointerup', { pointerId: 2, pointerType: 'touch', buttons: 0 });
+  vi.advanceTimersByTime(1000); expect(callback).not.toHaveBeenCalled();
+  fire('keyup', { code: 'ShiftLeft', key: 'Shift' });
+  vi.advanceTimersByTime(100); expect(callback).toHaveBeenCalledTimes(1);
+});
+it('a zero-button mouse move cannot revive a cancelled selection', () => {
+  const { choose, callback } = automatic({ settleMs: 100 });
+  fire('pointerdown', { pointerId: 1, pointerType: 'mouse', buttons: 1 }); choose();
+  fire('pointercancel', { pointerId: 1, pointerType: 'mouse' });
+  fire('pointermove', { pointerId: 1, pointerType: 'mouse', buttons: 0 });
+  vi.advanceTimersByTime(1000); expect(callback).not.toHaveBeenCalled();
+});
+
 it('recovers after cancellation only for a fresh input/selection revision', () => {
   const { choose, callback } = automatic(); choose(); fire('touchcancel', { touches: [] });
   fire('touchstart', { touches: [{ identifier: 2 }] }); choose(4, 7); fire('touchend', { touches: [] });

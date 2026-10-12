@@ -1,6 +1,6 @@
 import { buildCanonicalTextIndex, positionFromRange, rangeFromPosition, rangeIsInside } from './text-index';
 import { NORMALISATION_VERSION } from './text-normalisation';
-import type { ArticleAnchor, DomRangeSelector } from './types';
+import type { ArticleAnchor, DomRangeSelector, TextIndex } from './types';
 
 function pathTo(root: HTMLElement, node: Node): number[] {
   const path: number[] = [];
@@ -45,7 +45,13 @@ export function rangeFromDomSelector(root: HTMLElement, selector: DomRangeSelect
 
 export function createAnchor(root: HTMLElement, range: Range, articleVersion: string): ArticleAnchor {
   if (!articleVersion) throw new Error('An article version is required.');
-  const index = buildCanonicalTextIndex(root);
+  return createAnchorFromIndex(buildCanonicalTextIndex(root), range, articleVersion);
+}
+
+/** Reuse a capture-local index; never cache it across DOM changes or gestures. */
+export function createAnchorFromIndex(index: TextIndex, range: Range, articleVersion: string): ArticleAnchor {
+  if (!articleVersion) throw new Error('An article version is required.');
+  const root = index.root;
   const position = positionFromRange(index, range);
   const { start, end } = position;
   return {

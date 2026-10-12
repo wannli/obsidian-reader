@@ -141,6 +141,14 @@ it.each(['pointer', 'touch'])('a completion menu cannot release a known held %s'
   vi.advanceTimersByTime(5000); expect(complete).not.toHaveBeenCalled();
   nativeContextMenu(document.body); vi.advanceTimersByTime(900); expect(complete).toHaveBeenCalledTimes(1);
 });
+it('mouse release recovery cannot authorize a native-handle selection without its completion cue', () => {
+  const { complete, choose, takeover } = fixture(); takeover(); choose(38);
+  fire(document.body, 'pointermove', { pointerId: 9, pointerType: 'mouse', buttons: 1 });
+  fire(document.body, 'pointermove', { pointerId: 9, pointerType: 'mouse', buttons: 0 });
+  vi.advanceTimersByTime(5000); expect(complete).not.toHaveBeenCalled();
+  nativeContextMenu(document.body); vi.advanceTimersByTime(900);
+  expect(complete).toHaveBeenCalledTimes(1);
+});
 it.each(['Escape', 'blur', 'hidden', 'pagehide', 'collapse', 'outside', 'detach', 'dispose'])(
   'cannot resurrect native ownership after %s', reason => {
     const { root, complete, choose, takeover, selection } = fixture(); takeover(); choose(38);

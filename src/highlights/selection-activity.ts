@@ -77,6 +77,12 @@ export function watchSelectionActivity(
   });
   listen(document, 'pointermove', event => {
     const pointer = event as PointerEvent;
+    // Mouse release can occur outside the window without a pointerup. A later
+    // zero-button mouse move proves release, but says nothing about touch/native
+    // handle ownership. Do not unsuspend cancelled gestures or clear other input.
+    if (pointer.pointerType === 'mouse' && pointer.buttons === 0 && pointers.get(pointer.pointerId) === 'mouse') {
+      pointers.delete(pointer.pointerId); changed(); return;
+    }
     // Also catch an already-active drag if the watcher mounted after pointerdown.
     if (pointer.buttons || pointers.has(pointer.pointerId)) {
       pointers.set(pointer.pointerId, pointer.pointerType); changed();

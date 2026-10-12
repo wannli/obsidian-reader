@@ -82,8 +82,8 @@ async function fixture(options: { mobile?: boolean; eink?: boolean; source?: str
     chooseTarget: (target: string, highlight = false) => native && highlight ? native.choose(target) : chooseTarget(target) };
 }
 
-it('adds one scrolling-mobile footer after the body, never to source HTML, Markdown or the canonical index', async () => {
-  const f = await fixture(), before = f.store.snapshot(), html = f.body.innerHTML, canonical = buildCanonicalTextIndex(f.body).text;
+it.each([false, true])('adds one scrolling footer outside source HTML, Markdown and canonical index (mobile=%s)', async mobile => {
+  const f = await fixture({ mobile }), before = f.store.snapshot(), html = f.body.innerHTML, canonical = buildCanonicalTextIndex(f.body).text;
   expect(f.footer.parentElement).toBe(f.root.querySelector('.r2-reading-page'));
   expect(f.body.contains(f.footer)).toBe(false);
   expect(f.body.compareDocumentPosition(f.footer) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
@@ -93,11 +93,8 @@ it('adds one scrolling-mobile footer after the body, never to source HTML, Markd
   expect(f.body.innerHTML).toBe(html); expect(buildCanonicalTextIndex(f.body).text).toBe(canonical); expect(f.store.snapshot()).toEqual(before);
   expect(f.mount.canLeave!()).toBe(true); await f.mount(); expect(f.mount.canLeave!()).toBe(false);
 });
-it.each([{ mobile: false, eink: false }, { mobile: false, eink: true }])('does not mount completion UI on desktop: %j', async options => {
-  const f = await fixture(options); expect(f.root.querySelector('.r2-article-end')).toBeNull(); expect(f.footer.isConnected).toBe(false);
-});
-it('mounts Boox completion UI outside the source columns and keeps it hidden until the final page', async () => {
-  const f = await fixture({ mobile: true, eink: true }), before = f.store.snapshot();
+it.each([false, true])('mounts Boox completion UI outside source columns, hidden until final page (mobile=%s)', async mobile => {
+  const f = await fixture({ mobile, eink: true }), before = f.store.snapshot();
   const html = f.body.innerHTML, canonical = buildCanonicalTextIndex(f.body).text;
   expect(f.footer.parentElement).toBe(f.root.querySelector('.r2-reader-scroll'));
   expect(f.footer.hidden).toBe(true);
