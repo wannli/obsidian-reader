@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.0](https://github.com/wannli/obsidian-reader/compare/0.2.1...0.3.0) (2026-10-12)
+
+
+### Added
+
+* **main:** integrate schema-aware Nodes highlighting ([b6c5c58](https://github.com/wannli/obsidian-reader/commit/b6c5c5883e50aa1841549e6d3a28d17f093b806c))
+
 ## [0.2.1](https://github.com/wannli/obsidian-reader/compare/0.2.0...0.2.1) (2026-10-11)
 
 
