@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.4.0](https://github.com/wannli/obsidian-reader/compare/0.3.3...0.4.0) (2026-10-12)
+
+
+### Added
+
+* **reader:** hide mobile chrome while reading ([5e0816b](https://github.com/wannli/obsidian-reader/commit/5e0816bb7f3e314cd18a1278e0c4d04b37f81a29))
+* **stream:** expire old items and save annotated articles ([0b2c105](https://github.com/wannli/obsidian-reader/commit/0b2c10574d0974240eb7f713b67cd7d81b6ce1ca))
+
 ## [0.3.3](https://github.com/wannli/obsidian-reader/compare/0.3.2...0.3.3) (2026-10-12)
 
 
