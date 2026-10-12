@@ -576,7 +576,7 @@ async function nativeFinishFixture() {
   const sdk = { Plugin, FileView, TFile, Platform: { isMobile: true, isAndroidApp: false }, Notice: class { constructor(message: string) { notify(message); } }, parseLinktext: (target: string) => ({ path: target, subpath: '' }) };
   const dependencies: Record<string, unknown> = {
     obsidian: sdk, './native-delete': { nativeDeleteHandler }, './reading-position': { validReadingPosition: readingPosition }, './eink-device': einkDevice,
-    './typed-highlights': { validateHighlightTypes }, './types': { DEFAULT_SETTINGS }, './storage/repository': { ReaderRepository: class { constructor() { return repo; } } },
+    './nodes-api': { nodesApi: () => null }, './ui/node-picker': { NodePicker: class {} }, './typed-highlights': { validateHighlightTypes }, './types': { DEFAULT_SETTINGS }, './storage/repository': { ReaderRepository: class { constructor() { return repo; } } },
     './obsidian-store': { ObsidianStore: class {} }, './controller': { ReaderController }, './transport': { obsidianGet: vi.fn() }, './ui/app': { ReaderApp },
     './settings': { ReaderSettingsTab: class {} }, './routing': { installArticleRouting: () => ({ dispose() {}, remapPath() {} }) },
     './ui/native': { NativeReaderUI }, './ui/native-popups': { nativeHighlightMenu: vi.fn(), nativeLinkMenu: vi.fn() },

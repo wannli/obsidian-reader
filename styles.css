@@ -94,3 +94,12 @@
 .r2-reader.r2-eink .r2-article-body :is(colgroup, col, th, td) { width: auto !important; inline-size: auto !important; min-width: 0 !important; min-inline-size: 0 !important; max-width: 100% !important; max-inline-size: 100% !important; }
 .r2-reader.r2-eink .r2-article-body :is(th, td) { white-space: normal !important; overflow-wrap: anywhere !important; word-break: break-word; }
 .r2-reader.r2-eink .r2-article-body tr { break-inside: avoid; }
+
+/* Nodes schema badges retain a readable type label even without a color. */
+.r2-node-badge { display: inline-block; padding: 1px 7px; margin: 3px 0; border: 1px solid var(--background-modifier-border); border-radius: 6px; color: var(--text-normal); }
+.r2-node-badge[data-node-color="red"] { background: rgba(var(--color-red-rgb), .25); }
+.r2-node-badge[data-node-color="orange"] { background: rgba(var(--color-orange-rgb), .25); }
+.r2-node-badge[data-node-color="yellow"] { background: rgba(var(--color-yellow-rgb), .25); }
+.r2-node-badge[data-node-color="green"] { background: rgba(var(--color-green-rgb), .25); }
+.r2-node-badge[data-node-color="blue"] { background: rgba(var(--color-blue-rgb), .25); }
+.r2-node-badge[data-node-color="purple"] { background: rgba(var(--color-purple-rgb), .25); }

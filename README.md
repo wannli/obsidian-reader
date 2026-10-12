@@ -102,13 +102,29 @@ Selecting a passage creates an inline Markdown highlight:
 This is an ==important passage== in the article.
 ```
 
-A highlighted passage can link to another note using ordinary wiki-link syntax:
+With **Nodes** enabled (public API version 1), choose **Link to node…** from
+an existing highlight. Search starts with the selected words and matches names
+and aliases. Results show schema/type and color badges. **Create new node…**
+asks for a schema, then opens the Nodes form; long passages first ask for a short
+title. Cancellation writes nothing to the article.
+
+The original words remain unchanged. Schema colors come only from Nodes;
+colorless schemas produce a plain highlighted link:
 
 ```md
 This is an ==[[Design notes|important passage]]== in the article.
 ```
 
-Removing a highlight or link keeps the original words. Assigning topics updates
+Linked highlights offer **Open node**, **Change linked node…**, **Unlink**
+(keep highlight), and **Remove highlight** (keep words). Created nodes are never
+removed on cancellation, stale-source rejection, unlinking, or failed linking.
+If the article, target node, or schema changes while choosing/saving, reopen the
+highlight and retry. A failed save can report a link already written.
+
+Nodes is optional: ordinary highlights and **Link / Link to…** to another note
+or URL still work without it. Reader has no independent type/color settings or
+schema-free node creation for highlights. Old settings and Markdown are retained
+without migration. Assigning topics updates
 the article's `topics` frontmatter with links to topic notes already in the vault.
 
 ## Boox and e-ink reading

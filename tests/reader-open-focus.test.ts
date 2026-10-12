@@ -68,7 +68,7 @@ async function fixture(existing: boolean, savedData?: Record<string, unknown>) {
   const ReaderPlugin = load('src/main.ts', {
     './native-delete': { nativeDeleteHandler }, './reading-position': { validReadingPosition: readingPosition },
     './eink-device': einkDevice,
-    obsidian: sdk, './typed-highlights': { validateHighlightTypes }, './types': { DEFAULT_SETTINGS }, './storage/repository': { ReaderRepository: class {} }, './obsidian-store': { ObsidianStore: class {} }, './controller': { ReaderController }, './transport': { obsidianGet: vi.fn() }, './ui/app': { ReaderApp }, './settings': { ReaderSettingsTab: class {} },
+    obsidian: sdk, './nodes-api': { nodesApi: () => null }, './ui/node-picker': { NodePicker: class {} }, './typed-highlights': { validateHighlightTypes }, './types': { DEFAULT_SETTINGS }, './storage/repository': { ReaderRepository: class {} }, './obsidian-store': { ObsidianStore: class {} }, './controller': { ReaderController }, './transport': { obsidianGet: vi.fn() }, './ui/app': { ReaderApp }, './settings': { ReaderSettingsTab: class {} },
     './routing': { installArticleRouting: (options: unknown) => { route = options; return { dispose() {}, preserveMarkdown() { return () => {}; } }; } }, './ui/native': { NativeReaderUI }, './ui/native-popups': { nativeHighlightMenu: vi.fn(), nativeLinkMenu: vi.fn() }, './template-exclusions': { readTemplateExclusions: async () => ({ folders: [], files: [] }) }, './storage/classifier': { isArticleTemplatePath: () => false },
   }).default;
   const files = new Map<string, { path: string; basename: string }>();
@@ -108,13 +108,13 @@ it.each([false, true])('native shutdown barrier drains position saves from a %s 
   await Promise.resolve(); expect(drained).toBe(false); if (detach) expect(closed).toBe(false);
   release(); await Promise.all([closing, barrier]); expect(drained).toBe(true); if (detach) expect(closed).toBe(true);
 });
-it.each([undefined, {}, { dailyFolder: 'Old', dailyFormat: 'YYYY-MM-DD', dailyHeading: 'Reading', logToDailyJournal: true }])('legacy journal settings are ignored while active settings persist: %j', async saved => {
+it.each([undefined, {}, { dailyFolder: 'Old', dailyFormat: 'YYYY-MM-DD', dailyHeading: 'Reading', logToDailyJournal: true }])('legacy journal settings are inert and preserved while active settings persist: %j', async saved => {
   const { plugin, commands } = await fixture(false, saved);
   expect([...commands.keys()].join(' ')).not.toMatch(/daily|journal|repair/i);
-  for (const key of ['dailyFolder', 'dailyFormat', 'dailyHeading', 'logToDailyJournal']) expect(plugin.settings).not.toHaveProperty(key);
+  for (const key of ['dailyFolder', 'dailyFormat', 'dailyHeading', 'logToDailyJournal']) expect((plugin.settings as any)[key]).toEqual((saved as any)?.[key]);
   plugin.settings.useDummyContent = false; await plugin.saveSettings();
   expect(plugin.saveData).toHaveBeenCalledWith(plugin.settings);
-  for (const key of ['dailyFolder', 'dailyFormat', 'dailyHeading', 'logToDailyJournal']) expect(plugin.saveData.mock.calls.at(-1)?.[0]).not.toHaveProperty(key);
+  for (const key of ['dailyFolder', 'dailyFormat', 'dailyHeading', 'logToDailyJournal']) expect((plugin.saveData.mock.calls.at(-1)?.[0] as any)[key]).toEqual((saved as any)?.[key]);
   const reloaded = await fixture(false, { ...plugin.settings });
   expect(reloaded.plugin.settings.useDummyContent).toBe(false);
 });
@@ -128,9 +128,9 @@ it('persists configured typed-highlight lists additively and accepts an intentio
   const empty = await fixture(false, { typedHighlightTypes: [] });
   expect(empty.plugin.settings.typedHighlightTypes).toEqual([]);
 });
-it.each([null, {}, [{ name: 'article', color: '🟡' }], [{ name: 'person', color: 'invalid' }]])('rejects malformed saved typed-highlight settings: %j', async typedHighlightTypes => {
+it.each([null, {}, [{ name: 'article', color: '🟡' }], [{ name: 'person', color: 'invalid' }]])('preserves inert legacy typed-highlight settings: %j', async typedHighlightTypes => {
   const { plugin } = await fixture(false, { typedHighlightTypes });
-  expect(plugin.settings.typedHighlightTypes).toEqual(DEFAULT_SETTINGS.typedHighlightTypes);
+  expect(plugin.settings.typedHighlightTypes).toEqual(typedHighlightTypes);
 });
 for (const existing of [true, false]) for (const action of ['command', 'ribbon'] as const) {
   it(`explicit ${action} activates and focuses ${existing ? 'existing' : 'new'} Reader when revealLeaf does not`, async () => {
@@ -221,4 +221,12 @@ it('automatic routing replaces only its intended inactive leaf and never activat
   await f.route.openReaderInLeaf(target, { path: 'Reading/Articles/Automatic.md', ephemeralState: {}, isCurrent: () => true });
   expect(target.view.getViewType()).toBe('reader'); expect(target.view.getState().file).toBe('Reading/Articles/Automatic.md'); expect(f.workspace.activeLeaf).toBe(f.markdown); expect(document.activeElement).toBe(f.editor);
   expect(f.workspace.setActiveLeaf).not.toHaveBeenCalled(); expect(f.workspace.revealLeaf).not.toHaveBeenCalled(); expect(f.workspace.getLeaf).not.toHaveBeenCalled();
+});
+
+it('validates known setting types while preserving unknown and retired values', async () => {
+  const saved = { useDummyContent: 'false', pollMinutes: 'invalid', maxFeedItems: {}, feedsFolder: false, futureSetting: { keep: ['value'] }, typedHighlightTypes: { retired: true } };
+  const { plugin } = await fixture(false, saved);
+  for (const key of ['useDummyContent', 'pollMinutes', 'maxFeedItems', 'feedsFolder'] as const) expect(plugin.settings[key]).toEqual(DEFAULT_SETTINGS[key]);
+  await plugin.saveSettings();
+  expect(plugin.saveData).toHaveBeenCalledWith(expect.objectContaining({ futureSetting: saved.futureSetting, typedHighlightTypes: saved.typedHighlightTypes }));
 });

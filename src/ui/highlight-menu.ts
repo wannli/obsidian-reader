@@ -39,7 +39,7 @@ export function highlightMenu(parent: HTMLElement, article: Article, highlight: 
     panel.style.left = Math.max(left + 8, Math.min(at.x, right - panel.offsetWidth - 8)) - bounds.left + 'px';
     panel.style.top = Math.max(top + 8, Math.min(at.y + 10, bottom - panel.offsetHeight - 8)) - bounds.top + 'px';
   }
-  async function act(action: () => Promise<Article>) {
+  async function act(action: () => Promise<Article>, propagate = false) {
     if (busy || closed || !current()) return; busy = true; error.textContent = ''; panel.setAttribute('aria-busy', 'true');
     panel.querySelectorAll<HTMLInputElement | HTMLButtonElement>('button,input').forEach(control => control.disabled = true);
     try { const next = await runWrite(action); if (!closed && current()) updated(next); close(); }
@@ -48,6 +48,7 @@ export function highlightMenu(parent: HTMLElement, article: Article, highlight: 
         error.textContent = messageOf(e); panel.querySelectorAll<HTMLInputElement | HTMLButtonElement>('button,input').forEach(control => control.disabled = false);
         position(); panel.querySelector<HTMLElement>('input,button')?.focus({ preventScroll: true });
       }
+      if (propagate) throw e;
     } finally { busy = false; panel.removeAttribute('aria-busy'); }
   }
   function linkForm() {
@@ -59,7 +60,7 @@ export function highlightMenu(parent: HTMLElement, article: Article, highlight: 
     form.addEventListener('submit', e => { e.preventDefault(); void act(() => controller.linkHighlight(article.path, highlight.id, input.value.trim())); });
   }
   function savedLinkActions(form: HTMLElement) {
-    if (highlight.link) form.append(button(highlight.color ? 'Open node' : 'Open saved link ↗', async () => {
+    if (highlight.link) form.append(button(linkedNode ? 'Open node' : 'Open saved link ↗', async () => {
       try { if (/^https?:\/\//i.test(highlight.link!)) view?.open(highlight.link, '_blank', 'noopener,noreferrer'); else await host.openNote(highlight.link!, article.path); close(); }
       catch (e) { if (!closed) { error.textContent = messageOf(e); position(); } }
     }));
@@ -81,12 +82,20 @@ export function highlightMenu(parent: HTMLElement, article: Article, highlight: 
       }); } catch (e) { choosing = false; error.textContent = messageOf(e); position(); }
     } else linkForm();
   };
-  for (const type of controller.settings?.typedHighlightTypes ?? []) {
-    actions.append(button(`${type.color} ${type.name}`, () => act(() => controller.typeHighlight(article.path, highlight.id, type))));
-  }
-  if (highlight.color) savedLinkActions(actions);
-  if (!(highlight.color && highlight.link)) actions.append(button('Link', () => { const result = defaultHighlightTarget(highlight.quote); if ('target' in result) void act(() => controller.linkHighlight(article.path, highlight.id, result.target)); else choose(); }), button('Link to…', choose));
-  actions.append(button('Remove highlight', () => act(() => controller.deleteHighlight(article.path, highlight.id)), 'r2-delete'));
+  const linkedNode = !!highlight.link && (!!highlight.color || !!host.nodeForLink?.(highlight.link, article.path));
+  actions.append(button(linkedNode ? 'Change linked node…' : 'Link to node…', () => {
+    if (!host.pickNode) { error.textContent = 'Enable a compatible Nodes plugin to link nodes. Ordinary links still work.'; return; }
+    choosing = true;
+    closePicker = host.pickNode(highlight.quote, article.path, () => !closed && current(), async (node, guard) => {
+      choosing = false;
+      await act(() => controller.linkNode(article.path, highlight.id, node, guard), true);
+    }, () => { choosing = false; }, () => controller.repository.validateNodeHighlight(article.path, highlight.id));
+  }));
+  if (linkedNode) {
+    savedLinkActions(actions);
+    actions.append(button('Unlink', () => act(() => controller.linkNode(article.path, highlight.id, null))));
+  } else actions.append(button('Link', () => { const result = defaultHighlightTarget(highlight.quote); if ('target' in result) void act(() => controller.linkHighlight(article.path, highlight.id, result.target)); else choose(); }), button('Link to…', choose));
+  actions.append(button('Remove highlight', () => act(() => controller.deleteHighlight(article.path, highlight.id, linkedNode)), 'r2-delete'));
   const resize = typeof ResizeObserver === 'undefined' ? undefined : new ResizeObserver(position); resize?.observe(parent);
   panel.append(title, actions, error); parent.append(panel); position();
   doc.addEventListener('pointerdown', outside); doc.addEventListener('keydown', keyboard);

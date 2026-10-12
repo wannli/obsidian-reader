@@ -145,11 +145,11 @@ export function setInlineHighlightTypedLink(markdown: string, id: string, type: 
     mapped.parsed.highlights.length, mapped.parsed.links.length + (linked ? 0 : 1));
 }
 
-export function removeInlineHighlight(markdown: string, id: string, options: InlineParseOptions = {}): string {
+export function removeInlineHighlight(markdown: string, id: string, options: InlineParseOptions = {}, removeLinked = false): string {
   const mapped = parseMapped(markdown, options), scope = annotation(mapped, id, true, true);
   const highlight = mapped.parsed.highlights.find(item => item.id === id)!;
   const links = mapped.scopes.filter(other => (other.kind === 'wiki' || other.kind === 'markdown') &&
-    ((highlight.color && highlight.link === other.target && !/^(?:https?|mailto):/i.test(other.target ?? '')) || /^Nodes\/[^#]+$/i.test(other.target ?? '')) &&
+    (removeLinked || !!highlight.color && highlight.link === other.target && !/^(?:https?|mailto):/i.test(other.target ?? '')) &&
     other.start >= scope.inner.start && other.end <= scope.inner.end).sort((a, b) => b.start - a.start);
   let raw = markdown.slice(scope.inner.start, scope.inner.end);
   for (const link of links) {
@@ -200,4 +200,15 @@ export function removeInlineLink(markdown: string, id: string, options: InlinePa
   const mapped = parseMapped(markdown, options), scope = annotation(mapped, id, false);
   return checkedEdit(markdown, mapped, scope, markdown.slice(scope.inner.start, scope.inner.end),
     options, mapped.parsed.highlights.length, mapped.parsed.links.length - 1);
+}
+
+/** Keep exact label bytes, formatting and revision guards when linking or unlinking. */
+export function setInlineNodeLink(markdown: string, id: string, target: string | null, color = '', options: InlineParseOptions = {}): string {
+  const mapped = parseMapped(markdown, options), scope = annotation(mapped, id, true, true);
+  const links = mapped.scopes.filter(other => (other.kind === 'wiki' || other.kind === 'markdown') && other.start >= scope.inner.start && other.end <= scope.inner.end);
+  if (links.length > 1 || links.some(link => link.start !== scope.inner.start || link.end !== scope.inner.end)) fail('unsupported', 'Highlight must contain only one complete link.');
+  const link = links[0];
+  const raw = link ? markdown.slice(link.inner.start, link.inner.end) : markdown.slice(scope.inner.start, scope.inner.end);
+  const body = target === null ? raw : linkMarkup(raw, target);
+  return checkedEdit(markdown, mapped, scope, `==${target === null ? '' : color}${body}==`, options, mapped.parsed.highlights.length, mapped.parsed.links.length - links.length + (target === null ? 0 : 1));
 }

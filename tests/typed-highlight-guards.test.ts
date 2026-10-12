@@ -6,7 +6,7 @@ import { DEFAULT_SETTINGS } from '../src/types';
 const path = 'Reading/Inbox/Guard.md', node = 'Nodes/Ada Lovelace.md';
 const source = '---\ntype: article\n---\n==Ada Lovelace==';
 const nodeText = '---\ntype: person\n---\n';
-const person = { name: 'person', color: '🟡' } as const;
+const person = { path: node, title: 'Ada Lovelace', type: 'person', aliases: [] as string[], color: 'yellow' } as const;
 const staleNodeFence = /Node changed/;
 
 it('linking an existing typed node rejects a type change before the article commit', async () => {
@@ -17,14 +17,14 @@ it('linking an existing typed node rejects a type change before the article comm
     f.hooks.beforeProcess = undefined;
     await f.store.process(node, () => '---\ntype: topic\n---\n');
   };
-  await expect(repo.setHighlightLink(path, article.highlights[0].id, 'Nodes/Ada Lovelace')).rejects.toThrow();
+  await expect(repo.setNodeLink(path, article.highlights[0].id, person)).rejects.toThrow();
   expect(f.disk.get(path)).toBe(source);
   expect(f.disk.get(node)).toContain('type: topic');
 });
 
 it('native unhighlight keeps an unreferenced empty typed node unchanged', async () => {
   const f = nativeStore({ [path]: source, [node]: nodeText }), repo = new ReaderRepository(f.store, DEFAULT_SETTINGS);
-  const typed = await repo.setHighlightType(path, (await repo.getArticle(path)).highlights[0].id, person);
+  const typed = await repo.setNodeLink(path, (await repo.getArticle(path)).highlights[0].id, person);
   await repo.deleteHighlight(path, typed.highlights[0].id);
   expect(f.disk.get(node)).toBe(nodeText);
   expect(f.disk.get(path)).toContain('Ada Lovelace');
@@ -40,7 +40,7 @@ it('rejects target type changes after preflight but before article callback', as
     return process(target, update);
   });
   try {
-    await expect(repo.setHighlightType(path, article.highlights[0].id, person)).rejects.toThrow(staleNodeFence);
+    await expect(repo.setNodeLink(path, article.highlights[0].id, person)).rejects.toThrow(staleNodeFence);
     expect(await store.read(path)).toBe(source); expect(await store.read(node)).toContain('type: topic');
   } finally { vi.restoreAllMocks(); }
 });
@@ -51,7 +51,7 @@ it.each(['type', 'delete', 'replace', 'buffer', 'rename'])('native target %s cha
   const view = change === 'buffer' ? f.open(node) : undefined;
   let articleProcesses = 0;
   f.hooks.beforeProcess = async file => {
-    if (file.path !== path || ++articleProcesses < 2) return; // Skip read-only source preflight.
+    if (file.path !== path || ++articleProcesses < 1) return; // Skip read-only source preflight.
     f.hooks.beforeProcess = undefined;
     if (change === 'type') await f.store.process(node, () => '---\ntype: topic\n---\n');
     else if (change === 'buffer') view!.editor.value = '---\ntype: topic\n---\n';
@@ -62,7 +62,7 @@ it.each(['type', 'delete', 'replace', 'buffer', 'rename'])('native target %s cha
       if (change === 'replace') await f.vault.create(node, nodeText);
     }
   };
-  await expect(repo.setHighlightType(path, article.highlights[0].id, person)).rejects.toThrow(staleNodeFence);
+  await expect(repo.setNodeLink(path, article.highlights[0].id, person)).rejects.toThrow(staleNodeFence);
   expect(f.disk.get(path)).toBe(source);
   expect(f.events.filter(event => event.path === path)).toEqual([]);
 });
@@ -71,8 +71,8 @@ it('detects a target change while native article save is pending and honestly re
   const f = nativeStore({ [path]: source, [node]: nodeText });
   const repo = new ReaderRepository(f.store, DEFAULT_SETTINGS), article = await repo.getArticle(path), editor = f.open(path);
   editor.view.gateSave = async () => { await f.store.process(node, () => '---\ntype: topic\n---\n'); };
-  await expect(repo.setHighlightType(path, article.highlights[0].id, person)).rejects.toThrow('highlight may already be saved');
-  expect(f.disk.get(path)).toContain('==🟡[[Nodes/Ada Lovelace|Ada Lovelace]]==');
+  await expect(repo.setNodeLink(path, article.highlights[0].id, person)).rejects.toThrow('link may already be saved');
+  expect(f.disk.get(path)).toContain('==🟡[[Nodes/Ada Lovelace.md|Ada Lovelace]]==');
   expect(f.disk.get(node)).toBe('---\ntype: topic\n---\n');
 });
 
@@ -80,7 +80,7 @@ it('rechecks exact target bytes after saving when an external change has not yet
   const f = nativeStore({ [path]: source, [node]: nodeText });
   const repo = new ReaderRepository(f.store, DEFAULT_SETTINGS), article = await repo.getArticle(path), editor = f.open(path);
   editor.view.gateSave = async () => { f.disk.set(node, '---\ntype: topic\n---\n'); };
-  await expect(repo.setHighlightType(path, article.highlights[0].id, person)).rejects.toThrow('Cross-note writes are not atomic');
+  await expect(repo.setNodeLink(path, article.highlights[0].id, person)).rejects.toThrow('Could not verify');
   expect(f.disk.get(node)).toContain('type: topic');
 });
 
@@ -93,17 +93,14 @@ it.each(['empty lowercase folder', 'nonmarkdown child', 'nonmarkdown blocking fi
   if (collision === 'case-equivalent target') await f.vault.create('Nodes/ADA LOVELACE.md', nodeText);
   if (collision !== 'case-equivalent target') expect(await f.store.list()).toEqual([path]); // Normal article listing cannot see these entries.
   const repo = new ReaderRepository(f.store, DEFAULT_SETTINGS), article = await repo.getArticle(path);
-  await expect(repo.setHighlightType(path, article.highlights[0].id, person)).rejects.toThrow('ambiguous');
+  await expect(repo.setNodeLink(path, article.highlights[0].id, person)).rejects.toThrow('ambiguous');
   expect(f.disk.get(path)).toBe(source); expect(f.disk.has(node)).toBe(false);
 });
 
-it('rechecks native full-entry collisions after awaiting parent creation', async () => {
-  const f = nativeStore({ [path]: source }), createFolder = f.vault.createFolder.getMockImplementation()!;
-  f.vault.createFolder.mockImplementation(async folder => {
-    await createFolder(folder);
-    if (folder === 'Nodes') await createFolder('nodes');
-  });
-  const repo = new ReaderRepository(f.store, DEFAULT_SETTINGS), article = await repo.getArticle(path);
-  await expect(repo.setHighlightType(path, article.highlights[0].id, person)).rejects.toThrow('ambiguous');
-  expect(f.disk.get(path)).toBe(source); expect(f.disk.has(node)).toBe(false);
+it('authoritative creation preflight sees unsaved native source changes before UI refresh', async () => {
+  const f = nativeStore({ [path]: source }), repo = new ReaderRepository(f.store, DEFAULT_SETTINGS);
+  const article = await repo.getArticle(path), view = f.open(path);
+  view.editor.value = source + ' unsaved edit';
+  await expect(repo.validateNodeHighlight(path, article.highlights[0].id)).rejects.toThrow('changed');
+  expect(f.disk.get(path)).toBe(source);
 });

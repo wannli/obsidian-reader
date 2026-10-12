@@ -13,27 +13,36 @@ export function nativeHighlightMenu(app: App): NonNullable<ReaderHost['highlight
       finally { busy = false; }
     };
     const choose = (reason?: string) => { if (disposed || !current()) return; picker = new HighlightLinkPicker(app, highlight.quote, reason, target => { if (!disposed && target !== null) void link(target); }); picker.open(); };
-    for (const type of controller.settings?.typedHighlightTypes ?? []) {
-      menu.addItem(item => item.setTitle(`${type.color} ${type.name}`).setIcon('highlighter').onClick(async () => {
+    const linkedNode = !!highlight.link && (!!highlight.color || !!_host.nodeForLink?.(highlight.link, article.path));
+    let closeNode: (() => void) | undefined;
+    menu.addItem(item => item.setTitle(linkedNode ? 'Change linked node…' : 'Link to node…').setIcon('file-search').onClick(() => {
+      if (disposed || !current()) return;
+      if (!_host.pickNode) { new Notice('Enable a compatible Nodes plugin to link nodes.'); return; }
+      closeNode = _host.pickNode(highlight.quote, article.path, () => !disposed && current(), async (node, guard) => {
         if (disposed || busy || !current()) return; busy = true;
-        try { const saved = await runWrite(() => controller.typeHighlight(article.path, highlight.id, type)); if (!disposed && current()) updated(saved); }
-        catch (error) { if (!disposed) new Notice(error instanceof Error ? error.message : String(error)); }
+        try { const saved = await runWrite(() => controller.linkNode(article.path, highlight.id, node, guard)); if (!disposed) updated(saved); }
         finally { busy = false; }
-      }));
-    }
-    if (highlight.color && highlight.link) menu.addItem(item => item.setTitle('Open node').setIcon('file').onClick(async () => {
-      try { await _host.openNote(highlight.link!, article.path); } catch (error) { new Notice(String(error)); }
+      }, undefined, () => controller.repository.validateNodeHighlight(article.path, highlight.id));
     }));
-    if (!(highlight.color && highlight.link)) menu.addItem(item => item.setTitle('Link').setIcon('link').onClick(() => { const result = defaultHighlightTarget(highlight.quote); if ('target' in result) void link(result.target); else choose(result.reason); }));
-    if (!(highlight.color && highlight.link)) menu.addItem(item => item.setTitle('Link to…').setIcon('file-search').onClick(() => choose()));
+    if (linkedNode) {
+      menu.addItem(item => item.setTitle('Open node').setIcon('file').onClick(async () => { try { await _host.openNote(highlight.link!, article.path); } catch (error) { new Notice(String(error)); } }));
+      menu.addItem(item => item.setTitle('Unlink').setIcon('unlink').onClick(async () => {
+        if (disposed || busy || !current()) return; busy = true;
+        try { const saved = await runWrite(() => controller.linkNode(article.path, highlight.id, null)); if (!disposed) updated(saved); }
+        catch (error) { new Notice(String(error)); } finally { busy = false; }
+      }));
+    } else {
+      menu.addItem(item => item.setTitle('Link').setIcon('link').onClick(() => { const result = defaultHighlightTarget(highlight.quote); if ('target' in result) void link(result.target); else choose(result.reason); }));
+      menu.addItem(item => item.setTitle('Link to…').setIcon('file-search').onClick(() => choose()));
+    }
     menu.addItem(item => item.setTitle('Remove highlight').setIcon('trash').onClick(async () => {
       if (disposed || busy || !current()) return; busy = true;
-      try { const saved = await runWrite(() => controller.deleteHighlight(article.path, highlight.id)); if (!disposed) updated(saved); }
+      try { const saved = await runWrite(() => controller.deleteHighlight(article.path, highlight.id, linkedNode)); if (!disposed) updated(saved); }
       catch (error) { if (!disposed) new Notice(String(error)); }
       finally { busy = false; }
     }));
     menu.showAtPosition(point, _parent.ownerDocument);
-    return () => { disposed = true; menu.hide(); picker?.close(); };
+    return () => { disposed = true; menu.hide(); picker?.close(); closeNode?.(); };
   };
 }
 export const nativeLinkMenu: NonNullable<ReaderHost['linkMenu']> = (parent, url, title, controller, point, saved, context) => {

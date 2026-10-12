@@ -23,22 +23,16 @@ function fixture() {
   const exports: Record<string, any> = {}; new Function('require', 'exports', js)((name: string) => deps[name], exports);
   return { exports, menus, setChoose: (callback: typeof choose) => { choose = callback; }, finish: (target: string | null) => choose(target) };
 }
-it('offers configured type actions directly and runs them through the current-write guard', async () => {
-  const f = fixture(), changed = vi.fn(), typeHighlight = vi.fn(async () => ({ body: 'typed' }));
-  const type = { name: 'person', color: '🟡' }, controller = { settings: { typedHighlightTypes: [type] }, typeHighlight };
-  let current = true; const runWrite = vi.fn(work => work());
-  const close = f.exports.nativeHighlightMenu({})(document.createElement('div'), { path: 'article.md' }, { id: 'id', quote: 'Words' }, controller, {}, { x: 0, y: 0 }, changed, () => current, runWrite);
-  expect([...f.menus[0].items.keys()]).toEqual(['🟡 person', 'Link', 'Link to…', 'Remove highlight']);
-  await f.menus[0].items.get('🟡 person')!();
-  expect(typeHighlight).toHaveBeenCalledWith('article.md', 'id', type); expect(runWrite).toHaveBeenCalledTimes(1);
-  expect(changed).toHaveBeenCalledWith({ body: 'typed' }); current = false;
-  await f.menus[0].items.get('🟡 person')!(); expect(typeHighlight).toHaveBeenCalledTimes(1);
-  close();
+it('offers an explanatory optional node action, never legacy type actions', async () => {
+  const f = fixture();
+  const close = f.exports.nativeHighlightMenu({})(document.createElement('div'), { path: 'article.md' }, { id: 'id', quote: 'Words' }, { settings: { typedHighlightTypes: [{ name: 'person', color: '🟡' }] } }, {}, { x: 0, y: 0 }, vi.fn());
+  expect([...f.menus[0].items.keys()]).toEqual(['Link to node…', 'Link', 'Link to…', 'Remove highlight']);
+  await f.menus[0].items.get('Link to node…')!(); close();
 });
 it('typed node menu omits unsupported relinking and retains an explicit Open node action', async () => {
   const f = fixture(), host = { openNote: vi.fn() };
   const close = f.exports.nativeHighlightMenu({})(document.createElement('div'), { path: 'article.md' }, { id: 'id', quote: 'Words', color: '🟡', link: 'Nodes/Words' }, { settings: { typedHighlightTypes: [] } }, host, { x: 0, y: 0 }, vi.fn());
-  expect([...f.menus[0].items.keys()]).toEqual(['Open node', 'Remove highlight']);
+  expect([...f.menus[0].items.keys()]).toEqual(['Change linked node…', 'Open node', 'Unlink', 'Remove highlight']);
   await f.menus[0].items.get('Open node')!(); expect(host.openNote).toHaveBeenCalledWith('Nodes/Words', 'article.md'); close();
 });
 it.each(['link', 'highlight'])('native %s picker may complete after its Menu hides; disposal still blocks late callbacks', async kind => {

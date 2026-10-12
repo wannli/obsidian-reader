@@ -1,7 +1,8 @@
+import { nodesApi, NODES_UNAVAILABLE } from './nodes-api';
+import { NodePicker } from './ui/node-picker';
 import { nativeDeleteHandler } from './native-delete';
 import { Plugin, FileView, Notice, Platform, TFile, parseLinktext, type App, type Menu, type TAbstractFile, type WorkspaceLeaf, type ViewStateResult } from 'obsidian';
 import { DEFAULT_SETTINGS, type ReaderSettings } from './types';
-import { validateHighlightTypes } from './typed-highlights';
 import { ReaderRepository } from './storage/repository';
 import { ObsidianStore } from './obsidian-store';
 import { ReaderController } from './controller';
@@ -82,6 +83,25 @@ class ReaderView extends FileView {
       },
       notify: message => { new Notice(message); },
       pickArticle: (articles, queue, choose) => this.plugin.native?.pickArticles(articles, queue, choose),
+      nodeForLink: (target, source) => {
+        const file = this.app.metadataCache.getFirstLinkpathDest(target, source);
+        return file ? nodesApi(this.app)?.getNode(file.path) ?? null : null;
+      },
+      pickNode: (quote, source, current, choose, finished, preflight) => {
+        const api = nodesApi(this.app);
+        if (!api) { new Notice(NODES_UNAVAILABLE); finished?.(); return () => {}; }
+        let active = true;
+        const valid = () => active && current() && nodesApi(this.app) === api;
+        const picker = new NodePicker(this.app, quote, source, valid, async node => {
+          const guard = () => {
+            if (!valid()) throw new Error('Highlight or Nodes changed. Reopen the highlight.');
+            const live = api.getNode(node.path);
+            if (!live || live.type !== node.type || live.color !== node.color) throw new Error('Node or schema changed. Reopen the picker.');
+          };
+          guard(); await choose(node, guard);
+        }, finished, preflight);
+        picker.open(); return () => { active = false; picker.dispose(); };
+      },
       pickLinkTarget: (quote, choose) => this.plugin.native?.pickLinkTarget(quote, choose),
       highlightMenu: nativeHighlightMenu(this.app), linkMenu: nativeLinkMenu,
       visibleOverlays: () => [...this.contentEl.ownerDocument.querySelectorAll<HTMLElement>('.mobile-navbar, .mobile-toolbar')],
@@ -204,14 +224,11 @@ export default class ReaderPlugin extends Plugin {
     this.einkDevice = readEinkDevice(window);
     const saved = await this.loadData();
     if (this.closing) return;
+    if (saved && typeof saved === 'object') for (const [key, value] of Object.entries(saved)) {
+      if (!(key in DEFAULT_SETTINGS) || key === 'typedHighlightTypes') (this.settings as unknown as Record<string, unknown>)[key] = value;
+    }
     for (const key of Object.keys(DEFAULT_SETTINGS) as (keyof ReaderSettings)[]) {
-      if (key === 'typedHighlightTypes') {
-        if (saved?.typedHighlightTypes !== undefined) {
-          try { this.settings.typedHighlightTypes = validateHighlightTypes(saved.typedHighlightTypes); }
-          catch (error) { new Notice('Invalid saved highlight types; using defaults. ' + String(error)); }
-        }
-        continue;
-      }
+      if (key === 'typedHighlightTypes') continue; // Retired settings remain inert and round-trip unchanged.
       if (saved && typeof saved[key] === typeof DEFAULT_SETTINGS[key]) (this.settings as unknown as Record<string, unknown>)[key] = saved[key];
     }
     this.settings.pollMinutes = Math.max(5, Math.min(1440, Number(this.settings.pollMinutes) || 30));

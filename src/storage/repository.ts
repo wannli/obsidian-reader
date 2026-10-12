@@ -1,6 +1,5 @@
 import type { Article, ArticleStatus, ExtractedArticle, Feed, FileStore, NewArticle, ReaderSettings } from '../types';
 import { StorageContext } from './context';
-import { setHighlightType } from './typed-highlights';
 import { validReadingPosition, type ReadingPosition } from '../reading-position';
 import { StaleArticleWriteError, type AcquisitionWriteOptions } from './preconditions';
 import type { ArticleTemplateExclusionsSource } from './classifier';
@@ -156,13 +155,6 @@ export class ReaderRepository {
       return this.getArticle(path);
     });
   }
-  setHighlightType(path: string, id: string, type: import('../typed-highlights').TypedHighlightType): Promise<Article> {
-    const options = { expectedGeneration: this.articleGeneration(path) };
-    return queued(this.context.store, async () => {
-      await setHighlightType(this.context, path, id, type, options);
-      return this.getArticle(path);
-    });
-  }
   setHighlightLink(path: string, id: string, target: string): Promise<Article> {
     const options = { expectedGeneration: this.articleGeneration(path) };
     return queued(this.context.store, async () => {
@@ -170,10 +162,20 @@ export class ReaderRepository {
       return this.getArticle(path);
     });
   }
-  deleteHighlight(path: string, id: string): Promise<Article> {
+  validateNodeHighlight(path: string, id: string): Promise<void> {
+    return queued(this.context.store, () => highlightMutations.validateNodeHighlight(this.context, path, id));
+  }
+  setNodeLink(path: string, id: string, node: import('../nodes-api').NodeResult | null, guard: () => void = () => {}): Promise<Article> {
     const options = { expectedGeneration: this.articleGeneration(path) };
     return queued(this.context.store, async () => {
-      await highlightMutations.deleteHighlight(this.context, path, id, options);
+      await highlightMutations.setNodeLink(this.context, path, id, node, options, guard);
+      return this.getArticle(path);
+    });
+  }
+  deleteHighlight(path: string, id: string, removeLinked = false): Promise<Article> {
+    const options = { expectedGeneration: this.articleGeneration(path) };
+    return queued(this.context.store, async () => {
+      await highlightMutations.deleteHighlight(this.context, path, id, options, removeLinked);
       return this.getArticle(path);
     });
   }

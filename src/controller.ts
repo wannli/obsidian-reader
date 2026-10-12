@@ -192,14 +192,14 @@ export class ReaderController {
   highlight(path: string, quote: string, anchor: CompactAnchor): Promise<Article> {
     return this.annotate(path, () => this.repository.addHighlight(path, { quote, anchor }));
   }
-  typeHighlight(path: string, id: string, type: import('./typed-highlights').TypedHighlightType): Promise<Article> {
-    return this.annotate(path, () => this.repository.setHighlightType(path, id, type));
-  }
   linkHighlight(path: string, id: string, target: string): Promise<Article> {
     return this.annotate(path, () => this.repository.setHighlightLink(path, id, target));
   }
-  deleteHighlight(path: string, id: string): Promise<Article> {
-    return this.annotate(path, () => this.repository.deleteHighlight(path, id));
+  linkNode(path: string, id: string, node: import('./nodes-api').NodeResult | null, guard: () => void = () => {}): Promise<Article> {
+    return this.annotate(path, () => this.repository.setNodeLink(path, id, node, guard));
+  }
+  deleteHighlight(path: string, id: string, removeLinked = false): Promise<Article> {
+    return this.annotate(path, () => this.repository.deleteHighlight(path, id, removeLinked));
   }
   setLinkTarget(path: string, id: string, target: string): Promise<Article> {
     return this.annotate(path, () => this.repository.setLink(path, id, target));

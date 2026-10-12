@@ -1,32 +1,11 @@
-import { Notice, PluginSettingTab, Setting, type App } from 'obsidian';
-import { HIGHLIGHT_COLORS, validateHighlightTypes } from './typed-highlights';
+import { PluginSettingTab, Setting, type App } from 'obsidian';
 import type ReaderPlugin from './main';
 export class ReaderSettingsTab extends PluginSettingTab {
   constructor(app: App, private plugin: ReaderPlugin) { super(app, plugin); }
   display(): void {
     this.containerEl.empty(); this.containerEl.createEl('h2', { text: 'Reader' });
     this.containerEl.createEl('p', { text: 'Everything lives in Markdown. Unfinished articles acquire full text while Obsidian is active, Inbox and Later first. Nothing runs while iOS suspends Obsidian. Saved text works offline; remote images need a connection.' });
-    this.containerEl.createEl('h3', { text: 'Typed highlights' });
-    this.containerEl.createEl('p', { text: 'Click an existing highlight to create or reuse a normal note in Nodes. Type names and colors are saved together below.' });
-    const draft = this.plugin.settings.typedHighlightTypes.map(type => ({ ...type }));
-    const rows = this.containerEl.createDiv();
-    const renderTypes = () => {
-      rows.empty();
-      draft.forEach((type, index) => {
-        new Setting(rows).setName('Highlight type').addText(input => input.setValue(type.name).onChange(value => { type.name = value; }))
-          .addDropdown(input => {
-            HIGHLIGHT_COLORS.forEach(color => input.addOption(color, color));
-            input.setValue(type.color).onChange(value => { type.color = value as typeof type.color; });
-          }).addButton(button => button.setButtonText('Remove').onClick(() => { draft.splice(index, 1); renderTypes(); }));
-      });
-    };
-    renderTypes();
-    new Setting(this.containerEl).addButton(button => button.setButtonText('Add type').onClick(() => { draft.push({ name: '', color: '🟡' }); renderTypes(); }))
-      .addButton(button => button.setButtonText('Save highlight types').onClick(async () => {
-        const previous = this.plugin.settings.typedHighlightTypes;
-        try { this.plugin.settings.typedHighlightTypes = validateHighlightTypes(draft); await this.plugin.saveSettings(); new Notice('Highlight types saved'); }
-        catch (error) { this.plugin.settings.typedHighlightTypes = previous; new Notice(error instanceof Error ? error.message : String(error)); }
-      }));
+    this.containerEl.createEl('p', { text: 'Link highlights to nodes using the optional Nodes plugin. Schemas and colors are managed in Nodes.' });
     if (this.plugin.supportsEink) {
       new Setting(this.containerEl).setName('Boox / e-ink pagination (this device)').setDesc('Off by default. Enable only for your Boox / e-ink device: Android is not e-ink detection. This device-local preference is not synced; desktop, iOS and other devices keep their current scrolling behavior.').addToggle(toggle => toggle.setValue(this.plugin.einkDevice.enabled).onChange(value => {
         if (!this.plugin.setEinkDevice({ ...this.plugin.einkDevice, enabled: value })) toggle.setValue(this.plugin.einkDevice.enabled);

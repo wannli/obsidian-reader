@@ -14,6 +14,8 @@ import { persistPosition } from './persist-position';
 import type { ReadingPosition } from './eink-types';
 import { canTurnEinkPage, watchEinkKeys } from './eink-input';
 export interface ReaderHost {
+  nodeForLink?(target: string, source: string): import('../nodes-api').NodeResult | null;
+  pickNode?(quote: string, source: string, current: () => boolean, choose: (node: import('../nodes-api').NodeResult, guard: () => void) => Promise<void>, finished?: () => void, preflight?: () => Promise<void>): () => void;
   openNote(path: string, source?: string): void | Promise<void>;
   pickLinkTarget?(quote: string, choose: (target: string | null) => void): (() => void) | void;
   visibleOverlays?(): readonly HTMLElement[];
@@ -218,8 +220,9 @@ export function mountReader(target: HTMLElement, initial: Article, controller: R
     if (disposed || saving || staleDOM || !isCurrent()) return;
     const link = (event.target as HTMLElement).closest<HTMLAnchorElement>('a[href]');
     if (!body.ownerDocument.getSelection()?.isCollapsed) { if (link) event.preventDefault(); return; }
-    const typedMark = (event.target as HTMLElement).closest<HTMLElement>('mark[data-highlight-color]');
-    if (link && (!typedMark || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey)) {
+    const typedMark = (event.target as HTMLElement).closest<HTMLElement>('mark[data-inline-highlight-id]');
+    const nodeMark = typedMark && (typedMark.dataset.highlightColor || (link && host.nodeForLink?.(link.getAttribute('href') ?? '', article.path)));
+    if (link && (!nodeMark || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey)) {
       const href = link.getAttribute('href') ?? '', internal = !/^(?:https?|mailto):/i.test(href);
       const item = parsed.links.find(item => item.id === link.dataset.inlineLinkId);
       const enclosingMark = item && parsed.highlights.find(mark => mark.source.start <= item.source.start && mark.source.end >= item.source.end);
