@@ -127,6 +127,15 @@ schema-free node creation for highlights. Old settings and Markdown are retained
 without migration. Assigning topics updates
 the article's `topics` frontmatter with links to topic notes already in the vault.
 
+## Mobile reading controls
+
+On mobile, scrolling down hides Obsidian's navigation bars and Reader's native
+header/actions; scroll up to reveal them. **Show controls** remains available,
+and Escape also reveals controls. Successful Boox next/previous page turns
+hide/reveal controls respectively. Changes are immediate, without animations;
+leaving Reader restores the host chrome. Article-end actions remain available.
+Native iOS and Boox hardware verification is still pending.
+
 ## Boox and e-ink reading
 
 On Android e-ink devices, enable **Boox / e-ink pagination (this device)** in

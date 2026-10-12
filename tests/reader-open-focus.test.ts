@@ -1,6 +1,7 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import ts from 'typescript';
+import { nativeReadingChrome } from '../src/ui/reading-chrome';
 import { DEFAULT_SETTINGS } from '../src/types';
 import { validateHighlightTypes } from '../src/typed-highlights';
 import { validReadingPosition as readingPosition } from '../src/reading-position';
@@ -69,7 +70,7 @@ async function fixture(existing: boolean, savedData?: Record<string, unknown>) {
     './native-delete': { nativeDeleteHandler }, './reading-position': { validReadingPosition: readingPosition },
     './eink-device': einkDevice,
     obsidian: sdk, './nodes-api': { nodesApi: () => null }, './ui/node-picker': { NodePicker: class {} }, './typed-highlights': { validateHighlightTypes }, './types': { DEFAULT_SETTINGS }, './storage/repository': { ReaderRepository: class {} }, './obsidian-store': { ObsidianStore: class {} }, './controller': { ReaderController }, './transport': { obsidianGet: vi.fn() }, './ui/app': { ReaderApp }, './settings': { ReaderSettingsTab: class {} },
-    './routing': { installArticleRouting: (options: unknown) => { route = options; return { dispose() {}, preserveMarkdown() { return () => {}; } }; } }, './ui/native': { NativeReaderUI }, './ui/native-popups': { nativeHighlightMenu: vi.fn(), nativeLinkMenu: vi.fn() }, './template-exclusions': { readTemplateExclusions: async () => ({ folders: [], files: [] }) }, './storage/classifier': { isArticleTemplatePath: () => false },
+    './routing': { installArticleRouting: (options: unknown) => { route = options; return { dispose() {}, preserveMarkdown() { return () => {}; } }; } }, './ui/reading-chrome': { nativeReadingChrome }, './ui/native': { NativeReaderUI }, './ui/native-popups': { nativeHighlightMenu: vi.fn(), nativeLinkMenu: vi.fn() }, './template-exclusions': { readTemplateExclusions: async () => ({ folders: [], files: [] }) }, './storage/classifier': { isArticleTemplatePath: () => false },
   }).default;
   const files = new Map<string, { path: string; basename: string }>();
   const leaves: any[] = [], app: any = { vault: { on: vi.fn(), getFileByPath: (path: string) => {

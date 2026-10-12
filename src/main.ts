@@ -14,6 +14,7 @@ import type { ReaderState } from './ui/reader-state';
 import { validReadingPosition as validateReadingPosition } from './reading-position';
 import { einkEnabled, normalizeEinkDevice, readEinkDevice, writeEinkDevice, type EinkDeviceSettings } from './eink-device';
 import { NativeReaderUI } from './ui/native';
+import { nativeReadingChrome } from './ui/reading-chrome';
 import { nativeHighlightMenu, nativeLinkMenu } from './ui/native-popups';
 import { readTemplateExclusions } from './template-exclusions';
 import { isArticleTemplatePath, type ArticleTemplateExclusions } from './storage/classifier';
@@ -39,6 +40,7 @@ export async function openExistingNote(app: App, target: string, source = ''): P
 }
 class ReaderView extends FileView {
   private reader?: ReaderApp;
+  private chrome?: ReturnType<typeof nativeReadingChrome>;
   private savedState: ReaderState = {};
   private stateRevision = 0;
   private applyingState = false;
@@ -60,10 +62,12 @@ class ReaderView extends FileView {
   getIcon() { return 'book-open'; }
   async onOpen() {
     this.contentEl.addClass('r2-view');
+    this.chrome = nativeReadingChrome(this.contentEl, () => Platform.isMobile && this.app.workspace.activeLeaf === this.leaf);
     this.reader = new ReaderApp(this.contentEl, this.plugin.controller, {
       openNote: (path, source) => openExistingNote(this.app, path, source),
       openMarkdown: path => this.plugin.openMarkdown(this.leaf, path),
       autoOpen: false, isMobile: Platform.isMobile,
+      setChromeHidden: hidden => this.chrome?.setHidden(hidden),
       shouldFocus: () => this.app.workspace.activeLeaf === this.leaf,
       einkEnabled: () => this.plugin.isEinkEnabled(),
       reversePageButtons: () => this.plugin.einkDevice.reverseButtons,
@@ -151,6 +155,7 @@ class ReaderView extends FileView {
     } finally { if (revision === this.stateRevision) { this.applyingState = false; this.appliedState = true; this.app.workspace.requestSaveLayout(); } }
   }
   disposeReader(): Promise<void> {
+    this.chrome?.dispose(); this.chrome = undefined;
     this.savedState = this.getState(); this.stateRevision++;
     const flushed = this.reader?.destroy() ?? Promise.resolve(); this.reader = undefined;
     return this.plugin.trackReaderDisposal(flushed);

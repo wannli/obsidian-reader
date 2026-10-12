@@ -13,6 +13,7 @@ import { trackScrollPosition } from './scroll-position';
 import { persistPosition } from './persist-position';
 import type { ReadingPosition } from './eink-types';
 import { canTurnEinkPage, watchEinkKeys } from './eink-input';
+import { watchReadingChrome } from './reading-chrome';
 export interface ReaderHost {
   nodeForLink?(target: string, source: string): import('../nodes-api').NodeResult | null;
   pickNode?(quote: string, source: string, current: () => boolean, choose: (node: import('../nodes-api').NodeResult, guard: () => void) => Promise<void | (() => void)>, finished?: () => void, preflight?: () => Promise<void>): () => void;
@@ -22,6 +23,7 @@ export interface ReaderHost {
   openMarkdown?(path: string): void | Promise<void>;
   autoOpen?: boolean;
   isMobile?: boolean;
+  setChromeHidden?(hidden: boolean): void;
   shouldFocus?(): boolean;
   onStateChange?(): void;
   einkEnabled?(): boolean;
@@ -73,11 +75,19 @@ export function mountReader(target: HTMLElement, initial: Article, controller: R
   const summary = element('p', 'r2-highlight-summary');
   page.append(title, warning, body, summary, error, saveState); scroll.append(page);
   shell.append(scroll); target.replaceChildren(shell);
+  const chrome = host.isMobile && host.setChromeHidden ? watchReadingChrome(scroll, shell, {
+    active: () => host.shouldFocus?.() ?? false,
+    setHidden: hidden => host.setChromeHidden!(hidden), onActiveChange: host.onActiveChange,
+  }) : undefined;
   if (host.einkEnabled?.()) {
     shell.classList.add('r2-eink');
     scroll.tabIndex = -1;
     const active = () => host.shouldFocus?.() ?? shell.contains(shell.ownerDocument.activeElement);
-    const turn = (delta: number) => canTurnEinkPage(shell, active) && !!pagination?.turn(delta);
+    const turn = (delta: number) => {
+      const turned = canTurnEinkPage(shell, active) && !!pagination?.turn(delta);
+      if (turned) chrome?.turn(delta);
+      return turned;
+    };
     const updatePages = () => {
       if (pagination) {
         const { page, total, ready } = pagination.progress();
@@ -267,7 +277,7 @@ export function mountReader(target: HTMLElement, initial: Article, controller: R
   body.ownerDocument.addEventListener('selectionchange', flushRender);
   const dispose = () => {
     const write = persistence.dispose();
-    if (!disposed) { disposed = true; pending = null; stopPageKeys(); pagination?.dispose(); scrollPosition?.dispose(); unwatch(); clearPaint(); closeMenu(); body.removeEventListener('click', onClick); body.ownerDocument.removeEventListener('selectionchange', flushRender); scroll.removeEventListener('pointerdown', protectSelection); }
+    if (!disposed) { disposed = true; pending = null; chrome?.dispose(); stopPageKeys(); pagination?.dispose(); scrollPosition?.dispose(); unwatch(); clearPaint(); closeMenu(); body.removeEventListener('click', onClick); body.ownerDocument.removeEventListener('selectionchange', flushRender); scroll.removeEventListener('pointerdown', protectSelection); }
     return write;
   };
   return Object.assign(dispose, {
@@ -303,6 +313,7 @@ export function mountReader(target: HTMLElement, initial: Article, controller: R
       positionPath = path; positionGeneration = controller.repository.articleGeneration(path); persistence.remapped();
     },
     restorePosition: (position: ReadingPosition) => {
+      chrome?.reset();
       if (pagination) pagination.restore(position);
       else scrollPosition!.restorePosition(position);
       persistence.restored();
