@@ -21,7 +21,11 @@ export interface MappedDocument {
 /** All offsets originate in lexer tokens, never in a quote search or source HTML attributes. */
 export function parseMapped(markdown: string, options: InlineParseOptions = {}): MappedDocument {
   const revision = inlineRevision(markdown, options);
-  const root = document.createElement('article');
+  // Detached elements owned by the live document can still fetch images when HTML
+  // is materialized. Keep every parser node in a document with no browsing context,
+  // including temporary fallback containers; retain resource attributes for display.
+  const inertDocument = document.implementation.createHTMLDocument('');
+  const root = inertDocument.createElement('article');
   root.dataset.articleVersion = revision;
   // marked normalizes newlines; keep an exact inverse boundary table for CRLF and lone CR.
   let source = ''; const original = [0];
@@ -41,7 +45,7 @@ export function parseMapped(markdown: string, options: InlineParseOptions = {}):
   };
   let block = 0;
   const decode = (value: string): string => {
-    const element = document.createElement('textarea'); element.innerHTML = value; return element.value;
+    const element = inertDocument.createElement('textarea'); element.innerHTML = value; return element.value;
   };
   function appendText(parent: HTMLElement, raw: string, start: number, mode: 'markdown' | 'escape' | 'literal' = 'markdown'): void {
     let value = ''; const spans: Span[] = [];
@@ -55,7 +59,7 @@ export function parseMapped(markdown: string, options: InlineParseOptions = {}):
       for (let j = 0; j < decoded.length; j++) spans.push(span);
       i += part.length;
     }
-    const text = document.createTextNode(value); parent.append(text); textMaps.set(text, spans);
+    const text = inertDocument.createTextNode(value); parent.append(text); textMaps.set(text, spans);
   }
   function addScope(element: HTMLElement, token: Token, start: number, innerStart: number, innerEnd: number,
     kind: Scope['kind'], target?: string, editable = true): void {
@@ -63,7 +67,7 @@ export function parseMapped(markdown: string, options: InlineParseOptions = {}):
       kind, target, editable, startIndex: -1, endIndex: -1 });
   }
   function fallback(parent: HTMLElement, token: Token, start: number, inline = false): void {
-    const container = document.createElement('span');
+    const container = inertDocument.createElement('span');
     // Use the existing tokens: re-lexing raw inline syntax loses resolved image definitions.
     container.innerHTML = sanitize(inline ? Parser.parseInline([token], inlineMarked.defaults) : inlineMarked.parser([token])); parent.append(...container.childNodes);
     forbidden.push(range(start, start + token.raw.length));
@@ -82,7 +86,7 @@ export function parseMapped(markdown: string, options: InlineParseOptions = {}):
         case 'escape': appendText(parent, token.raw, tokenStart, 'escape'); break;
         case 'strong': case 'em': case 'del': case 'reader_highlight': {
           const width = token.type === 'em' ? 1 : 2;
-          const element = document.createElement(token.type === 'reader_highlight' ? 'mark' : token.type);
+          const element = inertDocument.createElement(token.type === 'reader_highlight' ? 'mark' : token.type);
           parent.append(element);
           const contentOffset = token.type === 'reader_highlight' ? token.contentOffset ?? width : width;
           if (token.type === 'reader_highlight' && token.color) element.dataset.highlightColor = token.color;
@@ -93,7 +97,7 @@ export function parseMapped(markdown: string, options: InlineParseOptions = {}):
         }
         case 'reader_wiki': {
           const target = safeTarget(token.target);
-          const element = document.createElement(target ? 'a' : 'span');
+          const element = inertDocument.createElement(target ? 'a' : 'span');
           if (target) { element.setAttribute('href', target); element.className = 'internal-link'; }
           parent.append(element);
           // Wiki aliases are literal labels, matching the passive extension renderer.
@@ -105,7 +109,7 @@ export function parseMapped(markdown: string, options: InlineParseOptions = {}):
         case 'link': {
           const decodedTarget = decodeMarkdownDestination(token.href);
           const target = safeTarget(decodedTarget);
-          const element = document.createElement(target ? 'a' : 'span'); parent.append(element);
+          const element = inertDocument.createElement(target ? 'a' : 'span'); parent.append(element);
           if (target) {
             element.setAttribute('href', target);
             if (token.title) element.setAttribute('title', token.title);
@@ -121,9 +125,9 @@ export function parseMapped(markdown: string, options: InlineParseOptions = {}):
           addScope(element, token, tokenStart, innerStart, innerEnd, 'markdown', decodedTarget, ordinary && !!target);
           break;
         }
-        case 'br': parent.append(document.createElement('br')); forbidden.push(range(tokenStart, cursor)); break;
+        case 'br': parent.append(inertDocument.createElement('br')); forbidden.push(range(tokenStart, cursor)); break;
         case 'codespan': {
-          const element = document.createElement('code'); element.textContent = token.text; parent.append(element);
+          const element = inertDocument.createElement('code'); element.textContent = token.text; parent.append(element);
           forbidden.push(range(tokenStart, cursor)); break;
         }
         default: fallback(parent, token, tokenStart, true);
@@ -151,7 +155,7 @@ export function parseMapped(markdown: string, options: InlineParseOptions = {}):
       break;
     }
     if (token.type !== 'paragraph' && token.type !== 'heading') { fallback(root, token, start); first = false; continue; }
-    const element = document.createElement(token.type === 'heading' ? `h${token.depth}` : 'p');
+    const element = inertDocument.createElement(token.type === 'heading' ? `h${token.depth}` : 'p');
     const rawText = token.text as string;
     let innerStart = start;
     if (token.type === 'heading') {
