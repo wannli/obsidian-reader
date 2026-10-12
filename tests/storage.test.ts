@@ -122,14 +122,18 @@ describe('Markdown repository', () => {
   });
 
   it('discovers all note types outside configured folders and updates feeds without losing content', async () => {
-    const initial = '---\ntype: feed\nurl: https://example.com/feed\ncustom: [keep, me]\n---\n\nMy feed notes.\n';
+    const initial = "---\ntype: feed\nurl: https://example.com/feed\ncustom: [keep, me]\nchecked: '2099-01-01' # Authored\nmodified: my date\netag: my tag\n---\n\nMy feed notes.\n";
     const { store, repo } = setup({ 'Elsewhere/Feed.md': initial, 'Unrelated.md': '# Just a note' });
     const feed = (await repo.listFeeds())[0];
     expect(feed.title).toBe('Feed');
     expect(feed.enabled).toBe(true); // Preserve legacy notes without an explicit enabled field.
-    await repo.updateFeed(feed.path, { enabled: false, etag: 'v2', checked: '2026-01-01', error: '' });
+    await repo.updateFeed(feed.path, { enabled: false, error: '' });
     const changed = (await repo.listFeeds())[0];
-    expect(changed).toMatchObject({ enabled: false, etag: 'v2', checked: '2026-01-01', error: '' });
+    expect(changed).toMatchObject({ enabled: false, error: '' });
+    expect(changed).not.toHaveProperty('checked');
+    expect(changed).not.toHaveProperty('modified');
+    expect(changed).not.toHaveProperty('etag');
+    expect(await store.read(feed.path)).toContain("checked: '2099-01-01' # Authored\nmodified: my date\netag: my tag\n");
     expect(changed.id).not.toBe('');
     expect(parseNote(await store.read(feed.path)).body).toBe('\nMy feed notes.\n');
     expect(parseNote(await store.read(feed.path)).doc.toJS().custom).toEqual(['keep', 'me']);

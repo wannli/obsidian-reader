@@ -57,7 +57,6 @@ export function feedFrom(note: Note, path: string): Feed {
   return {
     path, id: stringField(note, 'id') ?? '', title: titleOf(note, path), url: stringField(note, 'url') ?? '',
     prefix: stringField(note, 'prefix')?.trim() || titleOf(note, path).trim() || 'Feed',
-    enabled: note.doc.get('enabled') !== false, checked: stringField(note, 'checked'), etag: stringField(note, 'etag'),
-    modified: stringField(note, 'modified'), error: stringField(note, 'error'),
+    enabled: note.doc.get('enabled') !== false, error: stringField(note, 'error'),
   };
 }

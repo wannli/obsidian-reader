@@ -4,7 +4,7 @@ import type { Article, ArticleStatus } from '../types';
 import { queueLabel } from '../reading-layout';
 import type { ReaderApp } from './app';
 import { readerCommands, type ReaderCommand } from './commands';
-import { ReaderPicker, ReaderInput, ReaderFeeds } from './native-dialogs';
+import { ReaderPicker, ReaderInput, ReaderFeeds, ReaderTrashConfirmation } from './native-dialogs';
 import { ReaderTopics } from './native-topics';
 import { HighlightLinkPicker } from './highlight-link-picker';
 export class NativeReaderUI {
@@ -36,6 +36,10 @@ export class NativeReaderUI {
       const reader = active(); if (this.disposed || !command.available(reader)) return false;
       if (!checking) this.invoke(command, reader); return true;
     } });
+  }
+  confirmTrash(eligible: number, skipped: number): Promise<boolean> {
+    if (this.disposed) return Promise.resolve(false);
+    return new Promise(resolve => this.open(new ReaderTrashConfirmation(this.plugin.app, eligible, skipped, resolve)));
   }
   private open<T extends Modal & { finished?: () => void }>(modal: T): void {
     if (this.disposed) return;

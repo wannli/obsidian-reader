@@ -24,6 +24,10 @@ export class ReaderController {
   private manual = new Map<string, Promise<Article>>();
   private extractionTail: Promise<unknown> = Promise.resolve();
   private polling?: Promise<void>;
+  // Session-local scheduling only: no persisted timestamps or HTTP validators.
+  private feedAttempts = new Map<string, number>();
+  private feedNetworkFailures = new Set<string>();
+  private feedScheduleKey(feed: Feed): string { return JSON.stringify([feed.path, feed.url]); }
   private active = false;
   private online = typeof navigator === 'undefined' || navigator.onLine;
   private expediteNetworkRetry = false;
@@ -76,7 +80,12 @@ export class ReaderController {
     else { clearTimeout(this.acquisitionTimer); this.acquisitionTimer = undefined; }
   }
   setOnline(online: boolean): void {
-    if (online && !this.online) { this.expediteNetworkRetry = true; this.deferredWrites.clear(); }
+    if (online && !this.online) {
+      this.expediteNetworkRetry = true; this.deferredWrites.clear();
+      // Only transport failures retry on reconnect; HTTP/import errors keep their cadence.
+      for (const key of this.feedNetworkFailures) this.feedAttempts.delete(key);
+      this.feedNetworkFailures.clear();
+    }
     this.online = online;
     if (online) this.scheduleAcquisition();
     else { clearTimeout(this.acquisitionTimer); this.acquisitionTimer = undefined; }
@@ -231,7 +240,9 @@ export class ReaderController {
       const parsed = parseFeed(response.text, canonical);
       const feed = await this.repository.createFeed(parsed.title, canonical);
       await this.importEntries(feed, parsed.entries, cutoff);
-      await this.repository.updateFeed(feed.path, { checked: new Date().toISOString(), error: '', etag: response.headers.etag, modified: response.headers['last-modified'] });
+      this.feedAttempts.set(this.feedScheduleKey(feed), Date.now());
+      this.feedNetworkFailures.delete(this.feedScheduleKey(feed));
+      if (feed.error) await this.repository.updateFeed(feed.path, { error: '' });
       return feed;
     });
   }
@@ -248,21 +259,23 @@ export class ReaderController {
       const issues = await this.pruneStream(cutoff);
       const feeds = await this.repository.listFeeds();
       for (const feed of feeds.filter(f => f.enabled && isAcquisitionUrl(f.url))) {
-        if (!force && feed.checked && Date.now() - Date.parse(feed.checked) < this.settings.pollMinutes * 60000) continue;
+        const key = this.feedScheduleKey(feed), attempted = this.feedAttempts.get(key);
+        if (!force && attempted !== undefined && Date.now() - attempted < this.settings.pollMinutes * 60000) continue;
+        this.feedAttempts.set(key, Date.now());
         try {
-          const headers: Record<string, string> = {};
-          if (feed.etag) headers['If-None-Match'] = feed.etag;
-          if (feed.modified) headers['If-Modified-Since'] = feed.modified;
-          const response = await this.get(feed.url, headers);
+          let response;
+          try { response = await this.get(feed.url); }
+          catch (error) { this.feedNetworkFailures.add(key); throw error; }
+          this.feedNetworkFailures.delete(key);
           if (response.status !== 304) {
             if (response.status < 200 || response.status >= 300) throw new Error('HTTP ' + response.status);
             await this.importEntries(feed, parseFeed(response.text, feed.url).entries, cutoff);
           }
-          await this.repository.updateFeed(feed.path, { checked: new Date().toISOString(), error: '', etag: response.headers.etag ?? feed.etag, modified: response.headers['last-modified'] ?? feed.modified });
+          if (feed.error) await this.repository.updateFeed(feed.path, { error: '' });
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
           issues.push(feed.title + ': ' + message);
-          await this.repository.updateFeed(feed.path, { error: message });
+          if (feed.error !== message) await this.repository.updateFeed(feed.path, { error: message });
         }
       }
       this.message = issues.length ? issues.join(' · ') : 'Feeds up to date';

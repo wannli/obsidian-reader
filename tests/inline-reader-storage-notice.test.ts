@@ -1,6 +1,7 @@
 import { expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import ts from 'typescript';
+import { normalizeFeedSchedule } from '../src/feed-schedule';
 import { DEFAULT_SETTINGS } from '../src/types';
 
 it('starts independently without legacy storage preparation or old-plugin checks', async () => {
@@ -16,7 +17,7 @@ it('starts independently without legacy storage preparation or old-plugin checks
   const device = () => ({ enabled: false, reverseButtons: false });
   const dependencies: Record<string, unknown> = {
     obsidian: { Plugin, Notice, FileView: class {}, Platform: { isAndroidApp: false } },
-    './types': { DEFAULT_SETTINGS },
+    './types': { DEFAULT_SETTINGS }, './feed-schedule': { normalizeFeedSchedule },
     './eink-device': { normalizeEinkDevice: device, readEinkDevice: device },
     './template-exclusions': { readTemplateExclusions: vi.fn(async () => ({})) },
     './storage/repository': { ReaderRepository: class { prepareStorage = prepareStorage; } },

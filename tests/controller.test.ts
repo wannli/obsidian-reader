@@ -14,7 +14,7 @@ function setup(get: HttpGet, useDummyContent = false) {
 }
 afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers(); });
 describe('ReaderController', () => {
-  it('imports metadata once, leaves states/body intact on refresh, conditionally polls', async () => {
+  it('imports metadata once, leaves states/body intact on refresh, and throttles scheduled polls', async () => {
     const get = vi.fn<HttpGet>().mockResolvedValue(response); const { repo, controller } = setup(get);
     await controller.subscribeFeed('https://example.com/rss');
     const [article] = await repo.listArticles(); expect(article.status).toBe('feed'); expect(article.body).toBe('');
@@ -24,7 +24,7 @@ describe('ReaderController', () => {
     await repo.updateFeed((await repo.listFeeds())[0].path, { enabled: true });
     await controller.refreshFeeds();
     expect(await repo.listArticles()).toHaveLength(1); expect((await repo.getArticle(moved.path)).status).toBe('later');
-    expect(get.mock.calls[1][1]).toHaveProperty('If-None-Match', 'v1');
+    expect(get.mock.calls[1]).toEqual(['https://example.com/rss']);
     const calls = get.mock.calls.length; await controller.refreshFeeds(false); expect(get).toHaveBeenCalledTimes(calls);
   });
   it('retains captured article on extraction failure and rejects work after shutdown', async () => {

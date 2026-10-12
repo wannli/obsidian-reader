@@ -7,8 +7,7 @@ import { referencesArticle } from './move-links';
 import { moveArticle } from './moves';
 import { hasStreamAnnotation } from './stream-promotion';
 
-// Unknown metadata and all text outside a provably owned flat snapshot survive.
-const disposableFields = new Set(['type', 'title', 'url', 'feed', 'published', 'fetched', 'summary', 'error', 'retryAfter']);
+import { disposableStreamNote } from './stream-disposal';
 export async function cleanupStream(context: StorageContext, cutoff: number, busy: (path: string) => boolean = () => false): Promise<{ deleted: string[]; retained: string[] }> {
   const result = { deleted: [] as string[], retained: [] as string[] };
   let paths = await context.store.list();
@@ -28,10 +27,7 @@ export async function cleanupStream(context: StorageContext, cutoff: number, bus
         paths = await context.store.list();
         continue;
       }
-      const properties = note.doc.toJS({ maxAliasCount: 50 });
-      if (article.content === 'protected' || article.highlights.length || article.extractor === 'manual' ||
-          Object.keys(properties).some(key => !disposableFields.has(key)) || /(^|\s)#/.test(note.header) ||
-          note.body.trim() !== article.body.trim() || !context.store.trash) {
+      if (!disposableStreamNote(note, article) || !context.store.trash) {
         result.retained.push(path); continue;
       }
       // Never strand authored references/journals.

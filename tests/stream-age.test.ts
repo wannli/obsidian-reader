@@ -91,11 +91,18 @@ it.each(['no feeds', 'disabled', '304', 'failure', 'not due'] as const)('cleans 
   const { repo, controller, store } = setup(get);
   if (mode !== 'no feeds') {
     const feed = await repo.createFeed('News', 'https://example.test/rss');
-    await repo.updateFeed(feed.path, { enabled: mode !== 'disabled', ...(mode === 'not due' ? { checked: now.toISOString() } : {}) });
+    await repo.updateFeed(feed.path, { enabled: mode !== 'disabled' });
+    if (mode === 'not due') {
+      await controller.refreshFeeds(false);
+      // Reintroduce an expired note to prove even a throttled check still cleans.
+      await store.create(path, note());
+      get.mockClear();
+    }
   }
   await controller.refreshFeeds(mode !== 'not due');
   expect(await store.exists(path)).toBe(false);
   if (mode === 'failure') expect(controller.message).toContain('Offline');
+  if (mode === 'not due') expect(get).not.toHaveBeenCalled();
   await controller.shutdown();
 });
 it('cleans before a failed subscription request and reports protected cleanup exceptions on refresh', async () => {

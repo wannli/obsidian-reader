@@ -10,6 +10,7 @@ import { mark } from './markdown-helpers';
 import { parseNote } from '../src/storage/markdown';
 import { readFileSync } from 'node:fs';
 import ts from 'typescript';
+import { normalizeFeedSchedule } from '../src/feed-schedule';
 import { validateHighlightTypes } from '../src/typed-highlights';
 import { validReadingPosition as readingPosition } from '../src/reading-position';
 import { nativeDeleteHandler } from '../src/native-delete';
@@ -106,7 +107,7 @@ it('Treasury offers Next article and no Archive, using the currently visible art
   const f = await fixture(['archive', 'archive', 'archive', 'inbox']), before = f.store.snapshot();
   const footer = f.root.querySelector('.r2-article-end');
   expect(f.root.querySelector<HTMLButtonElement>('.r2-article-end-primary:not([hidden])')?.textContent).toBe('Next article');
-  expect([...f.root.querySelectorAll<HTMLButtonElement>('.r2-article-end button')].filter(button => !button.hidden).map(button => button.textContent)).toEqual(['Next article', 'Back to reading list']);
+  expect([...f.root.querySelectorAll<HTMLButtonElement>('.r2-article-end button')].filter(button => !button.hidden).map(button => button.textContent)).toEqual(['Delete & next', 'Next article', 'Back to reading list']);
   for (const next of f.articles.slice(1, 3)) {
     f.button('Next article').click(); await vi.waitFor(() => expect(f.reader.getArticle()?.path).toBe(next.path));
     expect(f.reader.getState().queue).toBe('archive'); expect(f.root.querySelector('.r2-article-end')).toBe(footer);
@@ -577,7 +578,7 @@ async function nativeFinishFixture() {
   const sdk = { Plugin, FileView, TFile, Platform: { isMobile: true, isAndroidApp: false }, Notice: class { constructor(message: string) { notify(message); } }, parseLinktext: (target: string) => ({ path: target, subpath: '' }) };
   const dependencies: Record<string, unknown> = {
     obsidian: sdk, './native-delete': { nativeDeleteHandler }, './reading-position': { validReadingPosition: readingPosition }, './eink-device': einkDevice,
-    './nodes-api': { nodesApi: () => null }, './ui/node-picker': { NodePicker: class {} }, './typed-highlights': { validateHighlightTypes }, './types': { DEFAULT_SETTINGS }, './storage/repository': { ReaderRepository: class { constructor() { return repo; } } },
+    './nodes-api': { nodesApi: () => null }, './ui/node-picker': { NodePicker: class {} }, './typed-highlights': { validateHighlightTypes }, './types': { DEFAULT_SETTINGS }, './feed-schedule': { normalizeFeedSchedule }, './storage/repository': { ReaderRepository: class { constructor() { return repo; } } },
     './obsidian-store': { ObsidianStore: class {} }, './controller': { ReaderController }, './transport': { obsidianGet: vi.fn() }, './ui/app': { ReaderApp },
     './settings': { ReaderSettingsTab: class {} }, './routing': { installArticleRouting: () => ({ dispose() {}, remapPath() {} }) },
     './ui/reading-chrome': { nativeReadingChrome }, './ui/native': { NativeReaderUI }, './ui/native-popups': { nativeHighlightMenu: vi.fn(), nativeLinkMenu: vi.fn() },

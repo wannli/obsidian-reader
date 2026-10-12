@@ -15,6 +15,7 @@ import type { ReadingPosition } from './eink-types';
 import { canTurnEinkPage, watchEinkKeys } from './eink-input';
 import { watchReadingChrome } from './reading-chrome';
 export interface ReaderHost {
+  confirmTrash?(eligible: number, skipped: number): Promise<boolean>;
   nodeForLink?(target: string, source: string): import('../nodes-api').NodeResult | null;
   pickNode?(quote: string, source: string, current: () => boolean, choose: (node: import('../nodes-api').NodeResult, guard: () => void) => Promise<void | (() => void)>, finished?: () => void, preflight?: () => Promise<void>): () => void;
   openNote(path: string, source?: string): void | Promise<void>;
@@ -38,6 +39,8 @@ export interface ReaderHost {
 export type ReaderMount = (() => void | Promise<void>) & {
   getPosition?(): ReadingPosition;
   flushPosition?(): Promise<void>;
+  /** Raw CAS baseline advanced only by this mount's confirmed writes. */
+  getWriteRevision?(): string | undefined;
   remapPosition?(path: string): void;
   restorePosition?(position: ReadingPosition): void;
   revealRange?(range: Range): boolean;
@@ -311,6 +314,7 @@ export function mountReader(target: HTMLElement, initial: Article, controller: R
       else if (element.parentElement !== page) page.append(element);
     },
     flushPosition: persistence.flush,
+    getWriteRevision: () => positionRevision,
     remapPosition: (path: string) => {
       if (positionPath === path) return;
       positionPath = path; positionGeneration = controller.repository.articleGeneration(path);

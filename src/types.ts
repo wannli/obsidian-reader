@@ -38,22 +38,20 @@ export interface Feed {
   title: string;
   url: string;
   enabled: boolean;
-  checked?: string;
-  etag?: string;
-  modified?: string;
   error?: string;
 }
 export interface ReaderSettings {
   typedHighlightTypes: TypedHighlightType[];
   feedsFolder: string;
   pollMinutes: number;
+  feedScheduleVersion: number;
   maxFeedItems: number;
   useDummyContent: boolean;
 }
 export const DEFAULT_SETTINGS: ReaderSettings = {
   typedHighlightTypes: DEFAULT_HIGHLIGHT_TYPES.map(type => ({ ...type })),
   feedsFolder: 'Reading/Wires',
-  pollMinutes: 30, maxFeedItems: 50, useDummyContent: true,
+  pollMinutes: 240, feedScheduleVersion: 1, maxFeedItems: 50, useDummyContent: true,
 };
 export interface ReadGuard { assert(): void; dispose(): void; }
 export interface FileStore {

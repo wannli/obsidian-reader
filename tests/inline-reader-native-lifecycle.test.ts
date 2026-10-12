@@ -1,6 +1,7 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import ts from 'typescript';
+import { normalizeFeedSchedule } from '../src/feed-schedule';
 import { nativeReadingChrome } from '../src/ui/reading-chrome';
 import { validateHighlightTypes } from '../src/typed-highlights';
 import { ReaderApp } from '../src/ui/app';
@@ -45,7 +46,7 @@ async function nativeFixture(status: 'inbox' | 'feed' = 'inbox') {
   const sdk = { Plugin, FileView, TFile, Platform: { isMobile: false, isAndroidApp: false }, setIcon() {}, Notice: class { constructor(message: string) { notices.push(message); } }, parseLinktext: (target: string) => ({ path: target, subpath: '' }) };
   const PluginClass = load('src/main.ts', {
     obsidian: sdk, './native-delete': { nativeDeleteHandler }, './reading-position': { validReadingPosition: readingPosition }, './eink-device': einkDevice,
-    './nodes-api': { nodesApi: () => null }, './ui/node-picker': { NodePicker: class {} }, './typed-highlights': { validateHighlightTypes }, './types': { DEFAULT_SETTINGS }, './storage/repository': { ReaderRepository: class { constructor() { return repo; } } },
+    './nodes-api': { nodesApi: () => null }, './ui/node-picker': { NodePicker: class {} }, './typed-highlights': { validateHighlightTypes }, './types': { DEFAULT_SETTINGS }, './feed-schedule': { normalizeFeedSchedule }, './storage/repository': { ReaderRepository: class { constructor() { return repo; } } },
     './obsidian-store': { ObsidianStore: class {} }, './controller': { ReaderController }, './transport': { obsidianGet: vi.fn() }, './ui/app': { ReaderApp },
     './settings': { ReaderSettingsTab: class {} }, './routing': { installArticleRouting: () => ({ dispose() {}, remapPath() {} }) },
     './ui/reading-chrome': { nativeReadingChrome }, './ui/native': { NativeReaderUI }, './ui/native-popups': { nativeHighlightMenu: vi.fn(), nativeLinkMenu: vi.fn() },

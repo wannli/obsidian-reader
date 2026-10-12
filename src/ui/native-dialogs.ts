@@ -1,5 +1,18 @@
 import { FuzzySuggestModal, Modal, Setting, Notice, type App } from 'obsidian';
 import type { ReaderController } from '../controller';
+export class ReaderTrashConfirmation extends Modal {
+  finished?: () => void;
+  private accepted = false;
+  constructor(app: App, private eligible: number, private skipped: number, private done: (confirmed: boolean) => void) { super(app); }
+  onOpen() {
+    this.setTitle('Delete newer articles?');
+    this.contentEl.createEl('p', { text: `Move ${this.eligible} newer Stream articles to recoverable trash; skip ${this.skipped} protected or changed articles. Only strictly newer publication dates qualify; unknown dates and ties are excluded. Keep the current article and all older articles. Changed articles will be checked again.` });
+    new Setting(this.contentEl)
+      .addButton(button => button.setButtonText('Cancel').onClick(() => this.close()))
+      .addButton(button => button.setButtonText(`Delete ${this.eligible} articles`).setWarning().setDisabled(this.eligible === 0).onClick(() => { this.accepted = true; button.setDisabled(true); this.close(); }));
+  }
+  onClose() { this.contentEl.empty(); this.done(this.accepted); this.finished?.(); }
+}
 export class ReaderPicker<T> extends FuzzySuggestModal<T> {
   finished?: () => void;
   constructor(app: App, placeholder: string, private items: T[], private label: (item: T) => string, private choose: (item: T) => void) { super(app); this.setPlaceholder(placeholder); }

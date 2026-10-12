@@ -10,7 +10,7 @@ import { assertExpectedArticleUrl, StaleArticleWriteError, type AcquisitionWrite
 import { pathGeneration } from './path-generation';
 
 const managedProperties = new Set(['type', 'title', 'url', 'status', 'summary', 'retryAfter', 'error',
-  'feed', 'published', 'topics', 'checked', 'etag', 'modified', 'enabled', 'prefix', 'articleSection',
+  'feed', 'published', 'topics', 'enabled', 'prefix', 'articleSection',
   'sourceLayoutHash', 'sourceLayoutLength']);
 function protectedProperties(note: Note, positionOnly: boolean, propertyOnly?: 'topics' | 'authors'): string {
   return JSON.stringify(Object.fromEntries(Object.entries(note.doc.toJS({ maxAliasCount: 50 })).filter(([key]) => propertyOnly ? key !== propertyOnly : positionOnly

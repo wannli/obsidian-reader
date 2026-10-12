@@ -1,6 +1,7 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import ts from 'typescript';
+import { normalizeFeedSchedule } from '../src/feed-schedule';
 import { nativeReadingChrome } from '../src/ui/reading-chrome';
 import { DEFAULT_SETTINGS } from '../src/types';
 import { validateHighlightTypes } from '../src/typed-highlights';
@@ -69,7 +70,7 @@ async function fixture(existing: boolean, savedData?: Record<string, unknown>) {
   const ReaderPlugin = load('src/main.ts', {
     './native-delete': { nativeDeleteHandler }, './reading-position': { validReadingPosition: readingPosition },
     './eink-device': einkDevice,
-    obsidian: sdk, './nodes-api': { nodesApi: () => null }, './ui/node-picker': { NodePicker: class {} }, './typed-highlights': { validateHighlightTypes }, './types': { DEFAULT_SETTINGS }, './storage/repository': { ReaderRepository: class {} }, './obsidian-store': { ObsidianStore: class {} }, './controller': { ReaderController }, './transport': { obsidianGet: vi.fn() }, './ui/app': { ReaderApp }, './settings': { ReaderSettingsTab: class {} },
+    obsidian: sdk, './nodes-api': { nodesApi: () => null }, './ui/node-picker': { NodePicker: class {} }, './typed-highlights': { validateHighlightTypes }, './types': { DEFAULT_SETTINGS }, './feed-schedule': { normalizeFeedSchedule }, './storage/repository': { ReaderRepository: class {} }, './obsidian-store': { ObsidianStore: class {} }, './controller': { ReaderController }, './transport': { obsidianGet: vi.fn() }, './ui/app': { ReaderApp }, './settings': { ReaderSettingsTab: class {} },
     './routing': { installArticleRouting: (options: unknown) => { route = options; return { dispose() {}, preserveMarkdown() { return () => {}; } }; } }, './ui/reading-chrome': { nativeReadingChrome }, './ui/native': { NativeReaderUI }, './ui/native-popups': { nativeHighlightMenu: vi.fn(), nativeLinkMenu: vi.fn() }, './template-exclusions': { readTemplateExclusions: async () => ({ folders: [], files: [] }) }, './storage/classifier': { isArticleTemplatePath: () => false },
   }).default;
   const files = new Map<string, { path: string; basename: string }>();

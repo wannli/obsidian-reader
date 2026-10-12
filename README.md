@@ -35,6 +35,10 @@ Articles open in Reader by default. Use **Open Markdown** whenever you want to
 edit the source note directly. QuickAdd can also be used for richer capture flows
 with optional titles and comments.
 
+**Delete & next** at the article end sends the current article to recoverable vault trash, then advances (or returns to the list). Failed or unfinished saves block this action.
+
+In Stream only, **Delete newer articles…** targets Stream entries with publication dates strictly newer than the current article, keeping current and older entries open/untouched; unknown dates and ties are excluded. A native confirmation previews eligible/skipped counts; Cancel deletes nothing. The sequential batch rechecks identity, content, navigation and backlinks, skips highlights/topics/authors/comments/protected text and unknown or retired metadata, and reports deleted/skipped counts and failures. New arrivals are excluded. A valid operational `reading_position` alone does not protect an otherwise disposable entry. Automatic expiry and bulk cleanup also treat full-text RSS-linked Stream bodies and publisher footers as disposable: unmarked manual body edits may be deleted. Explicit comments, annotations, authored layouts and incoming links remain protected. All deletion uses recoverable trash, never permanent removal.
+
 ## Markdown files
 
 Reader stores articles and feed subscriptions as normal Markdown notes. Folder
@@ -93,6 +97,16 @@ enabled: true
 
 The `prefix` is used in filenames for imported entries. Set `enabled` to `false`
 to pause a subscription while keeping it in the vault.
+
+Feeds refresh every **4 hours** by default while Obsidian is active; change the
+interval in settings or refresh manually at any time. Poll timing is session-local:
+reopening Reader allows an immediate check; suspended iOS cannot run checks.
+Requests use no HTTP cache validators. Reader no longer reads or writes feed
+`checked`, `modified`, or `etag`; existing properties remain untouched. Successful
+checks do not rewrite feed notes unless clearing a previous error. Old unversioned
+30-minute settings become 240 minutes in memory (explicit old 30-minute choices
+cannot be distinguished); other custom intervals remain. A normal settings save
+records the migration, so subsequently choosing 30 minutes remains supported.
 
 ## Highlights and connections
 

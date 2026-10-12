@@ -1,6 +1,7 @@
 import type { Article, ArticleStatus, ExtractedArticle, Feed, FileStore, NewArticle, ReaderSettings } from '../types';
 import { StorageContext } from './context';
 import { cleanupStream } from './stream-cleanup';
+import { previewStreamTrash, trashStreamCandidate, type StreamTrashCandidate } from './delete-newer';
 import { promoteAnnotatedStream } from './stream-promotion';
 import { validReadingPosition, type ReadingPosition } from '../reading-position';
 import { StaleArticleWriteError, type AcquisitionWriteOptions } from './preconditions';
@@ -35,6 +36,36 @@ export class ReaderRepository {
     invalidatePaths(this.context.store, path);
   }
 
+  /** Explicit reader action only; the adapter must use recoverable trash. */
+  trashArticle(path: string, expectedGeneration: number, expectedRevision: string | undefined, guard: () => void): Promise<void> {
+    return queued(this.context.store, async () => {
+      const context = this.context;
+      const assert = () => {
+        guard(); context.assertWritableNow(path);
+        if (this.articleGeneration(path) !== expectedGeneration) throw new StaleArticleWriteError();
+      };
+      assert();
+      const revision = await context.assertWritable(path);
+      const raw = await context.store.read(path);
+      if (expectedRevision === undefined || raw !== expectedRevision) throw new StaleArticleWriteError();
+      if (!context.isArticle(parseNote(raw), path)) throw new Error('This note is no longer an article.');
+      if (!context.store.trash) throw new Error('Recoverable trash is unavailable.');
+      await context.store.trash(path, { expectedContent: raw, guard: () => { assert(); context.assertRevision(path, revision); } });
+      invalidatePaths(context.store, path);
+    });
+  }
+
+  async observeTrashAnchor(path: string, expected: string | undefined): Promise<import('../types').ReadGuard> {
+    const store = this.context.store;
+    if (!store.observe || expected === undefined) throw new Error('Safe current-article observation is unavailable.');
+    return store.observe(path, raw => { if (raw !== expected) throw new StaleArticleWriteError(); });
+  }
+
+  previewStreamTrash(candidates: StreamTrashCandidate[]) { return queued(this.context.store, () => previewStreamTrash(this.context, candidates)); }
+  trashStreamCandidate(candidate: StreamTrashCandidate, guard: () => void): Promise<boolean> {
+    return queued(this.context.store, () => trashStreamCandidate(this.context, candidate, guard));
+  }
+
   cleanupStream(cutoff: number, busy?: (path: string) => boolean): Promise<{ deleted: string[]; retained: string[] }> {
     return queued(this.context.store, () => cleanupStream(this.context, cutoff, busy));
   }
@@ -47,7 +78,7 @@ export class ReaderRepository {
     const result: Article[] = [], files = await this.context.store.list();
     for (const { path, note } of await this.context.scan()) {
       if (!this.context.isArticle(note, path)) continue;
-      const article = this.context.article(note, path, files);
+      const article = { ...this.context.article(note, path, files), revision: writeNote(note, false) };
       if (article.status) result.push(article);
     }
     return result;

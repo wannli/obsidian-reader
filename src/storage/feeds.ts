@@ -37,7 +37,7 @@ export async function updateFeed(context: StorageContext, path: string, patch: P
   await context.mutate(path, 'feed', note => {
     const feed = feedFrom(note, path);
     if (patch.id !== undefined && patch.id !== feed.id) throw new Error('Feed IDs are immutable');
-    for (const key of ['title', 'prefix', 'enabled', 'checked', 'etag', 'modified', 'error'] as const) {
+    for (const key of ['title', 'prefix', 'enabled', 'error'] as const) {
       if (patch[key] === undefined) continue;
       if (typeof patch[key] !== (key === 'enabled' ? 'boolean' : 'string')) throw new Error('Invalid feed ' + key);
       note.doc.set(key, patch[key]);

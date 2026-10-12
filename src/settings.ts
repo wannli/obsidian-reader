@@ -23,7 +23,7 @@ export class ReaderSettingsTab extends PluginSettingTab {
       if (!clean || /[\r\n]/.test(clean) || clean.split('/').some(p => p === '..' || p === '.') || clean.startsWith('/')) return;
       this.plugin.settings.feedsFolder = clean; await this.plugin.saveSettings();
     }));
-    new Setting(this.containerEl).setName('Refresh interval').setDesc('Minutes between foreground feed checks. No background execution on suspended iOS.').addText(input => input.setValue(String(this.plugin.settings.pollMinutes)).onChange(async value => {
+    new Setting(this.containerEl).setName('Refresh interval').setDesc('Minutes between foreground feed checks (default: 240 / 4 hours). No background execution on suspended iOS.').addText(input => input.setValue(String(this.plugin.settings.pollMinutes)).onChange(async value => {
       const minutes = Number(value); if (!Number.isInteger(minutes) || minutes < 5 || minutes > 1440) return;
       this.plugin.settings.pollMinutes = minutes; await this.plugin.saveSettings();
     }));

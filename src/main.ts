@@ -3,6 +3,7 @@ import { NodePicker } from './ui/node-picker';
 import { nativeDeleteHandler } from './native-delete';
 import { Plugin, FileView, Notice, Platform, TFile, parseLinktext, type App, type Menu, type TAbstractFile, type WorkspaceLeaf, type ViewStateResult } from 'obsidian';
 import { DEFAULT_SETTINGS, type ReaderSettings } from './types';
+import { normalizeFeedSchedule } from './feed-schedule';
 import { ReaderRepository } from './storage/repository';
 import { ObsidianStore } from './obsidian-store';
 import { ReaderController } from './controller';
@@ -86,6 +87,7 @@ class ReaderView extends FileView {
         this.app.workspace.requestSaveLayout();
       },
       notify: message => { new Notice(message); },
+      confirmTrash: (eligible, skipped) => this.plugin.native?.confirmTrash(eligible, skipped) ?? Promise.resolve(false),
       pickArticle: (articles, queue, choose) => this.plugin.native?.pickArticles(articles, queue, choose),
       nodeForLink: (target, source) => {
         const file = this.app.metadataCache.getFirstLinkpathDest(target, source);
@@ -236,7 +238,7 @@ export default class ReaderPlugin extends Plugin {
       if (key === 'typedHighlightTypes') continue; // Retired settings remain inert and round-trip unchanged.
       if (saved && typeof saved[key] === typeof DEFAULT_SETTINGS[key]) (this.settings as unknown as Record<string, unknown>)[key] = saved[key];
     }
-    this.settings.pollMinutes = Math.max(5, Math.min(1440, Number(this.settings.pollMinutes) || 30));
+    Object.assign(this.settings, normalizeFeedSchedule(saved));
     this.settings.maxFeedItems = Math.max(1, Math.min(500, Number(this.settings.maxFeedItems) || 50));
     await this.refreshExclusions().catch(error => { new Notice(error.message); throw error; }); if (this.closing) return;
     const repository = new ReaderRepository(new ObsidianStore(this.app.vault, this.app.workspace), this.settings, () => this.exclusions());

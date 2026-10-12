@@ -1,3 +1,4 @@
+import { knownPublication } from '../storage/article-path';
 import type { Article, ArticleStatus } from '../types';
 import { queueLabel, statusFromPath } from '../reading-layout';
 import type { ReaderController } from '../controller';
@@ -62,7 +63,8 @@ export class ReaderApp {
   private revision = 0;
   private openRevision = 0;
   private navigationRevision = 0;
-  private moving?: { path: string; navigation: number; finish: boolean; paths: Map<string, string>; generations: Map<string, number> };
+  private moving?: { path: string; navigation: number; finish: boolean; trash: boolean; paths: Map<string, string>; generations: Map<string, number> };
+  private deletingNewer = false;
   private recordedRenames = new Map<string, string>();
   constructor(target: HTMLElement, private controller: ReaderController, private host: ReaderHost) {
     this.root.dataset.mobile = String(host.isMobile === true);
@@ -71,6 +73,8 @@ export class ReaderApp {
     // Callbacks read live state, never the article from the first mount.
     this.articleEnd = createArticleEnd({
       archive: () => this.runArticleEnd(() => this.moveArticle('archive', true)),
+      delete: () => this.runArticleEnd(() => this.moveArticle('archive', true, true)),
+      deleteNewer: () => this.runArticleEnd(() => this.deleteNewerArticles()),
       next: () => this.runArticleEnd(() => { this.navigate(1); }),
       library: () => this.runArticleEnd(() => this.openLibrary()),
     });
@@ -172,7 +176,7 @@ export class ReaderApp {
     return true;
   }
   private runArticleEnd(action: () => void | Promise<void>): void | Promise<void> {
-    if (this.disposed || !this.article || this.moving) return;
+    if (this.disposed || !this.article || this.moving || this.deletingNewer) return;
     if (this.stopReader.canLeave?.() === false) {
       this.articleEndError = 'An annotation is unfinished or failed. Wait for saving to finish, or resolve the error above and retry.'; this.syncNavigation(); return;
     }
@@ -186,7 +190,7 @@ export class ReaderApp {
     if (!this.article.status || !this.readingQueue) { this.articleEnd.element.remove(); return; }
     const { articles, index } = this.navigation();
     this.articleEnd.update({ article: this.article, queue: this.readingQueue,
-      next: index >= 0 ? articles[index + 1] : undefined, busy: !!this.moving, error: this.articleEndError });
+      next: index >= 0 ? articles[index + 1] : undefined, busy: !!this.moving || this.deletingNewer, deleting: this.moving?.trash, error: this.articleEndError });
     // The mount owns placement inside the scrolling reading page.
     this.stopReader.setArticleEnd?.(this.articleEnd.element);
   }
@@ -325,11 +329,46 @@ export class ReaderApp {
     }
     return undefined;
   }
-  private async moveArticle(destination: ArticleStatus, finish = false): Promise<void> {
+  private async deleteNewerArticles(): Promise<void> {
+    if (this.deletingNewer || this.moving || this.readingQueue !== 'feed' || !this.article) return;
+    const { articles, index } = this.navigation();
+    if (index < 0) return;
+    const repository = this.controller.repository, path = this.active, token = this.articleToken(), navigation = this.navigationRevision;
+    const displayedRevision = this.article.revision, mount = this.stopReader;
+    let anchor: import('../types').ReadGuard | undefined;
+    const published = Date.parse(knownPublication(this.article.published) ?? '');
+    const candidates = articles.filter(article => article.path !== path && Number.isFinite(published) &&
+      Date.parse(knownPublication(article.published) ?? '') > published).map(article => ({ path: article.path,
+      generation: repository.articleGeneration(article.path), raw: article.revision ?? '' }));
+    const guard = () => {
+      anchor?.assert();
+      if (this.disposed || this.active !== path || this.articleToken() !== token || this.navigationRevision !== navigation ||
+          this.readingQueue !== 'feed' || this.host.shouldFocus?.() === false) throw new Error('Reader changed; remaining articles were kept.');
+    };
+    this.deletingNewer = true; this.syncNavigation();
+    let deleted = 0, skipped = 0;
+    const errors: string[] = [];
+    try {
+      await mount.flushPosition?.(); guard();
+      anchor = await repository.observeTrashAnchor(path, mount.getWriteRevision?.() ?? displayedRevision); guard();
+      const preview = await repository.previewStreamTrash(candidates); guard(); skipped = preview.skipped;
+      if (!this.host.confirmTrash) throw new Error('Native confirmation is unavailable.');
+      if (!await this.host.confirmTrash(preview.candidates.length, skipped)) return;
+      for (const candidate of preview.candidates) {
+        try { guard();
+          if (await repository.trashStreamCandidate(candidate, guard)) deleted++; else { skipped++; errors.push('Changed, referenced or protected article kept.'); } }
+        catch (error) { skipped++; errors.push(messageOf(error)); }
+      }
+      const message = `Deleted ${deleted}; skipped ${skipped}.` + (errors.length ? ' ' + [...new Set(errors)].join(' ') : ' Articles are in recoverable trash.');
+      this.host.notify?.(message + (preview.skipped ? ' Protected, referenced or changed entries were excluded at preview.' : '')); this.articleEndError = message;
+    } finally { anchor?.dispose(); this.deletingNewer = false; this.syncNavigation(); }
+  }
+
+  private async moveArticle(destination: ArticleStatus, finish = false, trash = false): Promise<void> {
     const path = this.active, article = this.article;
-    if (this.disposed || !article?.status || this.moving || article.status === destination) return;
+    if (this.disposed || !article?.status || this.moving || this.deletingNewer || (!trash && article.status === destination)) return;
     const queue = this.readingQueue ?? article.status, before = this.navigation();
-    const operation = { path, navigation: this.navigationRevision, finish,
+    const operation = { path, navigation: this.navigationRevision, finish, trash,
       paths: new Map(before.articles.map(item => [item.path, item.path])),
       generations: new Map(before.articles.map(item => [item.path, this.controller.repository.articleGeneration(item.path)])) }; this.moving = operation;
     const sourceGeneration = this.controller.repository.articleGeneration(path);
@@ -347,8 +386,15 @@ export class ReaderApp {
           this.articleEndError = 'An annotation is unfinished or failed. Wait for saving to finish, or resolve the error above and retry.'; return;
         }
       }
-      const moved = await this.controller.move(path, destination);
-      this.remapPath(path, moved.path); // Also works with adapters without native vault events.
+      if (trash) {
+        await this.controller.repository.trashArticle(path, sourceGeneration, this.stopReader.getWriteRevision?.() ?? article.revision, () => {
+          if (!current() || operation.path !== path || this.host.shouldFocus?.() === false || this.stopReader.canLeave?.() === false)
+            throw new Error('The article changed or an annotation is unfinished. Retry deletion.');
+        });
+      } else {
+        const moved = await this.controller.move(path, destination);
+        this.remapPath(path, moved.path); // Also works with adapters without native vault events.
+      }
       let items: Article[] = [];
       for (let attempt = 0; ; attempt++) {
         const revision = this.revision;
