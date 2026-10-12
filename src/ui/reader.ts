@@ -174,6 +174,9 @@ export function mountReader(target: HTMLElement, initial: Article, controller: R
   async function annotationWrite(key: string, work: () => Promise<Article>): Promise<Article> {
     annotationWrites++;
     try {
+      // A Stream annotation can rename the file before this promise returns.
+      // Persist its position while the current raw revision still applies.
+      if (article.status === 'feed') await persistence.flush();
       const next = await work(), recovered = failedWrites.delete(key);
       if (!disposed) { if (recovered && !failedWrites.size) error.textContent = ''; showSaved(); }
       return next;
@@ -310,7 +313,11 @@ export function mountReader(target: HTMLElement, initial: Article, controller: R
     flushPosition: persistence.flush,
     remapPosition: (path: string) => {
       if (positionPath === path) return;
-      positionPath = path; positionGeneration = controller.repository.articleGeneration(path); persistence.remapped();
+      positionPath = path; positionGeneration = controller.repository.articleGeneration(path);
+      // Promotion already flushed this mount before writing annotation bytes.
+      // Its pre-annotation CAS baseline must not be replayed during native remount.
+      if (article.status === 'feed' && annotationWrites) persistence.restored();
+      else persistence.remapped();
     },
     restorePosition: (position: ReadingPosition) => {
       chrome?.reset();

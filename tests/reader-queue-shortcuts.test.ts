@@ -1,4 +1,3 @@
-import { mark } from './markdown-helpers';
 import { afterEach, expect, it, vi } from 'vitest';
 import { ReaderApp } from '../src/ui/app';
 import { ReaderController } from '../src/controller';
@@ -66,8 +65,8 @@ for (const [origin, destination, key] of [
 ] as const) it(`Shift+${key} moves ${origin} → ${destination}, preserves highlights/backlinks, and advances within the origin`, async () => {
   const f = await fixture([origin, origin]), selected = f.articles[0], next = f.articles[1];
   await f.store.create('Daily/test.md', 'Existing user-owned journal text.');
-  await mark(f.repo, selected.path, { quote: 'Preserved source text.' });
-  await mark(f.repo, selected.path, { quote: 'Another quote.' });
+  // Seed existing Markdown annotations: creating new ones now promotes Stream.
+  await f.store.process(selected.path, raw => raw.replace('Preserved source text. Another quote.', '==Preserved source text.== ==Another quote.=='));
   await f.reader.refresh(); await f.reader.open(selected.path);
   const before = await f.repo.getArticle(selected.path), daily = await f.store.read('Daily/test.md');
   expect(press(key, true).defaultPrevented).toBe(true);

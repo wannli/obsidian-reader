@@ -79,6 +79,8 @@ export interface FileStore {
   inspect?(path: string, read: (current: string) => void): Promise<void>;
   /** Preserve exact bytes; no implicit link updates. Reject stale source, collisions and unsafe editors. */
   rename(from: string, to: string, options: { expectedContent: string; guard?: () => void }): Promise<void>;
+  /** Recoverable removal; reject changed bytes, identity and unsafe editors. */
+  trash?(path: string, options: { expectedContent: string; guard?: () => void }): Promise<void>;
 
 }
 export interface NewArticle { title: string; url: string; status?: ArticleStatus; feed?: string; feedPrefix?: string; published?: string; body?: string; content?: ContentState; extractor?: ArticleExtractor; summary?: string; feedText?: { markdown: string; isExcerpt: boolean }; }

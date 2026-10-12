@@ -6,6 +6,7 @@ import { normalizeUrl } from './ingest/url';
 import { isAcquisitionUrl } from './acquisition-url';
 import { StaleArticleWriteError } from './storage/preconditions';
 import { EditorWriteDeferredError } from './editor-transaction';
+import { expiredStreamItem, streamCutoff } from './stream-age';
 
 export function acquisitionState(article: Article, dummy: boolean): 'ready' | 'protected' | 'pending' {
   // Notes without canonical folder identity remain readable, never auto-acquired.
@@ -58,7 +59,14 @@ export class ReaderController {
     clearTimeout(this.vaultTimer);
     this.vaultTimer = setTimeout(() => {
       this.vaultTimer = undefined;
-      if (!this.stopped) { this.deferredWrites.clear(); this.changed(); this.scheduleAcquisition(); }
+      if (!this.stopped) {
+        this.deferredWrites.clear();
+        void this.run(async () => {
+          const result = await this.repository.promoteAnnotatedStream(path => this.fetching.has(path) || this.manual.has(path));
+          if (result.retained.length) this.message = `Stream promotion deferred for ${result.retained.length} notes; close Markdown editors or review move conflicts.`;
+          else if (this.message.startsWith('Stream promotion deferred for ')) this.message = '';
+        }).catch(error => { this.message = String(error); });
+      }
     }, 180);
   }
   setActive(active: boolean): void {
@@ -207,29 +215,38 @@ export class ReaderController {
   unlink(path: string, id: string): Promise<Article> {
     return this.annotate(path, () => this.repository.deleteLink(path, id));
   }
+  private async pruneStream(cutoff: number): Promise<string[]> {
+    const result = await this.repository.cleanupStream(cutoff, path => this.fetching.has(path) || this.manual.has(path));
+    for (const path of result.deleted) { this.failedUntil.delete(path); this.deferredWrites.delete(path); }
+    return result.retained.length ? [`Stream cleanup retained ${result.retained.length} protected, referenced or busy notes (or failed removals); review them manually.`] : [];
+  }
   subscribeFeed(url: string): Promise<Feed> {
     return this.run(async () => {
       if (!isAcquisitionUrl(url)) throw new Error('Enter a complete HTTP(S) feed URL, not a template placeholder.');
+      const cutoff = streamCutoff();
+      this.message = (await this.pruneStream(cutoff)).join(' · ');
       const canonical = normalizeUrl(url.trim());
       const response = await this.get(canonical);
       if (response.status < 200 || response.status >= 300) throw new Error('Feed returned HTTP ' + response.status);
       const parsed = parseFeed(response.text, canonical);
       const feed = await this.repository.createFeed(parsed.title, canonical);
-      await this.importEntries(feed, parsed.entries);
+      await this.importEntries(feed, parsed.entries, cutoff);
       await this.repository.updateFeed(feed.path, { checked: new Date().toISOString(), error: '', etag: response.headers.etag, modified: response.headers['last-modified'] });
       return feed;
     });
   }
-  private async importEntries(feed: Feed, entries: ReturnType<typeof parseFeed>['entries']): Promise<void> {
-    for (const entry of entries.slice(0, this.settings.maxFeedItems)) {
+  private async importEntries(feed: Feed, entries: ReturnType<typeof parseFeed>['entries'], cutoff: number): Promise<void> {
+    for (const entry of entries.filter(entry => !expiredStreamItem(entry.published, undefined, cutoff)).slice(0, this.settings.maxFeedItems)) {
       await this.repository.createArticle({ title: entry.title, url: entry.url, feed: '[[' + feed.path.replace(/\.md$/, '') + ']]', feedPrefix: feed.prefix?.trim() || feed.title, published: entry.published, summary: entry.summary, status: 'feed', feedText: entry.feedText });
     }
   }
   refreshFeeds(force = true): Promise<void> {
     if (this.polling) return this.polling;
     const task = this.run(async () => {
-      const feeds = await this.repository.listFeeds(); const issues: string[] = [];
+      const cutoff = streamCutoff();
       this.message = 'Refreshing feeds…'; this.changed();
+      const issues = await this.pruneStream(cutoff);
+      const feeds = await this.repository.listFeeds();
       for (const feed of feeds.filter(f => f.enabled && isAcquisitionUrl(f.url))) {
         if (!force && feed.checked && Date.now() - Date.parse(feed.checked) < this.settings.pollMinutes * 60000) continue;
         try {
@@ -239,7 +256,7 @@ export class ReaderController {
           const response = await this.get(feed.url, headers);
           if (response.status !== 304) {
             if (response.status < 200 || response.status >= 300) throw new Error('HTTP ' + response.status);
-            await this.importEntries(feed, parseFeed(response.text, feed.url).entries);
+            await this.importEntries(feed, parseFeed(response.text, feed.url).entries, cutoff);
           }
           await this.repository.updateFeed(feed.path, { checked: new Date().toISOString(), error: '', etag: response.headers.etag ?? feed.etag, modified: response.headers['last-modified'] ?? feed.modified });
         } catch (error) {

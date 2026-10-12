@@ -1,5 +1,7 @@
 import type { Article, ArticleStatus, ExtractedArticle, Feed, FileStore, NewArticle, ReaderSettings } from '../types';
 import { StorageContext } from './context';
+import { cleanupStream } from './stream-cleanup';
+import { promoteAnnotatedStream } from './stream-promotion';
 import { validReadingPosition, type ReadingPosition } from '../reading-position';
 import { StaleArticleWriteError, type AcquisitionWriteOptions } from './preconditions';
 import type { ArticleTemplateExclusionsSource } from './classifier';
@@ -31,6 +33,14 @@ export class ReaderRepository {
 
   async articleDeleted(path: string): Promise<void> {
     invalidatePaths(this.context.store, path);
+  }
+
+  cleanupStream(cutoff: number, busy?: (path: string) => boolean): Promise<{ deleted: string[]; retained: string[] }> {
+    return queued(this.context.store, () => cleanupStream(this.context, cutoff, busy));
+  }
+
+  promoteAnnotatedStream(busy?: (path: string) => boolean): Promise<{ promoted: string[]; retained: string[] }> {
+    return queued(this.context.store, () => promoteAnnotatedStream(this.context, busy));
   }
 
   async listArticles(): Promise<Article[]> {
@@ -66,14 +76,14 @@ export class ReaderRepository {
     const options = { expectedGeneration: this.articleGeneration(path), ...expected };
     return queued(this.context.store, async () => {
       await topics.updateArticleTopics(this.context, path, delta, options);
-      return this.getArticle(path);
+      return this.annotationResult(path, options.expectedGeneration, !!(delta.add?.length || delta.create?.length));
     });
   }
   updateArticleAuthors(path: string, delta: topics.TopicDelta, expected: import('./relationships').RelationshipExpectation = {}): Promise<Article> {
     const options = { expectedGeneration: this.articleGeneration(path), ...expected };
     return queued(this.context.store, async () => {
       await topics.updateArticleAuthors(this.context, path, delta, options);
-      return this.getArticle(path);
+      return this.annotationResult(path, options.expectedGeneration, !!(delta.add?.length || delta.create?.length));
     });
   }
 
@@ -148,18 +158,32 @@ export class ReaderRepository {
     }, requestOptions));
   }
 
+  /** Called inside the storage queue, after a successful authored annotation.
+   * Never bypass the normal move's collision, link-resolution or editor guards. */
+  private async annotationResult(path: string, expectedGeneration: number, promote = true): Promise<Article> {
+    const article = await this.getArticle(path);
+    if (this.articleGeneration(path) !== expectedGeneration) throw new StaleArticleWriteError();
+    if (!promote || article.status !== 'feed') return article;
+    try {
+      const moved = await moveArticle(this.context, path, 'inbox', { expectedGeneration, expectedRevision: article.revision });
+      return this.getArticle(moved.path);
+    } catch (error) {
+      throw new Error('Annotation saved, but could not move Stream article to Inbox. Reopen the article and retry moving it. ' + String(error));
+    }
+  }
+
   addHighlight(path: string, input: highlights.HighlightInput): Promise<Article> {
     const options = { expectedGeneration: this.articleGeneration(path) };
     return queued(this.context.store, async () => {
       await highlights.addHighlight(this.context, path, input, options);
-      return this.getArticle(path);
+      return this.annotationResult(path, options.expectedGeneration);
     });
   }
   setHighlightLink(path: string, id: string, target: string): Promise<Article> {
     const options = { expectedGeneration: this.articleGeneration(path) };
     return queued(this.context.store, async () => {
       await highlightMutations.setHighlightLink(this.context, path, id, target, options);
-      return this.getArticle(path);
+      return this.annotationResult(path, options.expectedGeneration);
     });
   }
   validateNodeHighlight(path: string, id: string): Promise<void> {
@@ -169,7 +193,7 @@ export class ReaderRepository {
     const options = { expectedGeneration: this.articleGeneration(path) };
     return queued(this.context.store, async () => {
       await highlightMutations.setNodeLink(this.context, path, id, node, options, guard);
-      return this.getArticle(path);
+      return this.annotationResult(path, options.expectedGeneration, node !== null);
     });
   }
   deleteHighlight(path: string, id: string, removeLinked = false): Promise<Article> {
@@ -183,14 +207,14 @@ export class ReaderRepository {
     const options = { expectedGeneration: this.articleGeneration(path) };
     return queued(this.context.store, async () => {
       await highlightMutations.addLink(this.context, path, input, target, options);
-      return this.getArticle(path);
+      return this.annotationResult(path, options.expectedGeneration);
     });
   }
   setLink(path: string, id: string, target: string): Promise<Article> {
     const options = { expectedGeneration: this.articleGeneration(path) };
     return queued(this.context.store, async () => {
       await highlightMutations.setLink(this.context, path, id, target, options);
-      return this.getArticle(path);
+      return this.annotationResult(path, options.expectedGeneration);
     });
   }
   deleteLink(path: string, id: string): Promise<Article> {

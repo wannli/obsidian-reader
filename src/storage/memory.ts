@@ -53,5 +53,10 @@ export class MemoryStore implements FileStore {
     this.files.set(to, current);
     this.files.delete(from); this.bumpObservedRevision(from); this.bumpObservedRevision(to);
   }
+  async trash(path: string, options: { expectedContent: string; guard?: () => void }): Promise<void> {
+    safePath(path, true); options.guard?.();
+    if (!this.files.has(path) || this.files.get(path) !== options.expectedContent) throw new Error('Article changed before cleanup');
+    this.files.delete(path); this.bumpObservedRevision(path);
+  }
   snapshot(): Record<string, string> { return Object.fromEntries(this.files); }
 }

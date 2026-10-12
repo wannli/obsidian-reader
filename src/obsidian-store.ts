@@ -134,6 +134,24 @@ export class ObsidianStore implements FileStore {
       await this.vault.rename(file, to);
     } finally { this.moving.delete(from); this.moving.delete(to); }
   }
+  async trash(path: string, options: { expectedContent: string; guard?: () => void }): Promise<void> {
+    safePath(path, true);
+    if (path !== normalizePath(path)) throw new Error('Invalid article path');
+    if (this.moving.has(path) || this.writes.has(path)) throw new EditorWriteDeferredError('Article operation in progress; cleanup deferred.');
+    const file = this.file(path);
+    const assert = () => {
+      options.guard?.();
+      if (file.path !== path || this.vault.getAbstractFileByPath(path) !== file) throw new StaleArticleWriteError();
+      // Even an apparently clean editor may have a queued native save.
+      if (this.views(file).length) throw new EditorWriteDeferredError('Close the article’s Markdown views before Stream cleanup.');
+    };
+    assert(); this.moving.add(path);
+    try {
+      if (await this.vault.read(file) !== options.expectedContent) throw new StaleArticleWriteError();
+      assert();
+      await this.vault.trash(file, false);
+    } finally { this.moving.delete(path); }
+  }
   private views(file: TFile): MarkdownView[] {
     const result: MarkdownView[] = [];
     this.workspace.iterateAllLeaves(leaf => { const view = leaf.view as MarkdownView; if (view.getViewType() === 'markdown' && view.file?.path === file.path) result.push(view); });

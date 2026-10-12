@@ -16,6 +16,18 @@ function matches(target: string, owner: string, paths: readonly string[]): strin
   const key = lower(stem(target.replace(/^\//, '')));
   return paths.filter(path => lower(stem(path)) === key || lower(stem(path)).endsWith('/' + key));
 }
+/** Conservative incoming-reference check before recoverable Stream removal. */
+export function referencesArticle(raw: string, owner: string, target: string, paths: readonly string[]): boolean {
+  for (const match of raw.matchAll(/\[\[([^\]\r\n]+)\]\]/g)) {
+    if (matches(match[1], owner, paths).includes(target)) return true;
+  }
+  for (const match of raw.matchAll(/(?:\]\(\s*|^ {0,3}\[[^\]\r\n]+\]:\s*)<?([^\s)>]+)>?/gm)) {
+    if (matches(match[1], owner, paths).includes(target)) return true;
+  }
+  // Include Markdown destinations and reference-style definitions; false positives retain safely.
+  const decoded = lower(decode(raw));
+  return decoded.includes(lower(target)) || decoded.includes(lower(target.split('/').pop()!));
+}
 /** Prove unchanged ordinary links retain their meaning. Historical journal
  * backlinks are user-owned references, with no generated-copy exemption. */
 export async function assertMoveLinks(store: FileStore, from: string, to: string, source: string, paths: string[]): Promise<void> {

@@ -54,7 +54,7 @@ describe('explicit Defuddle Stream promotion', () => {
     if (['offline', 'protected', 'no-op'].includes(failure)) expect(extract).not.toHaveBeenCalled();
     await controller.shutdown();
   });
-  it.each(['authored', 'highlighted'] as const)('keeps Stream when text becomes %s during extraction', async change => {
+  it.each(['authored', 'highlighted'] as const)('preserves text that becomes %s during extraction', async change => {
     let release!: (result: typeof live) => void;
     const extract = vi.spyOn(ingestion, 'extractArticle').mockImplementation(() => new Promise(resolve => { release = resolve; }));
     const { store, repo, controller, article } = await setup(), move = vi.spyOn(repo, 'setStatus');
@@ -63,8 +63,8 @@ describe('explicit Defuddle Stream promotion', () => {
     if (change === 'authored') await store.process(article.path, text => text + '\nMy authored replacement.\n');
     else { await store.process(article.path, text => text + '\nExisting excerpt.\n'); await mark(repo, article.path, { quote: 'Existing excerpt.' }); }
     release(live); await rejected;
-    const saved = await repo.getArticle(article.path);
-    expect(saved.status).toBe('feed'); expect(saved.body.trim()).toBe(change === 'authored' ? 'My authored replacement.' : '==Existing excerpt.==');
+    const saved = await repo.getArticle(change === 'highlighted' ? article.path.replace('/Stream/', '/Inbox/') : article.path);
+    expect(saved.status).toBe(change === 'highlighted' ? 'inbox' : 'feed'); expect(saved.body.trim()).toBe(change === 'authored' ? 'My authored replacement.' : '==Existing excerpt.==');
     expect(move).not.toHaveBeenCalled(); await controller.shutdown();
   });
   it('does not promote Stream during automatic live acquisition', async () => {

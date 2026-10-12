@@ -22,10 +22,10 @@ function load(path: string, dependencies: Record<string, unknown>) {
   const exports: Record<string, any> = {};
   new Function('require', 'exports', output)((name: string) => { if (!(name in dependencies)) throw new Error('Unexpected dependency: ' + name); return dependencies[name]; }, exports); return exports;
 }
-async function nativeFixture() {
+async function nativeFixture(status: 'inbox' | 'feed' = 'inbox') {
   tracking.position = { marker: '' };
   const store = new MemoryStore(), settings = { ...DEFAULT_SETTINGS }, repo = new ReaderRepository(store, settings);
-  const article = await repo.createArticle({ title: 'A', url: '', body: 'one two three', status: 'inbox' });
+  const article = await repo.createArticle({ title: 'A', url: '', body: 'one two three', status });
   const factories = new Map<string, (leaf: any) => any>(), events = new Map<string, Function>(), notices: string[] = [], timers: number[] = [], leaves: any[] = [];
   class TFile { extension = 'md'; basename = 'A'; constructor(public path: string) {} }
   const file = new TFile(article.path);
@@ -60,6 +60,25 @@ async function nativeFixture() {
   cleanup.push(async () => { timers.forEach(timer => window.clearInterval(timer)); plugin.onunload(); await app[Symbol.for('reader.shutdown')]; });
   return { store, repo, article, plugin, leaf, file, events, notices };
 }
+it('native selection promotes Stream, follows the renamed file and preserves journal links', async () => {
+  vi.useFakeTimers(); const f = await nativeFixture('feed'), reader = f.leaf.view.getReader();
+  const stem = f.article.path.split('/').at(-1)!.replace(/\.md$/, '');
+  const journal = `Authored journal [[${stem}#Heading|reference]]`;
+  await f.store.create('Journal.md', journal);
+  const rename = f.store.rename.bind(f.store);
+  vi.spyOn(f.store, 'rename').mockImplementation(async (from, to, options) => {
+    await rename(from, to, options); f.file.path = to; f.events.get('rename')!(f.file, from);
+  });
+  tracking.position = { marker: 'two three' };
+  const text = f.leaf.view.contentEl.querySelector('.r2-article-body p')!.firstChild!, range = document.createRange();
+  range.setStart(text, 0); range.setEnd(text, 3); document.getSelection()!.removeAllRanges(); document.getSelection()!.addRange(range); document.dispatchEvent(new Event('selectionchange'));
+  await vi.advanceTimersByTimeAsync(1200); await Promise.all([...(f.plugin as any).nativeRenames]);
+  const destination = f.article.path.replace('/Stream/', '/Inbox/');
+  expect(reader.getState().file).toBe(destination); expect(reader.getArticle()?.status).toBe('inbox');
+  expect((await f.repo.getArticle(destination)).body).toBe('==one== two three');
+  await reader.flushPosition(); expect((await f.repo.getArticle(destination)).readingPosition).toEqual({ marker: 'two three' });
+  expect(await f.store.read('Journal.md')).toBe(journal); expect(f.notices).toEqual([]);
+});
 it.each(['none', 'close', 'unload'])('production native rename retains an unsaved position at the destination (immediate action: %s)', async action => {
   const f = await nativeFixture(), destination = 'Reading/Later/A.md';
   const before = parseNote(await f.store.read(f.article.path));

@@ -38,8 +38,8 @@ it('explicit manual fetch preserves unproven full feed text, title, dummy settin
 });
 it('highlighted full-feed content remains protected even from explicit manual fetch', async () => {
   const get = vi.fn<HttpGet>().mockResolvedValue({ status: 200, headers: {}, text: atom('content') }), store = new MemoryStore(), settings = { ...DEFAULT_SETTINGS }, repo = new ReaderRepository(store, settings), controller = new ReaderController(repo, get, settings);
-  await controller.subscribeFeed('https://publisher.test/feed'); const [article] = await repo.listArticles(); await mark(repo, article.path, { quote: 'Genuine publisher text' }); const before = store.snapshot(), extract = vi.spyOn(ingestion, 'extractArticle');
-  await expect(controller.fetchFullText(article.path)).rejects.toThrow(/highlighted/); expect(extract).not.toHaveBeenCalled(); expect(store.snapshot()).toEqual(before); await controller.shutdown();
+  await controller.subscribeFeed('https://publisher.test/feed'); const [article] = await repo.listArticles(); const highlighted = await mark(repo, article.path, { quote: 'Genuine publisher text' }); const before = store.snapshot(), extract = vi.spyOn(ingestion, 'extractArticle');
+  expect(highlighted.status).toBe('inbox'); await expect(controller.fetchFullText(highlighted.path)).rejects.toThrow(/highlighted/); expect(extract).not.toHaveBeenCalled(); expect(store.snapshot()).toEqual(before); await controller.shutdown();
 });
 it('ordinary dummy acquisition preserves a supplied title and filename', async () => {
   const store = new MemoryStore(), settings = { ...DEFAULT_SETTINGS }, repo = new ReaderRepository(store, settings), controller = new ReaderController(repo, vi.fn<HttpGet>(), settings);
