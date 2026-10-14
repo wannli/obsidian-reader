@@ -306,7 +306,7 @@ dialog.reader-image-viewer {
   outline-offset: 2px;
 }
 .reader-highlight-feedback {
-  position: fixed;
+  position: absolute;
   z-index: 10;
   pointer-events: none;
   user-select: none;

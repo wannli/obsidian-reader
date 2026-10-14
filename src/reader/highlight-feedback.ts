@@ -84,16 +84,29 @@ export class HighlightFeedback {
       clearTimeout(this.timer);
       this.status.textContent = '';
       this.status.hidden = false;
-      this.status.style.maxWidth = `${right - left}px`;
+      // Clamp in viewport coordinates, then place inside the leaf-owned absolute
+      // containing block. Containment/transforms can change that block's origin.
+      const parent = (this.status.offsetParent as HTMLElement | null) ?? this.status.parentElement!;
+      const origin = parent.getBoundingClientRect();
+      const scale = (rendered: number, layout: number) => {
+        const ratio = rendered / layout;
+        return Number.isFinite(ratio) && ratio > 0 ? ratio : 1;
+      };
+      const scaleX = scale(origin.width, parent.offsetWidth),
+        scaleY = scale(origin.height, parent.offsetHeight);
+      this.status.style.maxWidth = `${(right - left) / scaleX}px`;
       this.status.textContent = 'Highlight saved';
       const box = this.status.getBoundingClientRect();
       if (box.height > bottom - top) {
         this.dismiss();
         return;
       }
-      this.status.style.left = `${Math.max(left, Math.min(rect.left, right - box.width))}px`;
+      const x = Math.max(left, Math.min(rect.left, right - box.width));
       // Prefer immediately below the final selected line; clamp at the pane/window edge.
-      this.status.style.top = `${Math.max(top, Math.min(rect.bottom + 6, bottom - box.height))}px`;
+      const y = Math.max(top, Math.min(rect.bottom + 6, bottom - box.height));
+      // offsetParent rectangles include borders; absolute offsets start at padding.
+      this.status.style.left = `${(x - origin.left) / scaleX - parent.clientLeft + parent.scrollLeft}px`;
+      this.status.style.top = `${(y - origin.top) / scaleY - parent.clientTop + parent.scrollTop}px`;
       this.timer = setTimeout(() => this.dismiss(), 2200);
     };
   }
