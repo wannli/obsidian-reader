@@ -27,6 +27,7 @@
 - Native Add URL command: extract readable article content and retain its source URL.
 - Offline capture saves the URL immediately; acquisition resumes online while Obsidian is active.
 - Capturing an existing URL opens the existing article rather than making a duplicate.
+- Clicking a web link in Reader offers Save to Inbox, Open link, or Cancel. Saving reuses capture/deduplication and keeps the current article open; internal note links and section anchors retain their normal behavior.
 - RSS/Atom subscriptions automatically import entries into Stream.
 - Save feed-provided content immediately; fetch missing full text on open or move to Inbox/Later.
 - Saved text is available offline; unfetched full text is not guaranteed offline.

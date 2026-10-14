@@ -32,7 +32,11 @@ it('renders ordinary Markdown, inline highlights and wiki-links', () => {
 
 it('resolves protocol-relative publisher links while preserving vault links and anchors', () => {
   const root = document.createElement('article');
-  renderBody('[publisher](//publisher.test/story) [note](Notes/Local.md) [section](#heading)', root, 'https://source.test/article');
+  renderBody(
+    '[publisher](//publisher.test/story) [note](Notes/Local.md) [section](#heading)',
+    root,
+    'https://source.test/article',
+  );
   const [web, note, anchor] = [...root.querySelectorAll('a')];
   expect(web.getAttribute('href')).toBe('https://publisher.test/story');
   expect(web.classList.contains('internal-link')).toBe(false);

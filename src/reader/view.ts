@@ -18,9 +18,9 @@ import {
 } from '../core/annotations';
 import { ReadingQueue } from '../core/catalog';
 import { patchProperties, readingMarker, replaceBody } from '../core/document';
-import { articleInfo, linkPath, queues, text, vaultLink, type Queue } from '../core/model';
+import { articleInfo, linkPath, queueAt, queues, text, vaultLink, type Queue } from '../core/model';
 import { type ArticleStore, type Snapshot } from '../core/store';
-import { choose, chooseTopics } from '../host/dialogs';
+import { choose, chooseTopics, confirmWebLink } from '../host/dialogs';
 import type { Ingestion } from '../host/ingestion';
 import { nodesApi, type NodesApi, type NodeResult } from '../host/nodes';
 import { pickNode } from '../host/node-picker';
@@ -920,7 +920,33 @@ export class ReaderView extends ItemView {
       void this.openLinked(target, event.ctrlKey || event.metaKey).catch((error) =>
         this.error(error),
       );
-    } else if (/^https?:/i.test(href)) window.open(href, '_blank', 'noopener,noreferrer');
+    } else if (/^https?:/i.test(href)) {
+      const signal = this.articleLifetime.signal;
+      confirmWebLink(
+        this.app,
+        href,
+        async (modalSignal) => {
+          const guard = () => {
+            if (signal.aborted || modalSignal.aborted || this.host.signal.aborted || this.stopping)
+              throw new Error('Reader capture was cancelled.');
+          };
+          guard();
+          const file = await this.host.store.capture({ url: href }, new Date(), guard);
+          guard();
+          const snapshot = await this.host.store.read(file.path);
+          guard();
+          const saved =
+            queueAt(snapshot.path, this.host.store.root) === 'Inbox'
+              ? snapshot
+              : await this.host.store.move(snapshot, 'Inbox', guard);
+          guard();
+          // Capture must not open the saved article or replace the browsing context.
+          void this.host.ingestion.acquire(saved.path, true).catch((error) => this.error(error));
+          new Notice('Saved to Inbox.');
+        },
+        [signal, this.host.signal],
+      );
+    }
   }
   private passageMenu(passage: Passage, event: MouseEvent): void {
     if (!this.snapshot) return;
@@ -1083,14 +1109,21 @@ export class ReaderView extends ItemView {
     const source = request.source;
     const stillCurrent = () =>
       this.nodeCreation === request && !request.writing && request.source === source;
-    if (source.file.path !== source.path || this.host.store.vault.file(source.path) !== source.file) {
+    if (
+      source.file.path !== source.path ||
+      this.host.store.vault.file(source.path) !== source.file
+    ) {
       request.controller.abort();
       return;
     }
     try {
       const current = await this.host.store.read(source.path);
-      if (stillCurrent() &&
-        (current.file !== source.file || current.path !== source.path || current.body !== source.body))
+      if (
+        stillCurrent() &&
+        (current.file !== source.file ||
+          current.path !== source.path ||
+          current.body !== source.body)
+      )
         request.controller.abort();
     } catch {
       if (stillCurrent()) request.controller.abort();
@@ -1099,7 +1132,12 @@ export class ReaderView extends ItemView {
   async changed(change: LibraryChange): Promise<void> {
     if (this.stopping || this.lifetime.signal.aborted || this.host.signal.aborted) return;
     const source = this.nodeCreation?.source;
-    if (source && (change.path === source.path || change.path === source.file.path || change.previousPath === source.path)) {
+    if (
+      source &&
+      (change.path === source.path ||
+        change.path === source.file.path ||
+        change.previousPath === source.path)
+    ) {
       if (change.deleted && !this.nodeCreation!.writing) this.nodeCreation!.controller.abort();
       else await this.checkNodeCreation();
     }

@@ -26,6 +26,24 @@ function highlight(raw: string): string {
 }
 
 describe('guarded article operations', () => {
+  it('rechecks capture-modal cancellation immediately before moving a duplicate to Inbox', async () => {
+    const { vault, store, file, snapshot } = await setup();
+    const original = file.path;
+    let cancelled = false;
+    const read = vault.read.bind(vault);
+    vault.read = async (target) => {
+      const raw = await read(target);
+      cancelled = true;
+      return raw;
+    };
+    await expect(
+      store.move(snapshot, 'Inbox', () => {
+        if (cancelled) throw new Error('cancelled');
+      }),
+    ).rejects.toThrow('cancelled');
+    expect(file.path).toBe(original);
+    expect(vault.files.size).toBe(1);
+  });
   it('captures immediately without network and deduplicates simultaneous requests', async () => {
     const vault = new MemoryVault(),
       store = new ArticleStore(vault);

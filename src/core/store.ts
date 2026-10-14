@@ -186,12 +186,21 @@ export class ArticleStore<File extends NoteFile> {
       properties: doc.properties,
     };
   }
-  async move(snapshot: Snapshot<File>, queue: Queue): Promise<Snapshot<File>> {
+  async move(
+    snapshot: Snapshot<File>,
+    queue: Queue,
+    guard: () => void = () => {},
+  ): Promise<Snapshot<File>> {
     // Invalidate at request time, including no-op/failed moves queued behind acquisition.
     this.captures.delete(snapshot.file);
-    return this.writes.run(snapshot.file, () => this.moveNow(snapshot, queue));
+    return this.writes.run(snapshot.file, () => this.moveNow(snapshot, queue, guard));
   }
-  private async moveNow(snapshot: Snapshot<File>, queue: Queue): Promise<Snapshot<File>> {
+  private async moveNow(
+    snapshot: Snapshot<File>,
+    queue: Queue,
+    guard: () => void = () => {},
+  ): Promise<Snapshot<File>> {
+    guard();
     this.captures.delete(snapshot.file);
     this.assert(snapshot.file, snapshot.path);
     if ((await this.vault.read(snapshot.file)) !== snapshot.raw) throw new ChangedNote();
@@ -201,6 +210,7 @@ export class ArticleStore<File extends NoteFile> {
       this.assert(snapshot.file, snapshot.path);
       if ((await this.vault.read(snapshot.file)) !== snapshot.raw) throw new ChangedNote();
       this.assert(snapshot.file, snapshot.path);
+      guard();
       await this.vault.move(snapshot.file, target);
       this.catalog.rename(
         snapshot.path,

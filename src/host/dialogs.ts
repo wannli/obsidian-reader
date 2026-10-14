@@ -101,6 +101,63 @@ export function input(
   signal?.addEventListener('abort', abort, { once: true });
   modal.open();
 }
+export function confirmWebLink(
+  app: App,
+  url: string,
+  save: (signal: AbortSignal) => Promise<void>,
+  signals: AbortSignal[],
+): void {
+  const lifetime = new AbortController();
+  const aborted = () => lifetime.signal.aborted || signals.some((signal) => signal.aborted);
+  class WebLink extends Modal {
+    onOpen(): void {
+      this.setTitle('Save this link?');
+      this.contentEl.createEl('p', { text: url });
+      const error = this.contentEl.createEl('p', { attr: { role: 'alert' } });
+      let pending = false;
+      new Setting(this.contentEl)
+        .addButton((button) => button.setButtonText('Cancel').onClick(() => this.close()))
+        .addButton((button) =>
+          button.setButtonText('Open link').onClick(() => {
+            if (pending || aborted()) return;
+            window.open(url, '_blank', 'noopener,noreferrer');
+            this.close();
+          }),
+        )
+        .addButton((button) =>
+          button
+            .setButtonText('Save to Inbox')
+            .setCta()
+            .onClick(async () => {
+              if (pending || aborted()) return;
+              pending = true;
+              button.setDisabled(true);
+              error.textContent = '';
+              try {
+                await save(lifetime.signal);
+                this.close();
+              } catch (failure) {
+                if (lifetime.signal.aborted) return;
+                error.textContent = failure instanceof Error ? failure.message : String(failure);
+                pending = false;
+                button.setDisabled(false);
+              }
+            }),
+        );
+    }
+    onClose(): void {
+      lifetime.abort();
+      for (const signal of signals) signal.removeEventListener('abort', abort);
+      this.contentEl.empty();
+    }
+  }
+  const modal = new WebLink(app),
+    abort = () => modal.close();
+  if (aborted()) return;
+  for (const signal of signals) signal.addEventListener('abort', abort, { once: true });
+  modal.open();
+}
+
 export function chooseTopics(
   app: App,
   files: TFile[],

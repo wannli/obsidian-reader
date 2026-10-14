@@ -22,6 +22,7 @@ const mocks = vi.hoisted(() => ({
   pickNode: vi.fn(),
   notice: vi.fn(),
   input: vi.fn(),
+  confirmWebLink: vi.fn(),
   menus: [] as Map<string, () => void>[],
   dom: new Map<string, () => void>(),
   renderError: undefined as Error | undefined,
@@ -119,6 +120,7 @@ vi.mock('../src/host/dialogs', () => ({
   choose: mocks.choose,
   chooseTopics: mocks.topics,
   input: mocks.input,
+  confirmWebLink: mocks.confirmWebLink,
 }));
 vi.mock('../src/host/node-picker', () => ({ pickNode: mocks.pickNode }));
 vi.mock('../src/host/settings', () => ({ ReaderSettings: class {}, showFeeds: vi.fn() }));
@@ -887,112 +889,150 @@ describe('Nodes v2 linked creation', () => {
     },
   );
 
-  it.each(['Inbox', 'Stream'] as const)('commits directly before required completion without self-cancellation or a second link (%s)', async queue => {
-    const f = await fixture(),
-      entered = gate(),
-      complete = gate(),
-      order: string[] = [];
-    if (queue === 'Stream') f.probe.snapshot = await f.store.move(await f.store.read(f.article.path), 'Stream');
-    const annotate = vi.spyOn(f.store, 'annotate'), process = f.vault.process.bind(f.vault), move = f.vault.move.bind(f.vault);
-    vi.spyOn(f.vault, 'move').mockImplementation(async (file, path) => {
-      const previousPath = file.path;
-      await move(file, path);
-      await f.view.changed({ path, previousPath });
-    });
-    let requestSignal!: AbortSignal;
-    // Native metadata notifications may be delivered before the write promise resolves.
-    vi.spyOn(f.vault, 'process').mockImplementation(async (file, update) => {
-      const raw = await process(file, update);
-      await f.view.changed({ path: file.path, metadataChanged: true });
-      return raw;
-    });
-    f.api.createNodeForLink = vi.fn(async (options, link) => {
-      expect(options).toMatchObject({ suggestedTitle: 'words', sourcePath: f.article.path });
-      requestSignal = options.signal!;
+  it.each(['Inbox', 'Stream'] as const)(
+    'commits directly before required completion without self-cancellation or a second link (%s)',
+    async (queue) => {
+      const f = await fixture(),
+        entered = gate(),
+        complete = gate(),
+        order: string[] = [];
+      if (queue === 'Stream')
+        f.probe.snapshot = await f.store.move(await f.store.read(f.article.path), 'Stream');
+      const annotate = vi.spyOn(f.store, 'annotate'),
+        process = f.vault.process.bind(f.vault),
+        move = f.vault.move.bind(f.vault);
+      vi.spyOn(f.vault, 'move').mockImplementation(async (file, path) => {
+        const previousPath = file.path;
+        await move(file, path);
+        await f.view.changed({ path, previousPath });
+      });
+      let requestSignal!: AbortSignal;
+      // Native metadata notifications may be delivered before the write promise resolves.
+      vi.spyOn(f.vault, 'process').mockImplementation(async (file, update) => {
+        const raw = await process(file, update);
+        await f.view.changed({ path: file.path, metadataChanged: true });
+        return raw;
+      });
+      f.api.createNodeForLink = vi.fn(async (options, link) => {
+        expect(options).toMatchObject({ suggestedTitle: 'words', sourcePath: f.article.path });
+        requestSignal = options.signal!;
+        expect(requestSignal.aborted).toBe(false);
+        order.push('created');
+        await link(f.node);
+        expect(requestSignal.aborted).toBe(false);
+        order.push('linked');
+        entered.resolve();
+        await complete.promise;
+        order.push('required completion');
+        return f.node;
+      });
+      const creation = menu(f.view, 'Create node…');
+      await entered.promise;
+      expect((await f.store.read(f.article.path)).body).toBe(linkedBody);
+      expect(order).toEqual(['created', 'linked']);
+      expect(f.probe.dialog).toBe(true);
+      expect(f.probe.surface.displayedBody).toBe(linkedBody);
+      await f.view.changed({ path: f.article.path, metadataChanged: true });
+      f.probe.persistPosition('words');
+      await f.probe.positionWrite; // Must not wait for itself through the metadata notification.
       expect(requestSignal.aborted).toBe(false);
-      order.push('created');
-      await link(f.node);
-      expect(requestSignal.aborted).toBe(false);
-      order.push('linked');
-      entered.resolve();
-      await complete.promise;
-      order.push('required completion');
-      return f.node;
-    });
-    const creation = menu(f.view, 'Create node…');
-    await entered.promise;
-    expect((await f.store.read(f.article.path)).body).toBe(linkedBody);
-    expect(order).toEqual(['created', 'linked']);
-    expect(f.probe.dialog).toBe(true);
-    expect(f.probe.surface.displayedBody).toBe(linkedBody);
-    await f.view.changed({ path: f.article.path, metadataChanged: true });
-    f.probe.persistPosition('words');
-    await f.probe.positionWrite; // Must not wait for itself through the metadata notification.
-    expect(requestSignal.aborted).toBe(false);
-    expect((await f.store.read(f.article.path)).properties.reading_position).toBe('words');
-    complete.resolve();
-    await creation;
-    expect(order).toEqual(['created', 'linked', 'required completion']);
-    expect(annotate).toHaveBeenCalledOnce();
-    expect(f.api.createNode).not.toHaveBeenCalled();
-    expect(f.probe.dialog).toBe(false);
-    expect(f.vault.trashed).toEqual([]);
-  }, 1500);
+      expect((await f.store.read(f.article.path)).properties.reading_position).toBe('words');
+      complete.resolve();
+      await creation;
+      expect(order).toEqual(['created', 'linked', 'required completion']);
+      expect(annotate).toHaveBeenCalledOnce();
+      expect(f.api.createNode).not.toHaveBeenCalled();
+      expect(f.probe.dialog).toBe(false);
+      expect(f.vault.trashed).toEqual([]);
+    },
+    1500,
+  );
 
   it.each(['body', 'rename', 'replacement', 'delete', 'type'] as const)(
-    'aborts required completion promptly on an external source %s change after linking', async kind => {
-      const f = await fixture(), linked = gate(), stopped = gate();
+    'aborts required completion promptly on an external source %s change after linking',
+    async (kind) => {
+      const f = await fixture(),
+        linked = gate(),
+        stopped = gate();
       let requestSignal!: AbortSignal;
       f.api.createNodeForLink = async (options, link) => {
         requestSignal = options.signal!;
         requestSignal.addEventListener('abort', () => stopped.resolve(), { once: true });
-        await link(f.node); linked.resolve();
-        await stopped.promise; return null;
+        await link(f.node);
+        linked.resolve();
+        await stopped.promise;
+        return null;
       };
-      const creation = menu(f.view, 'Create node…'); await linked.promise;
+      const creation = menu(f.view, 'Create node…');
+      await linked.promise;
       expect(requestSignal.aborted).toBe(false);
       const oldPath = f.article.path;
-      if (kind === 'body') f.vault.bytes.set(f.article, createDocument({ type: 'article' }, 'External edit'));
-      if (kind === 'type') f.vault.bytes.set(f.article, createDocument({ type: 'note' }, linkedBody));
+      if (kind === 'body')
+        f.vault.bytes.set(f.article, createDocument({ type: 'article' }, 'External edit'));
+      if (kind === 'type')
+        f.vault.bytes.set(f.article, createDocument({ type: 'note' }, linkedBody));
       if (kind === 'rename') await f.vault.move(f.article, 'Reading/Inbox/Renamed.md');
       if (kind === 'replacement') {
         const replacement = Object.setPrototypeOf({ path: oldPath }, TFile.prototype);
-        f.vault.files.set(oldPath, replacement); f.vault.bytes.set(replacement, f.vault.bytes.get(f.article)!);
+        f.vault.files.set(oldPath, replacement);
+        f.vault.bytes.set(replacement, f.vault.bytes.get(f.article)!);
       }
       if (kind === 'delete') f.vault.files.delete(oldPath);
-      await f.view.changed({ path: f.article.path, previousPath: kind === 'rename' ? oldPath : undefined, deleted: kind === 'delete' });
-      expect(requestSignal.aborted).toBe(true); await creation;
-      expect(f.vault.file(f.target.path)).toBe(f.target); expect(f.vault.trashed).toEqual([]);
-    }, 1500,
+      await f.view.changed({
+        path: f.article.path,
+        previousPath: kind === 'rename' ? oldPath : undefined,
+        deleted: kind === 'delete',
+      });
+      expect(requestSignal.aborted).toBe(true);
+      await creation;
+      expect(f.vault.file(f.target.path)).toBe(f.target);
+      expect(f.vault.trashed).toEqual([]);
+    },
+    1500,
   );
 
   it('aborts a pending creation on an external body change before the callback stage', async () => {
-    const f = await fixture(), entered = gate(), stopped = gate();
+    const f = await fixture(),
+      entered = gate(),
+      stopped = gate();
     let requestSignal!: AbortSignal;
-    f.api.createNodeForLink = async options => {
+    f.api.createNodeForLink = async (options) => {
       requestSignal = options.signal!;
       requestSignal.addEventListener('abort', () => stopped.resolve(), { once: true });
-      entered.resolve(); await stopped.promise; return null;
+      entered.resolve();
+      await stopped.promise;
+      return null;
     };
-    const creation = menu(f.view, 'Create node…'); await entered.promise;
+    const creation = menu(f.view, 'Create node…');
+    await entered.promise;
     f.vault.bytes.set(f.article, createDocument({ type: 'article' }, 'External edit'));
     await f.view.changed({ path: f.article.path });
-    expect(requestSignal.aborted).toBe(true); await creation;
+    expect(requestSignal.aborted).toBe(true);
+    await creation;
     expect((await f.store.read(f.article.path)).body).toBe('External edit');
-    expect(f.vault.file(f.target.path)).toBe(f.target); expect(f.vault.trashed).toEqual([]);
+    expect(f.vault.file(f.target.path)).toBe(f.target);
+    expect(f.vault.trashed).toEqual([]);
   }, 1500);
 
   it.each(['open', 'navigate', 'list', 'markdown', 'close', 'unload'] as const)(
-    'aborts required completion before waiting on queued %s work', async action => {
-      const f = await fixture(), next = await f.note('Reading/Inbox/B.md'), linked = gate(), stopped = gate();
+    'aborts required completion before waiting on queued %s work',
+    async (action) => {
+      const f = await fixture(),
+        next = await f.note('Reading/Inbox/B.md'),
+        linked = gate(),
+        stopped = gate();
       f.probe.readingQueue.open([f.article.path, next.path], f.article.path);
       let requestSignal!: AbortSignal;
       f.api.createNodeForLink = async (options, link) => {
         requestSignal = options.signal!;
         requestSignal.addEventListener('abort', () => stopped.resolve(), { once: true });
-        await link(f.node); linked.resolve(); await stopped.promise; return null;
+        await link(f.node);
+        linked.resolve();
+        await stopped.promise;
+        return null;
       };
-      const creation = menu(f.view, 'Create node…'); await linked.promise;
+      const creation = menu(f.view, 'Create node…');
+      await linked.promise;
       let transition: Promise<void> | undefined;
       if (action === 'open') transition = f.view.openArticle(next.path);
       if (action === 'navigate') transition = f.view.navigate(1);
@@ -1001,9 +1041,12 @@ describe('Nodes v2 linked creation', () => {
       if (action === 'close') transition = f.view.onClose();
       if (action === 'unload') f.view.stopForUnload();
       expect(requestSignal.aborted).toBe(true);
-      await creation; await transition;
-      expect(f.vault.file(f.target.path)).toBe(f.target); expect(f.vault.trashed).toEqual([]);
-    }, 1500,
+      await creation;
+      await transition;
+      expect(f.vault.file(f.target.path)).toBe(f.target);
+      expect(f.vault.trashed).toEqual([]);
+    },
+    1500,
   );
 
   it.each(['null', 'cancel', 'reject'] as const)(
@@ -1280,6 +1323,75 @@ describe('safe links and drawing', () => {
     f.probe.clicked({ target: surface.body.querySelector('a'), preventDefault: vi.fn() });
     expect(surface.reveal).toHaveBeenCalledWith(surface.body.querySelector('h2'));
     expect(f.opened.openFile).not.toHaveBeenCalled();
+  });
+});
+
+describe('Reader web-link capture', () => {
+  async function fixture(href = 'https://publisher.test/story') {
+    const f = hostFixture();
+    const article = await f.note('Reading/Inbox/Current.md');
+    await f.view.openArticle(article.path);
+    f.probe.surface.body.innerHTML = `<a href="${href}">publisher</a>`;
+    const event = { target: f.probe.surface.body.querySelector('a'), preventDefault: vi.fn() };
+    f.probe.clicked(event);
+    expect(event.preventDefault).toHaveBeenCalled();
+    return {
+      ...f,
+      article,
+      save: mocks.confirmWebLink.mock.lastCall![2] as (signal: AbortSignal) => Promise<void>,
+    };
+  }
+
+  it('asks before saving and acquires in Inbox without changing the current article', async () => {
+    const f = await fixture('HTTPS://publisher.test/story');
+    expect(mocks.confirmWebLink).toHaveBeenCalledOnce();
+    expect(f.vault.files.size).toBe(1);
+    const surface = f.probe.surface;
+    await f.save(new AbortController().signal);
+    const captured = f.store.catalog.findUrl('https://publisher.test/story')!;
+    expect(captured.path).toMatch(/^Reading\/Inbox\//);
+    expect(f.host.ingestion.acquire).toHaveBeenLastCalledWith(captured.path, true);
+    expect(f.view.file).toBe(f.article);
+    expect(f.probe.surface).toBe(surface);
+    expect(f.opened.openFile).not.toHaveBeenCalled();
+  });
+
+  it('keeps web links inside highlights on the annotation-menu path', async () => {
+    const f = hostFixture();
+    const article = await f.note(
+      'Reading/Inbox/Current.md',
+      '==[passage](https://publisher.test/story)==',
+    );
+    await f.view.openArticle(article.path);
+    f.probe.surface.body.innerHTML =
+      '<mark><a href="https://publisher.test/story">passage</a></mark>';
+    f.probe.clicked({ target: f.probe.surface.body.querySelector('a'), preventDefault: vi.fn() });
+    expect(mocks.confirmWebLink).not.toHaveBeenCalled();
+    expect(mocks.menus).toHaveLength(1);
+  });
+
+  it('deduplicates and retains an existing Stream article in Inbox', async () => {
+    const f = await fixture();
+    const existing = await f.store.capture({
+      url: 'https://publisher.test/story',
+      queue: 'Stream',
+      body: 'authored ==words==',
+    });
+    await f.save(new AbortController().signal);
+    expect(f.vault.files.size).toBe(2);
+    expect(existing.path).toMatch(/^Reading\/Inbox\//);
+    expect((await f.store.read(existing.path)).body).toContain('authored ==words==');
+    expect(f.view.file).toBe(f.article);
+  });
+
+  it.each(['modal', 'navigation', 'unload'])('rejects a stale %s confirmation', async (kind) => {
+    const f = await fixture();
+    const modal = new AbortController();
+    if (kind === 'modal') modal.abort();
+    if (kind === 'navigation') await f.view.readingList();
+    if (kind === 'unload') f.signal.abort();
+    await expect(f.save(modal.signal)).rejects.toThrow('cancelled');
+    expect(f.vault.files.size).toBe(1);
   });
 });
 
