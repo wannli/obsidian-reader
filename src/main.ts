@@ -1,372 +1,704 @@
-import { nodesApi, NODES_UNAVAILABLE } from './nodes-api';
-import { NodePicker } from './ui/node-picker';
-import { nativeDeleteHandler } from './native-delete';
-import { Plugin, FileView, Notice, Platform, TFile, parseLinktext, type App, type Menu, type TAbstractFile, type WorkspaceLeaf, type ViewStateResult } from 'obsidian';
-import { DEFAULT_SETTINGS, type ReaderSettings } from './types';
-import { normalizeFeedSchedule } from './feed-schedule';
-import { ReaderRepository } from './storage/repository';
-import { ObsidianStore } from './obsidian-store';
-import { ReaderController } from './controller';
-import { obsidianGet } from './transport';
-import { ReaderApp } from './ui/app';
-import { ReaderSettingsTab } from './settings';
-import { installArticleRouting, type ArticleRouting } from './routing';
-import type { ReaderState } from './ui/reader-state';
-import { validReadingPosition as validateReadingPosition } from './reading-position';
-import { einkEnabled, normalizeEinkDevice, readEinkDevice, writeEinkDevice, type EinkDeviceSettings } from './eink-device';
-import { NativeReaderUI } from './ui/native';
-import { nativeReadingChrome } from './ui/reading-chrome';
-import { nativeHighlightMenu, nativeLinkMenu } from './ui/native-popups';
-import { readTemplateExclusions } from './template-exclusions';
-import { isArticleTemplatePath, type ArticleTemplateExclusions } from './storage/classifier';
-const VIEW = 'reader';
-const BARRIER = Symbol.for('reader.shutdown');
-const RESUME = Symbol.for('reader.view-resume');
-/** Open only an existing file object: never delegate to create-capable openLinkText. */
-export async function openExistingNote(app: App, target: string, source = ''): Promise<void> {
-  if (!target.trim()) throw new Error('The linked note is missing. No note was created.');
-  const { path, subpath } = parseLinktext(target);
-  const file = path ? app.metadataCache.getFirstLinkpathDest(path, source) : source ? app.vault.getFileByPath(source) : null;
-  if (!file) throw new Error('Linked note does not exist: ' + target + '. No note was created.');
-  const resolvedPath = file.path;
-  const assertCurrent = () => {
-    if (file.path !== resolvedPath || app.vault.getFileByPath(resolvedPath) !== file)
-      throw new Error('The linked note changed or was deleted. Reopen the link; no note was created.');
-  };
-  assertCurrent();
-  const leaf = app.workspace.getLeaf(true);
-  assertCurrent();
-  await leaf.openFile(file, { active: true, ...(subpath ? { eState: { subpath } } : {}) });
-  assertCurrent();
-}
-class ReaderView extends FileView {
-  private reader?: ReaderApp;
-  private chrome?: ReturnType<typeof nativeReadingChrome>;
-  private savedState: ReaderState = {};
-  private stateRevision = 0;
-  private applyingState = false;
-  private appliedState = false;
-  constructor(leaf: WorkspaceLeaf, private plugin: ReaderPlugin) {
-    super(leaf); this.allowNoFile = true; this.savedState = plugin.routeState(leaf) ?? {};
+import {
+  FileView,
+  MarkdownView,
+  Notice,
+  parseLinktext,
+  Platform,
+  Plugin,
+  TFile,
+  type WorkspaceLeaf,
+} from 'obsidian';
+import { hasAnnotations, hasPropertyAnnotations, isAnnotationProperty } from './core/annotations';
+import { type Queue } from './core/model';
+import { defaultFolders, validateFolders, type ReaderFolders } from './core/folders';
+import { SerialWrites } from './core/work';
+import { loadFolders, saveFolderSettings } from './host/folder-settings';
+import { Network } from './host/network';
+import { readDocument } from './core/document';
+import { ArticleStore } from './core/store';
+import { input } from './host/dialogs';
+import { Ingestion } from './host/ingestion';
+import { ReaderSettings, showFeeds } from './host/settings';
+import { ObsidianVault, watchLibrary, type LibraryChange } from './host/vault';
+import { nativeLinkPath, READER_VIEW, ReaderView } from './reader/view';
+
+export default class ReaderPlugin extends Plugin {
+  store!: ArticleStore<TFile>;
+  ingestion!: Ingestion;
+  private lifetime = new AbortController();
+  private unloaded = false;
+  private vault!: ObsidianVault;
+  private network = new Network();
+  private folderSaves = new SerialWrites<string>();
+  private viewWrites = new Set<Promise<unknown>>();
+  private routingEpoch = 0;
+  private sourceLeaves = new Map<WorkspaceLeaf, { file: TFile; transitioning: boolean }>();
+  private attempted = new Set<string>();
+  private promotions = new Map<TFile, boolean>();
+  private promoting = new Set<TFile>();
+  private lastRefresh = 0;
+  private refreshing = false;
+  private referencesReady = false;
+  private referencesRecovered = false;
+  private stopIndex?: () => void;
+  get signal(): AbortSignal {
+    return this.lifetime.signal;
   }
-  getViewType() { return VIEW; }
-  getDisplayText() { return this.reader?.getArticle()?.title || this.file?.basename || 'Reader'; }
-  private refreshTitle() {
-    // FileView's breadcrumb label is separate from the leaf's tab title.
-    // Both hooks are internal on supported Obsidian versions; keep them scoped
-    // to this view and optional rather than changing global native chrome.
-    const titleEl = (this as FileView & { titleEl?: HTMLElement }).titleEl;
-    if (titleEl) titleEl.textContent = this.getDisplayText();
-    (this.leaf as WorkspaceLeaf & { updateHeader?: () => void }).updateHeader?.();
+  get paged(): boolean {
+    try {
+      return localStorage.getItem('obsidian-reader:eink') === '1';
+    } catch {
+      return false;
+    }
   }
-  async onRename(file: TFile): Promise<void> { await super.onRename(file); this.refreshTitle(); }
-  getIcon() { return 'book-open'; }
-  async onOpen() {
-    this.contentEl.addClass('r2-view');
-    this.chrome = nativeReadingChrome(this.contentEl, () => Platform.isMobile && this.app.workspace.activeLeaf === this.leaf);
-    this.reader = new ReaderApp(this.contentEl, this.plugin.controller, {
-      openNote: (path, source) => openExistingNote(this.app, path, source),
-      openMarkdown: path => this.plugin.openMarkdown(this.leaf, path),
-      autoOpen: false, isMobile: Platform.isMobile,
-      setChromeHidden: hidden => this.chrome?.setHidden(hidden),
-      shouldFocus: () => this.app.workspace.activeLeaf === this.leaf,
-      einkEnabled: () => this.plugin.isEinkEnabled(),
-      reversePageButtons: () => this.plugin.einkDevice.reverseButtons,
-      onEinkChange: callback => this.plugin.subscribeEink(callback),
-      onActiveChange: callback => {
-        const event = this.app.workspace.on('active-leaf-change', () => callback());
-        return () => this.app.workspace.offref(event);
+  private views(): ReaderView[] {
+    return this.app.workspace
+      .getLeavesOfType(READER_VIEW)
+      .map((leaf) => leaf.view)
+      .filter((view): view is ReaderView => view instanceof ReaderView);
+  }
+  private notice(error: unknown): void {
+    if (!this.signal.aborted) new Notice(error instanceof Error ? error.message : String(error));
+  }
+  async onload(): Promise<void> {
+    const data = await this.loadData();
+    if (this.unloaded) return;
+    let folders = defaultFolders;
+    let invalid = false;
+    try {
+      folders = loadFolders(data);
+    } catch (error) {
+      invalid = true;
+      this.notice(`Reader is paused until its folder settings are corrected: ${String(error)}`);
+    }
+    this.startFolders(folders);
+    if (invalid) this.stopFolders();
+    this.registerView(READER_VIEW, (leaf) => new ReaderView(leaf, this.readerHost()));
+    const openReadingList = () => {
+      if (!this.signal.aborted) void this.openList().catch((error) => this.notice(error));
+    };
+    this.addRibbonIcon('book-open', 'Reading list', openReadingList);
+    this.addCommand({
+      id: 'open-reader',
+      name: 'Open reading list',
+      callback: openReadingList,
+    });
+    this.registerObsidianProtocolHandler(READER_VIEW, (params) => {
+      // Core Obsidian URI routing selects the vault. Interpret only our view selector.
+      if (params.view === 'list') openReadingList();
+    });
+    this.addCommand({
+      id: 'copy-reading-list-link',
+      name: 'Copy reading-list link',
+      callback: () => this.copyReadingListLink(),
+    });
+    this.addCommand({
+      id: 'open-treasury',
+      name: 'Open Treasury',
+      callback: () => {
+        void this.openList('Treasury').catch((error) => this.notice(error));
       },
-      onStateChange: () => {
-        const state = this.reader?.getState();
-        if (state && (state.file ?? null) !== (this.file?.path ?? null)) {
-          // Let FileView update file events/breadcrumbs as well as identity.
-          void super.setState(state, { history: false }).then(() => this.refreshTitle()).catch(error => new Notice(String(error)));
-        }
-        this.refreshTitle();
-        this.app.workspace.requestSaveLayout();
+    });
+    this.addCommand({ id: 'add-url', name: 'Add URL', callback: () => this.capture() });
+    this.addCommand({ id: 'manage-feeds', name: 'Manage feeds', callback: () => this.feeds() });
+    this.addCommand({
+      id: 'refresh-feeds',
+      name: 'Refresh feeds',
+      callback: () => {
+        void this.tick(true).catch((error) => this.notice(error));
       },
-      notify: message => { new Notice(message); },
-      confirmTrash: (eligible, skipped) => this.plugin.native?.confirmTrash(eligible, skipped) ?? Promise.resolve(false),
-      pickArticle: (articles, queue, choose) => this.plugin.native?.pickArticles(articles, queue, choose),
-      nodeForLink: (target, source) => {
-        const file = this.app.metadataCache.getFirstLinkpathDest(target, source);
-        return file ? nodesApi(this.app)?.getNode(file.path) ?? null : null;
-      },
-      pickNode: (quote, source, current, choose, finished, preflight) => {
-        const api = nodesApi(this.app);
-        if (!api) { new Notice(NODES_UNAVAILABLE); finished?.(); return () => {}; }
-        let active = true;
-        const valid = () => active && current() && nodesApi(this.app) === api;
-        const picker = new NodePicker(this.app, quote, source, valid, async node => {
-          const guard = () => {
-            if (!valid()) throw new Error('Highlight or Nodes changed. Reopen the highlight.');
-            const live = api.getNode(node.path);
-            if (!live || live.type !== node.type || live.color !== node.color) throw new Error('Node or schema changed. Reopen the picker.');
-          };
-          guard(); return choose(node, guard);
-        }, finished, preflight);
-        picker.open(); return () => { active = false; picker.dispose(); };
-      },
-      pickLinkTarget: (quote, choose) => this.plugin.native?.pickLinkTarget(quote, choose),
-      highlightMenu: nativeHighlightMenu(this.app), linkMenu: nativeLinkMenu,
-      visibleOverlays: () => [...this.contentEl.ownerDocument.querySelectorAll<HTMLElement>('.mobile-navbar, .mobile-toolbar')],
+    });
+    for (const [id, name] of [
+      ['move', 'Move article…'],
+      ['topics', 'Edit article topics…'],
+      ['open-markdown', 'Open article as Markdown'],
+    ] as const) {
+      this.addCommand({
+        id,
+        name,
+        checkCallback: (checking) =>
+          this.app.workspace.getActiveViewOfType(ReaderView)?.articleCommand(id, checking) ?? false,
+      });
+    }
+    this.addSettingTab(
+      new ReaderSettings(
+        this.app,
+        this,
+        folders,
+        this.paged,
+        (next) => this.applyFolders(next),
+        (value) => {
+          try {
+            localStorage.setItem('obsidian-reader:eink', value ? '1' : '0');
+          } catch (error) {
+            this.notice(error);
+          }
+        },
+      ),
+    );
+    this.registerEvent(
+      this.app.workspace.on('active-leaf-change', () => {
+        this.syncMobileNavigation();
+        this.pruneSourceLeaves();
+        this.routeArticle();
+      }),
+    );
+    this.syncMobileNavigation();
+    this.registerEvent(
+      this.app.workspace.on('file-open', (file) => {
+        this.syncMobileNavigation();
+        this.pruneSourceLeaves();
+        this.routeArticle(file);
+      }),
+    );
+    this.registerEvent(
+      this.app.workspace.on('layout-change', () => {
+        this.syncMobileNavigation();
+        this.pruneSourceLeaves();
+        for (const file of this.promotions.keys()) void this.promote(file);
+      }),
+    );
+    this.registerDomEvent(document, 'keydown', (event) =>
+      this.app.workspace.getActiveViewOfType(ReaderView)?.key(event),
+    );
+    this.registerDomEvent(window, 'online', () => {
+      this.attempted.clear();
+      void this.tick(true, true).catch((error) => this.notice(error));
+    });
+    this.registerDomEvent(document, 'visibilitychange', () => {
+      if (document.visibilityState === 'visible')
+        void this.tick(false, true).catch((error) => this.notice(error));
+      else this.flushViews();
+    });
+    this.registerDomEvent(window, 'pagehide', () => this.flushViews());
+    this.registerInterval(
+      window.setInterval(() => {
+        void this.tick().catch((error) => this.notice(error));
+      }, 60_000),
+    );
+    this.registerEvent(
+      this.app.metadataCache.on('changed', (file) => {
+        this.referencesReady = false;
+        if (this.app.workspace.getActiveViewOfType(MarkdownView)?.file === file)
+          this.routeArticle(file);
+      }),
+    );
+    this.registerEvent(
+      this.app.metadataCache.on('resolve', (file) => {
+        if (!this.signal.aborted) this.keepReferences(file);
+        if (this.app.workspace.getActiveViewOfType(MarkdownView)?.file === file)
+          this.routeArticle(file);
+      }),
+    );
+    this.registerEvent(
+      this.app.metadataCache.on('resolved', () => {
+        if (this.signal.aborted) return;
+        const first = !this.referencesRecovered;
+        if (first && !this.recoverReferences()) return;
+        this.referencesReady = true;
+        if (first) void this.expire().catch((error) => this.notice(error));
+      }),
+    );
+    this.app.workspace.onLayoutReady(() => {
+      if (this.signal.aborted) return;
+      this.syncMobileNavigation();
+      this.routeArticle();
+      // Late plugin loads may never see the initial resolved event. Complete per-file
+      // metadata lets us reconstruct native references directly, without resolvedLinks.
+      if (!this.referencesRecovered && this.recoverReferences()) this.referencesReady = true;
+      void this.tick(false, true).catch((error) => this.notice(error));
     });
   }
-  // ReaderApp owns rendering; FileView owns the native file identity used for
-  // repeated file opens. Never register .md globally or accept unrelated notes.
-  canAcceptExtension(_extension: string): boolean { return false; }
-  async onLoadFile(_file: TFile): Promise<void> {}
-  async onUnloadFile(_file: TFile): Promise<void> {}
-  getReader() { return this.reader; }
-  remapPosition(from: string, to: string) {
-    const displayed = this.getState().file === from;
-    this.reader?.remapPosition(from, to);
-    if (displayed && this.savedState.file === from) this.savedState = { ...this.savedState, file: to };
+  private readerHost(): ConstructorParameters<typeof ReaderView>[1] {
+    const plugin = this,
+      signal = this.signal;
+    return Object.freeze({
+      app: this.app,
+      store: this.store,
+      ingestion: this.ingestion,
+      signal,
+      get paged() {
+        return plugin.paged;
+      },
+      capture: () => {
+        if (!signal.aborted) plugin.capture();
+      },
+      feeds: () => {
+        if (!signal.aborted) plugin.feeds();
+      },
+      edit: async (view: ReaderView, file: TFile) => {
+        if (!signal.aborted) await plugin.edit(view, file);
+      },
+    });
   }
-  remapPath(from: string, to: string) {
-    const state = this.getState(), displayed = state.file === from || state.file === to;
-    if (displayed) {
-      // The synchronous position handoff may already have published `to`.
-      this.stateRevision++; this.applyingState = false; this.appliedState = true;
-      this.savedState = { ...state, file: to };
-    }
-    // A pending finish also needs renames of its next item. Do not adopt that
-    // item's native/saved identity over the article currently displayed.
-    this.reader?.remapPath(from, to);
-    if (displayed) this.app.workspace.requestSaveLayout();
+  private startFolders(folders: ReaderFolders): void {
+    const signal = this.signal;
+    this.vault = new ObsidianVault(this.app, () => !signal.aborted);
+    this.store = new ArticleStore(this.vault, folders);
+    this.ingestion = new Ingestion(
+      this.store,
+      (message) => {
+        if (!signal.aborted) this.notice(message);
+      },
+      this.network,
+    );
+    this.stopIndex = watchLibrary(this, this.store, (change) => {
+      if (!signal.aborted) this.changed(change);
+    });
   }
-  onPaneMenu(menu: Menu, source: string) { super.onPaneMenu(menu, source); this.plugin.native?.fillMenu(menu, this.reader); }
-  getState(): Record<string, unknown> { return !this.appliedState || this.applyingState ? { ...this.savedState } : { ...this.savedState, ...this.reader?.getState() }; }
-  async setState(state: Record<string, unknown>, result: ViewStateResult): Promise<void> {
-    const revision = ++this.stateRevision, reader = this.reader, guard = this.plugin.routeGuard(this.leaf);
-    const readingPosition = validateReadingPosition(state.readingPosition);
-    this.savedState = { file: typeof state.file === 'string' ? state.file : undefined,
-      readingPosition,
-      queue: ['feed', 'inbox', 'later', 'archive'].includes(String(state.queue)) ? state.queue as ReaderState['queue'] : undefined,
-      subpath: typeof state.subpath === 'string' ? state.subpath : undefined,
-      scrollTop: typeof state.scrollTop === 'number' && Number.isFinite(state.scrollTop) ? Math.max(0, state.scrollTop) : undefined };
-    this.applyingState = true;
+  private stopFolders(): void {
+    this.lifetime.abort();
+    this.routingEpoch++;
+    this.ingestion?.stop();
+    this.stopIndex?.();
+    this.store?.dispose();
+  }
+  private dispatchView<T>(operation: () => Promise<T>): Promise<T> {
+    if (this.signal.aborted) return Promise.reject(new Error('Reader is paused.'));
+    const result = operation();
+    this.viewWrites.add(result);
+    const clear = () => this.viewWrites.delete(result);
+    void result.then(clear, clear);
+    return result;
+  }
+  private applyFolders(candidate: ReaderFolders): Promise<void> {
+    const folders = validateFolders(candidate);
+    return this.folderSaves.run('folders', async () => {
+      const assertLoaded = () => {
+        if (this.unloaded) throw new Error('Reader has stopped.');
+      };
+      assertLoaded();
+      const data = await this.loadData();
+      assertLoaded();
+      await this.saveData(saveFolderSettings(data, folders));
+      assertLoaded();
+      // No candidate path becomes live until the complete group is valid and durable.
+      for (const view of this.views()) view.stopForUnload();
+      this.stopFolders();
+      while (this.viewWrites.size) await Promise.allSettled([...this.viewWrites]);
+      await this.vault.drain();
+      assertLoaded();
+      const cleared = await Promise.allSettled(
+        this.views().map(async (view) => {
+          const leaf = view.leaf;
+          view.stopForUnload();
+          if (leaf.view !== view) return;
+          await leaf.setViewState({ type: 'empty', active: false });
+          const empty = leaf.view;
+          return empty.getViewType() === 'empty' ? { leaf, empty } : undefined;
+        }),
+      );
+      assertLoaded();
+      if (cleared.some((result) => result.status === 'rejected'))
+        throw new Error(
+          'Folders saved, but a Reader tab could not close. Reader is paused; retry Apply folders.',
+        );
+      const reset = cleared.flatMap((result) =>
+        result.status === 'fulfilled' && result.value ? [result.value] : [],
+      );
+      this.attempted = new Set();
+      this.promotions = new Map();
+      this.promoting = new Set();
+      this.lastRefresh = 0;
+      this.refreshing = false;
+      this.referencesReady = this.referencesRecovered = false;
+      this.lifetime = new AbortController();
+      this.startFolders(folders);
+      const signal = this.signal;
+      // Metadata-only reseed above: never recover/acquire/promote or reopen articles here.
+      const reopened = await Promise.allSettled(
+        reset.map(async (entry) => {
+          if (!entry || entry.leaf.view !== entry.empty || signal.aborted) return;
+          let attached = false;
+          this.app.workspace.iterateAllLeaves((leaf) => {
+            if (leaf === entry.leaf) attached = true;
+          });
+          if (attached)
+            await this.dispatchView(() =>
+              entry.leaf.setViewState({ type: READER_VIEW, state: {}, active: false }),
+            );
+        }),
+      );
+      assertLoaded();
+      if (reopened.some((result) => result.status === 'rejected'))
+        this.notice('Folders applied, but a Reader tab could not reopen. Use Open reading list.');
+      this.syncMobileNavigation();
+    });
+  }
+  private routeArticle(opened?: TFile | null): void {
+    const epoch = ++this.routingEpoch,
+      signal = this.signal,
+      store = this.store;
+    if (this.signal.aborted || opened === null) return;
+    const leaf = this.app.workspace.getMostRecentLeaf(),
+      view = this.app.workspace.getActiveViewOfType(MarkdownView),
+      file = view?.file;
+    if (
+      !leaf ||
+      !view ||
+      leaf.view !== view ||
+      !(file instanceof TFile) ||
+      (opened !== undefined && opened !== file) ||
+      file.extension !== 'md' ||
+      this.sourceLeaves.get(leaf)?.file === file
+    )
+      return;
+    const path = file.path,
+      revision = file.stat && { mtime: file.stat.mtime, size: file.stat.size };
+    if (!revision) return;
+    // Public Editor bytes are the only evidence of a clean native buffer. Never
+    // replace a loading/uncertain editor, even when the metadata cache says article.
+    let buffer: string;
     try {
-      if (guard?.() === false) return;
-      // FileView assigns identity synchronously, before its load hook awaits.
-      await super.setState(state, result);
-      if (revision !== this.stateRevision || reader !== this.reader || guard?.() === false) return;
-      if (this.savedState.file) await reader?.open(this.savedState.file, { ...this.savedState, isCurrent: guard }); else await reader?.openDefault();
-      if (revision !== this.stateRevision || reader !== this.reader || guard?.() === false) return;
-    } finally { if (revision === this.stateRevision) { this.applyingState = false; this.appliedState = true; this.app.workspace.requestSaveLayout(); } }
+      buffer = view.editor?.getValue();
+      if (typeof buffer !== 'string') return;
+    } catch {
+      return;
+    }
+    const current = () =>
+      !signal.aborted &&
+      epoch === this.routingEpoch &&
+      this.app.workspace.getMostRecentLeaf() === leaf &&
+      this.app.workspace.getActiveViewOfType(MarkdownView) === view &&
+      leaf.view === view &&
+      view.file === file &&
+      file.path === path &&
+      store.vault.file(path) === file &&
+      file.stat.mtime === revision.mtime &&
+      file.stat.size === revision.size &&
+      this.sourceLeaves.get(leaf)?.file !== file &&
+      !document.querySelector('.modal-container,.menu') &&
+      document.getSelection()?.isCollapsed !== false &&
+      // Inline properties/titles may have uncommitted input outside Editor bytes.
+      (!(document.activeElement instanceof Element) ||
+        !document.activeElement.closest(
+          'input,textarea,select,[contenteditable]:not([contenteditable="false"])',
+        ) ||
+        view.editor?.hasFocus?.() === true) &&
+      view.editor?.getValue() === buffer;
+    void (async () => {
+      const raw = await store.vault.read(file);
+      if (!current() || raw !== buffer || readDocument(raw).properties.type !== 'article') return;
+      // No await between the final intent/buffer check and public dispatch. Do not
+      // request focus: a host transition must not activate a now-background leaf.
+      await this.dispatchView(() =>
+        leaf.setViewState({ type: READER_VIEW, state: { file: path } }),
+      );
+      if (!signal.aborted) this.syncMobileNavigation();
+    })().catch(() => {
+      // Passive routing is optional. Read/parse/editor uncertainty leaves Markdown intact.
+    });
   }
-  disposeReader(): Promise<void> {
-    this.chrome?.dispose(); this.chrome = undefined;
-    this.savedState = this.getState(); this.stateRevision++;
-    const flushed = this.reader?.destroy() ?? Promise.resolve(); this.reader = undefined;
-    return this.plugin.trackReaderDisposal(flushed);
+  private syncMobileNavigation(): void {
+    if (this.signal.aborted) return;
+    document.body.classList.toggle(
+      'reader-mobile-active',
+      Platform.isMobile && !!this.app.workspace.getActiveViewOfType(ReaderView),
+    );
   }
-  async onClose() { await this.disposeReader(); await super.onClose(); }
-}
-export default class ReaderPlugin extends Plugin {
-  settings: ReaderSettings = { ...DEFAULT_SETTINGS };
-  einkDevice: EinkDeviceSettings = normalizeEinkDevice(undefined);
-  readonly supportsEink = Platform.isAndroidApp === true;
-  private einkListeners = new Set<() => void>();
-  controller!: ReaderController;
-  private closing = false;
-  private nativeRenames = new Set<Promise<void>>();
-  private readerDisposals = new Set<Promise<void>>();
-  trackReaderDisposal(write: Promise<void>): Promise<void> {
-    this.readerDisposals.add(write);
-    void write.finally(() => this.readerDisposals.delete(write)).catch(() => {});
-    return write;
+  private pruneSourceLeaves(): void {
+    const open = new Set<WorkspaceLeaf>();
+    this.app.workspace.iterateAllLeaves((leaf) => {
+      open.add(leaf);
+    });
+    for (const [leaf, entry] of this.sourceLeaves) {
+      if (
+        !entry.transitioning &&
+        (!open.has(leaf) || !(leaf.view instanceof MarkdownView) || leaf.view.file !== entry.file)
+      )
+        this.sourceLeaves.delete(leaf);
+    }
   }
-  private routing?: ArticleRouting;
-  native?: NativeReaderUI;
-  private routeChecks = new WeakMap<WorkspaceLeaf, () => boolean>();
-  private routeSeeds = new WeakMap<WorkspaceLeaf, ReaderState>();
-  private resumeStates = new WeakMap<WorkspaceLeaf, ReaderState>();
-  private templateExclusions: ArticleTemplateExclusions = {};
-  private exclusionRefresh?: Promise<void>;
-  private exclusionError?: Error;
-  private exclusions(): ArticleTemplateExclusions { if (this.exclusionError) throw this.exclusionError; return this.templateExclusions; }
-  private refreshExclusions(): Promise<void> {
-    return this.exclusionRefresh ??= readTemplateExclusions(this.app).then(value => { this.templateExclusions = value; this.exclusionError = undefined; }).catch(error => {
-      this.exclusionError = error instanceof Error ? error : new Error('Reader paused: template configuration could not be read safely.');
-      this.controller?.setActive(false); throw this.exclusionError;
-    }).finally(() => { this.exclusionRefresh = undefined; });
+  private flushViews(): void {
+    const signal = this.signal;
+    if (signal.aborted) return;
+    for (const view of this.views())
+      void view.flush().catch((error) => {
+        if (!signal.aborted) this.notice(error);
+      });
   }
-  isEinkEnabled(): boolean { return einkEnabled(this.supportsEink, this.einkDevice); }
-  subscribeEink(callback: () => void): () => void {
-    if (this.closing) return () => {};
-    this.einkListeners.add(callback); return () => { this.einkListeners.delete(callback); };
+  private changed(change: LibraryChange): void {
+    const signal = this.signal;
+    if (signal.aborted) return;
+    for (const view of this.views())
+      void view.changed(change).catch((error) => {
+        if (!signal.aborted) this.notice(error);
+      });
+    const file = this.store.vault.file(change.path);
+    if (!file) return;
+    this.recover(file);
+    if (change.annotations && this.store.catalog.article(file.path)?.queue === 'Stream') {
+      if (!this.promotions.has(file)) this.promotions.set(file, false);
+      void this.promote(file);
+    }
+    this.keepReferences(file);
   }
-  setEinkDevice(settings: EinkDeviceSettings): boolean {
-    if (this.closing || !this.supportsEink) return false;
-    const next = normalizeEinkDevice(settings);
-    if (next.enabled === this.einkDevice.enabled && next.reverseButtons === this.einkDevice.reverseButtons) return true;
-    for (const leaf of this.app.workspace.getLeavesOfType(VIEW)) {
-      if (!(leaf.view instanceof ReaderView)) continue;
-      const article = leaf.view.contentEl.querySelector('.r2-reading-page'), selection = leaf.view.contentEl.ownerDocument.getSelection();
-      if (!article || !selection || selection.isCollapsed) continue;
-      for (let index = 0; index < selection.rangeCount; index++) if (selection.getRangeAt(index).intersectsNode(article)) {
-        new Notice('Clear the selected text in Reader, then retry changing the Boox / e-ink settings.'); return false;
+  private keepReferences(file: TFile, cache = this.app.metadataCache.getFileCache(file)): void {
+    if (!cache) {
+      // A missing public cache must not be mistaken for a complete, link-free note.
+      this.referencesReady = this.referencesRecovered = false;
+      return;
+    }
+    const properties = cache.frontmatter ?? {};
+    if (
+      this.store.catalog.article(file.path)?.queue === 'Stream' &&
+      hasPropertyAnnotations(properties)
+    ) {
+      if (!this.promotions.has(file)) this.promotions.set(file, false);
+      void this.promote(file); // Revalidate the authored properties against current bytes.
+    }
+    // Reader source/state values (especially feed and reading_position) are not
+    // authored backlinks. The same keys on ordinary notes remain native references.
+    const frontmatterLinks = (cache.frontmatterLinks ?? []).filter((link) =>
+      isAnnotationProperty(properties, link.key),
+    );
+    // Keep only native note references, never publisher TOCs, protocol-relative URLs or schemes.
+    for (const link of [...(cache.links ?? []), ...frontmatterLinks]) {
+      if (/^(?:[a-z][\w+.-]*:|\/\/|#)/i.test(link.link.trim())) continue;
+      const wiki = /^!?\[\[/.test(link.original ?? '');
+      const decoded = nativeLinkPath(link.link, !wiki);
+      if (!decoded) continue;
+      const path = parseLinktext(decoded).path;
+      if (!path) continue;
+      const target = this.app.metadataCache.getFirstLinkpathDest(path, file.path);
+      if (target && this.store.catalog.article(target.path)?.queue === 'Stream') {
+        this.promotions.set(target, true);
+        void this.promote(target);
       }
     }
-    const persisted = writeEinkDevice(window, next); this.einkDevice = next;
-    if (!persisted) new Notice('Boox / e-ink settings apply for this session only: device-local storage is unavailable.');
-    for (const callback of [...this.einkListeners]) callback();
+  }
+  private async promote(file: TFile): Promise<void> {
+    if (this.promoting.has(file) || this.signal.aborted) return;
+    if (this.store.catalog.article(file.path)?.queue !== 'Stream') {
+      this.promotions.delete(file);
+      return;
+    }
+    if (this.views().some((view) => view.protects(file) && view.busy)) return;
+    const signal = this.signal,
+      store = this.store,
+      promotions = this.promotions,
+      promoting = this.promoting;
+    promoting.add(file);
+    try {
+      const snapshot = await store.read(file.path);
+      if (signal.aborted) return;
+      if (promotions.get(file) || hasAnnotations(snapshot.body, snapshot.properties))
+        await store.move(snapshot, 'Inbox');
+      promotions.delete(file);
+    } catch {
+      /* A native editor or a concurrent edit can defer the move; retry on layout/save. */
+    } finally {
+      promoting.delete(file);
+    }
+  }
+  private recoverReferences(): boolean {
+    // One complete startup pass over public metadata, never note bodies. A missing
+    // file cache keeps expiry disabled until a later resolved event can complete it.
+    const entries = this.app.vault
+      .getMarkdownFiles()
+      .map((file) => ({ file, cache: this.app.metadataCache.getFileCache(file) }));
+    if (entries.some((entry) => !entry.cache)) {
+      this.referencesReady = this.referencesRecovered = false;
+      return false;
+    }
+    // Aggregated resolvedLinks loses provenance (e.g. #TOC self-links). Resolve the
+    // cached source links themselves, preserving native targets before enabling expiry.
+    for (const { file, cache } of entries) this.keepReferences(file, cache);
+    this.referencesRecovered = true;
     return true;
   }
-  routeGuard(leaf: WorkspaceLeaf) { return this.routeChecks.get(leaf); }
-  routeState(leaf: WorkspaceLeaf) { return this.routeSeeds.get(leaf); }
-  async openMarkdown(leaf: WorkspaceLeaf, path: string): Promise<void> {
-    if (this.closing || !this.app.vault.getFileByPath(path)) throw new Error('Markdown note is unavailable.');
-    const cancel = this.routing?.preserveMarkdown(leaf, path);
-    try { await leaf.setViewState({ type: 'markdown', state: { file: path, mode: 'source' } }); }
-    catch (error) { cancel?.(); throw error; }
+  private expire(): Promise<unknown> {
+    const signal = this.signal,
+      store = this.store,
+      promotions = this.promotions;
+    if (!this.referencesReady || signal.aborted) return Promise.resolve();
+    return store.expire(new Date(), (file) => {
+      if (
+        signal.aborted ||
+        !this.referencesReady ||
+        promotions.has(file) ||
+        this.views().some((view) => view.protects(file))
+      )
+        return true;
+      let open = false;
+      this.app.workspace.iterateAllLeaves((leaf) => {
+        if (leaf.view instanceof FileView && leaf.view.file === file) open = true;
+      });
+      return open;
+    });
   }
-  async onload() {
-    const resumed = (this.app as unknown as Record<symbol, unknown>)[RESUME]; if (resumed instanceof WeakMap) this.resumeStates = resumed;
-    const context = this.app as unknown as Record<symbol, Promise<void> | undefined>;
-    await context[BARRIER];
-    if (this.closing) return;
-    this.einkDevice = readEinkDevice(window);
-    const saved = await this.loadData();
-    if (this.closing) return;
-    if (saved && typeof saved === 'object') for (const [key, value] of Object.entries(saved)) {
-      if (!(key in DEFAULT_SETTINGS) || key === 'typedHighlightTypes') (this.settings as unknown as Record<string, unknown>)[key] = value;
-    }
-    for (const key of Object.keys(DEFAULT_SETTINGS) as (keyof ReaderSettings)[]) {
-      if (key === 'typedHighlightTypes') continue; // Retired settings remain inert and round-trip unchanged.
-      if (saved && typeof saved[key] === typeof DEFAULT_SETTINGS[key]) (this.settings as unknown as Record<string, unknown>)[key] = saved[key];
-    }
-    Object.assign(this.settings, normalizeFeedSchedule(saved));
-    this.settings.maxFeedItems = Math.max(1, Math.min(500, Number(this.settings.maxFeedItems) || 50));
-    await this.refreshExclusions().catch(error => { new Notice(error.message); throw error; }); if (this.closing) return;
-    const repository = new ReaderRepository(new ObsidianStore(this.app.vault, this.app.workspace), this.settings, () => this.exclusions());
-    this.controller = new ReaderController(repository, obsidianGet, this.settings, () => this.refreshExclusions());
-    this.registerView(VIEW, leaf => new ReaderView(leaf, this));
-    this.native = new NativeReaderUI(this, this.controller, () => {
-      const view = this.app.workspace.activeLeaf?.view; return view instanceof ReaderView ? view.getReader() : undefined;
-    }, async () => {
-      const view = await this.openReader(), reader = view?.getReader(); if (!reader) throw new Error('Reader is unavailable.'); return reader;
+  private recover(file: TFile): void {
+    if (
+      this.signal.aborted ||
+      !navigator.onLine ||
+      document.visibilityState !== 'visible' ||
+      this.attempted.has(file.path)
+    )
+      return;
+    const article = this.store.catalog.article(file.path);
+    if (!article?.url || !['Inbox', 'Later'].includes(article.queue ?? '')) return;
+    const cache = this.app.metadataCache.getFileCache(file);
+    if (!cache?.sections || cache.sections.some((section) => section.type !== 'yaml')) return;
+    this.attempted.add(file.path);
+    const signal = this.signal;
+    void this.ingestion.acquire(file.path).catch((error) => {
+      if (!signal.aborted) this.notice(error);
     });
-    this.routing = installArticleRouting({ app: this.app, readerViewType: VIEW, templateExclusions: () => this.exclusions(), onError: error => new Notice(String(error)), openReaderInLeaf: (leaf, request) => {
-      if (this.closing || !request.isCurrent() || isArticleTemplatePath(request.path, this.exclusions())) return;
-      const old = this.resumeStates.get(leaf), previous = old?.file === request.path ? old : undefined; this.resumeStates.delete(leaf);
-      this.routeChecks.set(leaf, request.isCurrent); const state = { ...previous, file: request.path, subpath: request.subpath ?? previous?.subpath }; this.routeSeeds.set(leaf, state);
-      const transition = leaf.setViewState({ type: VIEW, state }, request.ephemeralState);
-      return transition.then(() => { if (!request.isCurrent()) return; }).finally(() => {
-        if (this.routeChecks.get(leaf) === request.isCurrent) { this.routeChecks.delete(leaf); this.routeSeeds.delete(leaf); }
-      });
-    } });
-    this.register(() => this.routing?.dispose());
-    this.addRibbonIcon('list', 'Reading list', () => {
-      void this.openReader().then(view => view?.getReader()?.openLibrary()).catch(error => new Notice(error instanceof Error ? error.message : String(error)));
-    });
-    this.addCommand({ id: 'refresh-feeds', name: 'Refresh feeds', callback: () => { void this.controller.refreshFeeds().catch(e => new Notice(String(e))); } });
-    this.addCommand({ id: 'clean-up-stream', name: 'Clean up Stream', callback: () => { void this.controller.cleanupStream().then(message => new Notice(message)).catch(e => new Notice(String(e))); } });
-    this.addSettingTab(new ReaderSettingsTab(this.app, this));
-    const activate = () => this.controller.setActive(!this.closing && !document.hidden && !this.nativeRenames.size);
-    const reportStorageError = (error: unknown) => {
-      if (this.closing) return;
-      const message = 'Reader note update failed; the source was preserved: ' + String(error);
-      this.controller.message = message; this.controller.changed(); new Notice(message, 0);
-    };
-    const changed = () => {
-      if (this.closing) return; this.controller.setActive(false);
-      void this.refreshExclusions().then(() => { if (!this.closing) { activate(); this.controller.vaultChanged(); } }).catch(error => { this.controller.message = String(error); this.controller.changed(); });
-    };
-    const contentChanged = (file: TAbstractFile) => {
-      if (this.closing) return;
-      if (file instanceof TFile && file.extension.toLowerCase() === 'md') changed();
-    };
-    this.registerEvent(this.app.vault.on('create', contentChanged));
-    this.registerEvent(this.app.vault.on('modify', contentChanged));
-    this.registerEvent(this.app.vault.on('delete', nativeDeleteHandler(this.controller, changed, reportStorageError, () => this.closing)));
-    this.registerEvent(this.app.vault.on('rename', (file, oldPath) => {
-      if (this.closing) return;
-      const files = (file instanceof TFile ? [file] : this.app.vault.getMarkdownFiles().filter(item => item.path.startsWith(file.path + '/')))
-        .filter(item => item.extension.toLowerCase() === 'md');
-      if (!files.length) return;
-      this.controller.setActive(false);
-      // Start every relocation now so all old/new generations are invalidated before awaiting.
-      const updates = files.map(moved => {
-        const from = oldPath + moved.path.slice(file.path.length), to = moved.path;
-        return { from, to, moved, ready: Promise.resolve(this.controller.articleRenamed(from, to)) };
-      });
-      // Generation invalidation above is synchronous. Hand position ownership to
-      // the verified destination before awaiting anything or allowing close/unload.
-      this.app.workspace.iterateAllLeaves(leaf => {
-        if (!(leaf.view instanceof ReaderView)) return;
-        for (const { from, to, moved } of updates) if (this.app.vault.getFileByPath(to) === moved) leaf.view.remapPosition(from, to);
-      });
-      const task = Promise.allSettled(updates.map(async ({ from, to, ready }) => {
-        await ready;
-        if (this.closing) return;
-        this.routing?.remapPath(from, to);
-        this.app.workspace.iterateAllLeaves(leaf => {
-          for (const states of [this.routeSeeds, this.resumeStates]) {
-            const state = states.get(leaf);
-            if (state?.file === from) { states.set(leaf, { ...state, file: to }); this.routeChecks.delete(leaf); }
-          }
-          if (leaf.view instanceof ReaderView) leaf.view.remapPath(from, to);
-        });
-      })).then(results => {
-        for (const result of results) if (result.status === 'rejected') reportStorageError(result.reason);
-      });
-      this.nativeRenames.add(task);
-      void task.finally(() => { this.nativeRenames.delete(task); changed(); }).catch(reportStorageError);
-    }));
-    const editorChanged = () => { if (!this.closing) this.controller.vaultChanged(); };
-    this.registerEvent(this.app.workspace.on('editor-change', editorChanged));
-    this.registerEvent(this.app.workspace.on('layout-change', editorChanged));
-    this.app.workspace.onLayoutReady(() => {
-      if (this.closing) return;
-      this.controller.setOnline(navigator.onLine); activate();
-      if (this.nativeRenames.size) return;
-      void this.controller.refreshFeeds(false).catch(e => { this.controller.message = String(e); this.controller.changed(); });
-    });
-    const foreground = () => {
-      this.controller.setOnline(navigator.onLine); this.controller.setActive(false);
-      if (!document.hidden && !this.closing) void this.refreshExclusions().then(() => {
-        if (document.hidden || this.closing || this.nativeRenames.size) return; activate();
-        return this.controller.refreshFeeds(false);
-      }).catch(e => { this.controller.message = String(e); this.controller.changed(); });
-    };
-    this.registerDomEvent(document, 'visibilitychange', foreground);
-    this.registerDomEvent(window, 'online', foreground);
-    this.registerDomEvent(window, 'offline', () => this.controller.setOnline(false));
-    this.registerInterval(window.setInterval(() => {
-      if (!document.hidden && !this.closing) {
-        void this.refreshExclusions().then(() => {
-          if (this.closing || document.hidden || this.nativeRenames.size) return; activate(); this.controller.scheduleAcquisition(); return this.controller.refreshFeeds(false);
-        }).catch(e => { this.controller.message = String(e); this.controller.changed(); });
+  }
+  private async tick(force = false, recover = false): Promise<void> {
+    const signal = this.signal,
+      ingestion = this.ingestion;
+    if (signal.aborted || document.visibilityState !== 'visible' || this.refreshing) return;
+    if (!this.referencesRecovered && this.recoverReferences()) this.referencesReady = true;
+    if (recover)
+      for (const article of this.store.catalog.values()) {
+        const file = this.store.vault.file(article.path);
+        if (file) this.recover(file);
       }
-    }, 60000));
-  }
-  async openReader(): Promise<ReaderView | undefined> {
-    if (this.closing) return undefined;
-    const active = this.app.workspace.activeLeaf;
-    let leaf = active?.view instanceof ReaderView ? active : this.app.workspace.getLeavesOfType(VIEW)[0];
-    if (!leaf) { leaf = this.app.workspace.getLeaf('tab'); await leaf.setViewState({ type: VIEW, active: true }); }
-    await this.app.workspace.revealLeaf(leaf);
-    if (this.closing || !(leaf.view instanceof ReaderView)) return undefined;
-    this.app.workspace.setActiveLeaf(leaf, { focus: true });
-    const target = leaf.view.contentEl.querySelector<HTMLElement>('.r2-article-title') ?? leaf.view.contentEl.querySelector<HTMLElement>('.r2-app');
-    if (target) { if (!target.hasAttribute('tabindex')) target.tabIndex = -1; target.focus({ preventScroll: true }); }
-    return leaf.view;
-  }
-  async saveSettings() { await this.saveData(this.settings); }
-  onunload() {
-    this.closing = true; this.einkListeners.clear(); this.routing?.dispose(); this.native?.dispose();
-    const restoring: Promise<unknown>[] = []; (this.app as unknown as Record<symbol, unknown>)[RESUME] = this.resumeStates;
-    for (const leaf of this.app.workspace.getLeavesOfType(VIEW)) if (leaf.view instanceof ReaderView) {
-      const state = leaf.view.getState(), file = state.file; this.resumeStates.set(leaf, state); restoring.push(leaf.view.disposeReader());
-      if (typeof file === 'string' && this.app.vault.getFileByPath(file)) restoring.push(leaf.setViewState({ type: 'markdown', state: { file } }));
+    if (!force && Date.now() - this.lastRefresh < 4 * 60 * 60 * 1000) return;
+    this.refreshing = true;
+    this.lastRefresh = Date.now();
+    try {
+      if (navigator.onLine) await ingestion.refreshAll();
+      if (!signal.aborted) await this.expire();
+    } catch (error) {
+      if (!signal.aborted) throw error;
+    } finally {
+      if (!signal.aborted) this.refreshing = false;
     }
-    const context = this.app as unknown as Record<symbol, Promise<void> | undefined>;
-    context[BARRIER] = Promise.allSettled([
-      ...(this.controller ? [this.controller.shutdown()] : []),
-      ...this.nativeRenames, ...this.readerDisposals, ...restoring,
-    ]).then(() => { this.controller?.repository?.disposeStorage(); });
+  }
+  private async copyReadingListLink(): Promise<void> {
+    if (this.signal.aborted) return;
+    try {
+      const clipboard = navigator.clipboard;
+      if (typeof clipboard?.writeText !== 'function') {
+        this.notice('Clipboard is unavailable on this device. Reading-list link was not copied.');
+        return;
+      }
+      const link = `obsidian://${READER_VIEW}?vault=${encodeURIComponent(this.app.vault.getName())}&view=list`;
+      await clipboard.writeText(link);
+      this.notice('Reading-list link copied.');
+    } catch (error) {
+      this.notice(
+        `Could not copy the reading-list link: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+  async openList(queue?: Queue): Promise<ReaderView> {
+    const signal = this.signal;
+    if (signal.aborted) throw new Error('Reader is paused.');
+    const existing = this.app.workspace.getActiveViewOfType(ReaderView);
+    if (existing) {
+      await existing.readingList(queue);
+      if (signal.aborted) throw new Error('Reader settings changed.');
+      return existing;
+    }
+    const leaf = this.app.workspace.getLeaf('tab');
+    await this.dispatchView(() =>
+      leaf.setViewState({ type: READER_VIEW, state: queue ? { queue } : {}, active: true }),
+    );
+    if (signal.aborted) throw new Error('Reader settings changed.');
+    this.syncMobileNavigation();
+    return leaf.view as ReaderView;
+  }
+  capture(): void {
+    const signal = this.signal,
+      store = this.store;
+    if (signal.aborted) return;
+    input(
+      this.app,
+      'Save article',
+      'URL',
+      async (url, modalSignal = signal) => {
+        const active = () => !signal.aborted && !modalSignal.aborted;
+        const guard = () => {
+          if (!active()) throw new Error('Reader capture was cancelled.');
+        };
+        guard();
+        const file = await store.capture({ url }, new Date(), guard);
+        if (!active()) return;
+        let view = this.app.workspace.getActiveViewOfType(ReaderView);
+        let created: WorkspaceLeaf | undefined;
+        if (!view) {
+          const leaf = this.app.workspace.getLeaf('tab');
+          created = leaf;
+          // Do not focus a new tab while asynchronous host view creation is pending.
+          await this.dispatchView(() =>
+            leaf.setViewState({ type: READER_VIEW, state: {}, active: false }),
+          );
+          if (!(leaf.view instanceof ReaderView)) return;
+          view = leaf.view;
+        }
+        if (!active()) {
+          if (created && !view.file) created.detach();
+          return;
+        }
+        await view.openArticle(file.path, false, modalSignal);
+        if (!active()) {
+          if (created && created.view === view && !view.file) created.detach();
+          return;
+        }
+        if (view.leaf.view === view && view.file === file)
+          await this.app.workspace.revealLeaf(view.leaf);
+        // openArticle starts acquisition only after its final cancellation check.
+        // Cancellation cannot roll back a note/native host operation already committed.
+      },
+      signal,
+    );
+  }
+  feeds(): void {
+    if (this.signal.aborted) return;
+    showFeeds(this.app, this.store, this.ingestion, this.signal);
+  }
+  async edit(view: ReaderView, file: TFile): Promise<void> {
+    const signal = this.signal,
+      store = this.store;
+    if (signal.aborted) return;
+    await view.prepareMarkdown();
+    if (
+      signal.aborted ||
+      view.leaf.view !== view ||
+      view.file !== file ||
+      store.vault.file(file.path) !== file
+    )
+      return;
+    const entry = { file, transitioning: true };
+    this.sourceLeaves.set(view.leaf, entry);
+    try {
+      await this.dispatchView(() =>
+        view.leaf.setViewState({
+          type: 'markdown',
+          state: { file: file.path, mode: 'source' },
+          active: true,
+        }),
+      );
+    } finally {
+      entry.transitioning = false;
+      if (!signal.aborted) {
+        this.pruneSourceLeaves();
+        this.syncMobileNavigation();
+      }
+    }
+  }
+  onunload(): void {
+    // Obsidian does not await this hook. Stop writes rather than allow old instances
+    // to finish mutations after Hot Reload. Normal closes/visibility changes drain earlier;
+    // abrupt unload/process termination cannot guarantee the final unsaved selection/position.
+    this.unloaded = true;
+    this.lifetime.abort();
+    this.network.stop();
+    document.body.classList.remove('reader-mobile-active');
+    this.ingestion?.stop();
+    this.stopIndex?.();
+    this.store?.dispose();
+    this.sourceLeaves.clear();
+    for (const view of this.views()) {
+      view.stopForUnload();
+      const file = view.file;
+      if (file && this.store.vault.file(file.path) === file)
+        void view.leaf
+          .setViewState({ type: 'markdown', state: { file: file.path, mode: 'preview' } })
+          .catch(() => {});
+    }
   }
 }

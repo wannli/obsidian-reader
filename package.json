@@ -3,21 +3,26 @@
   "version": "0.4.0",
   "private": true,
   "type": "module",
-  "description": "A Markdown-first RSS and saved-article reader for Obsidian desktop and iOS",
+  "description": "A Markdown-first article and RSS reader for Obsidian desktop, mobile and e-ink",
   "scripts": {
     "build": "node scripts/build.mjs",
-    "dev": "node --watch --watch-preserve-output --watch-path=src --watch-path=manifest.json --watch-path=styles.css scripts/dev.mjs",
+    "dev": "node --watch --watch-preserve-output --watch-path=src --watch-path=manifest.json --watch-path=scripts scripts/dev.mjs",
+    "dev:setup": "npm run build && node scripts/setup-vault.mjs --hot-reload",
     "typecheck": "tsc --noEmit",
+    "format": "prettier --write src tests scripts '*.json' '*.ts' '*.md' 'docs/*.md' '.github/workflows/*.yml'",
+    "format:check": "prettier --check src tests scripts '*.json' '*.ts' '*.md' 'docs/*.md' '.github/workflows/*.yml'",
     "test": "vitest run",
     "test:tooling": "node --test scripts/*.test.mjs",
+    "benchmark:scale": "node scripts/benchmark-scale.mjs",
     "validate:metadata": "node scripts/validate-release.mjs",
     "vault:setup": "node scripts/setup-vault.mjs",
     "vault:update": "node scripts/setup-vault.mjs --update-plugin",
-    "check": "npm run validate:metadata && npm run typecheck && npm test && npm run test:tooling && npm run build"
+    "check": "npm run format:check && npm run validate:metadata && npm run typecheck && npm test && npm run test:tooling && npm run build"
   },
   "dependencies": {
     "defuddle": "0.19.4",
     "dompurify": "3.4.16",
+    "entities": "8.1.0",
     "marked": "^18.1.0",
     "yaml": "^2.8.1"
   },
@@ -26,6 +31,7 @@
     "esbuild": "0.28.2",
     "jsdom": "26.1.0",
     "obsidian": "1.14.4",
+    "prettier": "3.9.10",
     "typescript": "5.9.3",
     "vitest": "5.0.3"
   }

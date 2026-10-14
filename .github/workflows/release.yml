@@ -14,19 +14,23 @@ jobs:
   release:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          node-version: 22
-          cache: npm
+          persist-credentials: false
+
+      - uses: jdx/mise-action@2d8d4cafcbd33be2ea37d2b6f5ad595363d1f1ca # v5.1.1
+        with:
+          persist_github_token: false
 
       - name: Build and verify
         run: |
-          npm ci
-          npm run validate:metadata
-          npm run typecheck
-          npm run build
+          mise exec -- npm ci
+          mise exec -- npm run format:check
+          mise exec -- npm run validate:metadata
+          mise exec -- npm run typecheck
+          mise exec -- npm test
+          mise exec -- npm run test:tooling
+          mise exec -- npm run build
 
       - name: Prepare release
         id: release
@@ -40,7 +44,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          VERSION=$(node -p "JSON.parse(require('fs').readFileSync('dist/manifest.json')).version")
+          VERSION=$(mise exec -- node -p "JSON.parse(require('fs').readFileSync('dist/manifest.json')).version")
           test "$VERSION" = "$TAG"
           test -s dist/main.js
           test -s dist/manifest.json

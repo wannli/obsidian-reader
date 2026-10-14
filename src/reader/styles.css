@@ -1,0 +1,267 @@
+/* Reader content, except the explicitly scoped mobile navigation rule below. */
+/* Obsidian's navigation bar, not the separate mobile formatting toolbar.
+   Selector also used by https://github.com/akifyss/obsidian-border/blob/main/theme.css */
+body.is-mobile.reader-mobile-active .mobile-navbar {
+  display: none !important;
+}
+.view-content.reader-view,
+.reader-view {
+  --reader-controls-clearance: calc(60px + max(8px, env(safe-area-inset-bottom, 0px)));
+  --reader-scrollbar-clearance: 16px;
+  box-sizing: border-box;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  height: 100%;
+  min-height: 0;
+  padding: 12px;
+  overflow: hidden;
+}
+.reader-view *,
+.reader-view *::before,
+.reader-view *::after {
+  animation: none !important;
+  transition: none !important;
+  scroll-behavior: auto !important;
+}
+/* Own only Reader controls. Explicit geometry beats native mobile pills, while
+   colors follow the theme. Article and library actions share this treatment. */
+.reader-view button.reader-icon-button {
+  appearance: none;
+  -webkit-appearance: none;
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px !important;
+  min-width: 44px !important;
+  min-height: 44px !important;
+  height: 44px !important;
+  margin: 0;
+  padding: 10px !important;
+  border-radius: 4px !important;
+  border: 1px solid var(--background-modifier-border) !important;
+  background: var(--background-secondary) !important;
+  color: var(--text-normal) !important;
+  box-shadow: none !important;
+}
+.reader-view button.reader-icon-button.mod-cta {
+  border-color: var(--text-normal) !important;
+  background: var(--background-modifier-hover) !important;
+}
+.reader-view button.reader-icon-button:not(:disabled):hover {
+  background: var(--background-modifier-hover) !important;
+}
+.reader-view button.reader-icon-button:disabled {
+  opacity: 0.45;
+}
+.reader-view .reader-icon-button .svg-icon {
+  width: 18px !important;
+  height: 18px !important;
+  flex-shrink: 0;
+}
+/* Shadow removal must not remove the keyboard focus indicator. */
+.reader-view button.reader-icon-button:focus-visible,
+.reader-view > .reader-list > button.reader-list-item:focus-visible {
+  outline: 2px solid var(--text-normal) !important;
+  outline-offset: -2px;
+}
+/* A small opaque overlay inside this Reader leaf, never a global fixed bar. */
+.reader-view .reader-bottom-controls {
+  position: absolute;
+  z-index: 2;
+  left: 50%;
+  bottom: max(8px, env(safe-area-inset-bottom, 0px));
+  transform: translateX(-50%);
+  display: grid;
+  gap: 4px;
+  width: max-content;
+  max-width: 100%;
+  box-sizing: border-box;
+  padding: 4px;
+  margin: 0;
+  border: 0;
+  border-radius: 6px;
+  background: var(--background-primary);
+  box-shadow: none;
+}
+.reader-toolbar {
+  grid-template-columns: repeat(4, 44px);
+}
+.reader-status {
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+}
+.reader-status:empty {
+  display: none;
+}
+.reader-status button {
+  margin-inline-start: 8px;
+}
+.reader-list {
+  box-sizing: border-box;
+  flex: 1 1 auto;
+  overflow: auto;
+  min-height: 0;
+  scrollbar-gutter: stable;
+  padding-inline-end: var(--reader-scrollbar-clearance);
+  padding-block-end: var(--reader-controls-clearance);
+  scroll-padding-block-end: var(--reader-controls-clearance);
+}
+.reader-view > .reader-list > button.reader-list-item {
+  appearance: none;
+  -webkit-appearance: none;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100% !important;
+  min-height: 44px !important;
+  height: auto !important;
+  max-height: none !important;
+  padding: 10px 4px !important;
+  margin: 0 0 4px;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  color: var(--text-normal) !important;
+  font-size: var(--font-ui-medium);
+  font-weight: normal;
+  line-height: 1.5;
+  text-align: start;
+  white-space: normal !important;
+  overflow-wrap: anywhere;
+  overflow: visible;
+  text-overflow: clip;
+}
+.reader-list-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.reader-row-indicator {
+  display: inline-flex;
+  flex: 0 0 auto;
+  color: var(--text-normal);
+}
+.reader-row-indicator .svg-icon {
+  width: 18px;
+  height: 18px;
+}
+.reader-viewport {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  overflow-anchor: none;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  scroll-padding-block-end: var(--reader-controls-clearance);
+}
+.reader-viewport:not(.reader-paged) .reader-flow {
+  padding-block-end: var(--reader-controls-clearance);
+}
+.reader-article {
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  position: relative;
+  gap: 12px;
+  width: 100%;
+  max-width: none;
+  min-width: 0;
+  min-height: 0;
+  margin-inline: auto;
+}
+.reader-article-title {
+  box-sizing: border-box;
+  margin: 0 0 16px;
+  padding-inline-end: var(--reader-scrollbar-clearance);
+  overflow-wrap: anywhere;
+}
+.reader-article-title[hidden] {
+  display: none;
+}
+.reader-view .reader-document.markdown-rendered {
+  box-sizing: border-box;
+  width: 100%;
+  max-width: none;
+  margin: 0;
+  padding: 0;
+  /* Overlay scrollbars do not necessarily reserve a gutter. Keep text clear,
+     without changing the viewport/column width used by ReadingSurface. */
+  padding-inline-end: var(--reader-scrollbar-clearance);
+  overflow-wrap: anywhere;
+  font-family: var(--font-text);
+  font-size: var(--font-text-size);
+  line-height: var(--line-height-normal);
+  user-select: text;
+  -webkit-user-select: text;
+}
+.reader-document > :first-child {
+  margin-block-start: 0;
+}
+.reader-document img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  object-fit: contain;
+}
+.reader-document pre {
+  max-width: 100%;
+  overflow: auto;
+}
+.reader-document mark {
+  color: inherit;
+  background: var(--text-highlight-bg, rgba(var(--color-yellow-rgb, 224, 172, 0), 0.4));
+}
+.reader-document.reader-highlight-fallback mark {
+  background: rgba(var(--color-yellow-rgb, 224, 172, 0), 0.4);
+}
+.reader-document mark a {
+  color: inherit;
+}
+.reader-node-classes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--size-4-2);
+  color: var(--text-muted);
+}
+.reader-node-class {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--size-2-2);
+}
+.reader-node-class .svg-icon {
+  width: 1em;
+  height: 1em;
+}
+.reader-actions {
+  grid-template-columns: repeat(5, 44px);
+}
+.reader-view .reader-actions > button.reader-icon-button {
+  width: 100% !important;
+}
+.reader-paged {
+  overflow: hidden;
+  /* Reserve actual viewport height: Surface's measured clientHeight and column
+     height stay consistent, and the last page clears the overlay controls. */
+  margin-block-end: var(--reader-controls-clearance);
+}
+.reader-paged .reader-flow {
+  width: 100%;
+}
+.reader-paged img {
+  max-height: calc(var(--reader-page-height, 100vh) - 48px);
+  break-inside: avoid;
+}
+.reader-paged pre,
+.reader-paged table {
+  max-height: calc(var(--reader-page-height, 100vh) - 48px);
+  overflow: auto;
+}
