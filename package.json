@@ -1,6 +1,6 @@
 {
   "name": "obsidian-reader",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "private": true,
   "type": "module",
   "description": "A Markdown-first article and RSS reader for Obsidian desktop, mobile and e-ink",
@@ -27,7 +27,7 @@
     "yaml": "^2.8.1"
   },
   "devDependencies": {
-    "@types/node": "24.19.2",
+    "@types/node": "26.6.4",
     "esbuild": "0.28.2",
     "jsdom": "26.1.0",
     "obsidian": "1.14.4",
