@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.6.0](https://github.com/wannli/obsidian-reader/compare/0.5.0...0.6.0) (2026-10-14)
+
+
+### Added
+
+* **reader:** cap inline images and add tap-to-enlarge ([0574a96](https://github.com/wannli/obsidian-reader/commit/0574a9691e0cc130f38faf90dbb0038d82362a14))
+* **reader:** integrate markdown-first rebuild and native reading features ([178622c](https://github.com/wannli/obsidian-reader/commit/178622c6df1589c9b3c5178a1183cd8672e2f2b1))
+* **reader:** rebuild markdown-first reading workflow ([cebbb0a](https://github.com/wannli/obsidian-reader/commit/cebbb0a9b172834d8d421d7ad8dae9de531e944d))
+* **reader:** rebuild standalone markdown reader ([4268c43](https://github.com/wannli/obsidian-reader/commit/4268c434a22d7c1afa6ab4d8ee012566eccc25ac))
+* **reader:** save clicked web links to inbox ([f844c83](https://github.com/wannli/obsidian-reader/commit/f844c83529507c3149f4d764e600b2430f596c7f))
+* **reader:** show highlight save feedback and article titles ([f82095e](https://github.com/wannli/obsidian-reader/commit/f82095ef0edf3c809c68066136efab7bbe010dd4))
+
+
+### Fixed
+
+* **reader:** anchor highlight save feedback inside its pane ([692bafb](https://github.com/wannli/obsidian-reader/commit/692bafb20ffc4500faefae72a20146a2c217cc60))
+* **reader:** use local publication dates and explicit feed sync ([268b177](https://github.com/wannli/obsidian-reader/commit/268b1773bf36a4a3b72173699027403e70b218c2))
+
 ## [0.5.0](https://github.com/wannli/obsidian-reader/compare/0.4.0...0.5.0) (2026-10-12)
 
 
