@@ -1,0 +1,1203 @@
+import {
+  ItemView,
+  Menu,
+  Notice,
+  parseLinktext,
+  type App,
+  type TFile,
+  type ViewStateResult,
+  type WorkspaceLeaf,
+} from 'obsidian';
+import {
+  addHighlight,
+  changePassage,
+  hasAnnotations,
+  locateSelection,
+  passages,
+  type Passage,
+} from '../core/annotations';
+import { ReadingQueue } from '../core/catalog';
+import { patchProperties, readingMarker, replaceBody } from '../core/document';
+import { articleInfo, linkPath, queues, text, vaultLink, type Queue } from '../core/model';
+import { type ArticleStore, type Snapshot } from '../core/store';
+import { choose, chooseTopics } from '../host/dialogs';
+import type { Ingestion } from '../host/ingestion';
+import { nodesApi, type NodesApi, type NodeResult } from '../host/nodes';
+import { pickNode } from '../host/node-picker';
+import type { LibraryChange } from '../host/vault';
+import { ReadingSurface } from './surface';
+
+export const READER_VIEW = 'obsidian-reader';
+type PendingSelection = {
+  selection: NonNullable<ReturnType<ReadingSurface['selection']>>;
+  body: string;
+};
+type BrowsingContext = { queue: Queue; paths: string[] };
+/** Rendered hrefs are encoded once. Never reinterpret a decoded URI as a vault path. */
+export function nativeLinkPath(value: string, encoded = true): string | undefined {
+  let path: string;
+  try {
+    path = (encoded ? decodeURIComponent(value) : value).trim();
+  } catch {
+    return;
+  }
+  if (/^(?:[a-z][\w+.-]*:|\/\/|#)/i.test(path)) return;
+  path = path.replace(/^\//, '');
+  return path && !/^(?:[a-z][\w+.-]*:|\/\/|#)/i.test(path) ? path : undefined;
+}
+
+/** Unlike openLinkText, this never asks Obsidian to create a missing note. */
+export async function openExistingNote(
+  app: App,
+  target: string,
+  source: string,
+  newLeaf = false,
+): Promise<void> {
+  const safe = nativeLinkPath(target, false);
+  if (!safe) throw new Error('This is not a vault-note link.');
+  const { path, subpath } = parseLinktext(safe);
+  const file = app.metadataCache.getFirstLinkpathDest(path, source);
+  if (!file) throw new Error('The linked note no longer exists. No note was created.');
+  const expected = file.path;
+  const assert = () => {
+    if (file.path !== expected || app.vault.getAbstractFileByPath(expected) !== file)
+      throw new Error('The linked note changed. Reopen the link.');
+  };
+  assert();
+  const leaf = app.workspace.getLeaf(newLeaf);
+  assert();
+  await leaf.openFile(file, { active: true, ...(subpath ? { eState: { subpath } } : {}) });
+}
+
+interface ReaderHost {
+  app: App;
+  store: ArticleStore<TFile>;
+  ingestion: Ingestion;
+  signal: AbortSignal;
+  paged: boolean;
+  capture(): void;
+  feeds(): void;
+  edit(view: ReaderView, file: TFile): Promise<void>;
+}
+export class ReaderView extends ItemView {
+  private queue: Queue = 'Inbox';
+  private readingQueue = new ReadingQueue();
+  private snapshot?: Snapshot<TFile>;
+  private fallbackFile?: TFile;
+  private surface?: ReadingSurface;
+  private toolbar?: HTMLElement;
+  private status?: HTMLElement;
+  private articleTitle?: HTMLElement;
+  private presentationKey = '';
+  private ownDeferred?: { displayed: string; saved: string };
+  private lifetime = new AbortController();
+  private articleLifetime = new AbortController();
+  private nodeCreation?: {
+    controller: AbortController;
+    source: Snapshot<TFile>;
+    writing: boolean;
+  };
+  private generation = 0;
+  private opening = 0;
+  private loadingPath?: string;
+  private listFrame?: number;
+  private selectionTimer?: ReturnType<typeof setTimeout>;
+  private selecting = false;
+  private dialog = false;
+  private automatic?: Passage;
+  private lastSelection = '';
+  private writing?: Promise<unknown>;
+  private positionWrite: Promise<unknown> = Promise.resolve();
+  private operations: Promise<void> = Promise.resolve();
+  private operating = false;
+  private stopping = false;
+  private closing?: Promise<void>;
+  private refreshPending = false;
+  private listLimit = 50;
+  private search = '';
+  constructor(
+    leaf: WorkspaceLeaf,
+    readonly host: ReaderHost,
+  ) {
+    super(leaf);
+    this.navigation = true;
+  }
+  getViewType(): string {
+    return READER_VIEW;
+  }
+  getDisplayText(): string {
+    return this.snapshot
+      ? (articleInfo(this.snapshot.path, this.snapshot.properties, this.host.store.root)?.title ??
+          this.snapshot.file.basename)
+      : (this.fallbackFile?.basename ?? 'Reading list');
+  }
+  getIcon(): string {
+    return 'book-open';
+  }
+  getState(): Record<string, unknown> {
+    return { file: this.file?.path, queue: this.queue };
+  }
+  async setState(state: Record<string, unknown>, result: ViewStateResult): Promise<void> {
+    if (queues.includes(state.queue as Queue)) this.queue = state.queue as Queue;
+    if (typeof state.file === 'string') await this.openArticle(state.file);
+    else await this.readingList();
+    await super.setState(state, result);
+  }
+  async onOpen(): Promise<void> {
+    const doc = this.containerEl.ownerDocument,
+      options = { signal: this.lifetime.signal };
+    doc.addEventListener('selectionchange', () => this.selectionChanged(), options);
+    this.contentEl.addEventListener(
+      'pointerdown',
+      () => {
+        this.selecting = true;
+        clearTimeout(this.selectionTimer);
+      },
+      options,
+    );
+    doc.addEventListener(
+      'pointerup',
+      () => {
+        this.selecting = false;
+        this.selectionChanged();
+      },
+      options,
+    );
+    doc.addEventListener(
+      'pointercancel',
+      () => {
+        this.selecting = false;
+        this.selectionChanged();
+      },
+      options,
+    );
+    doc.addEventListener(
+      'touchend',
+      () => {
+        this.selecting = false;
+        this.selectionChanged();
+      },
+      options,
+    );
+    this.contentEl.addEventListener('click', (event) => this.clicked(event), options);
+    this.showList();
+  }
+  onClose(): Promise<void> {
+    if (this.lifetime.signal.aborted) return Promise.resolve();
+    if (this.closing) return this.closing;
+    const selection = this.surface?.selection(),
+      body = this.surface?.displayedBody;
+    const pending = selection && body !== undefined ? { selection, body } : undefined;
+    this.stopping = true;
+    this.articleLifetime.abort();
+    if (this.listFrame !== undefined) cancelAnimationFrame(this.listFrame);
+    clearTimeout(this.selectionTimer);
+    this.closing = (async () => {
+      try {
+        await this.operations.catch((error) => this.error(error));
+        // Normal tab/source transitions can await this. Host plugin unload cannot.
+        if (!this.host.signal.aborted) {
+          this.selecting = false;
+          this.dialog = false;
+          await this.prepareToLeave(pending);
+        }
+      } catch (error) {
+        this.error(error);
+      } finally {
+        this.disposeReading();
+      }
+    })();
+    return this.closing;
+  }
+  /** Host unload cannot await pending dialogs/I/O; detach UI/listeners immediately. */
+  stopForUnload(): void {
+    this.stopping = true;
+    this.articleLifetime.abort();
+    if (this.listFrame !== undefined) cancelAnimationFrame(this.listFrame);
+    clearTimeout(this.selectionTimer);
+    this.disposeReading();
+  }
+  private disposeReading(): void {
+    if (this.lifetime.signal.aborted) return;
+    this.lifetime.abort();
+    this.generation++;
+    this.surface?.dispose();
+    this.surface = undefined;
+  }
+  private operation(action: () => Promise<void>, scoped = true): Promise<void> {
+    const generation = this.generation;
+    const next = this.operations
+      .catch(() => {})
+      .then(async () => {
+        if (this.stopping || this.host.signal.aborted || (scoped && generation !== this.generation))
+          return;
+        this.operating = true;
+        try {
+          await action();
+        } finally {
+          this.operating = false;
+          if (this.refreshPending && !this.stopping) {
+            this.refreshPending = false;
+            if (this.snapshot)
+              void this.changed({ path: this.snapshot.file.path }).catch((error) =>
+                this.error(error),
+              );
+          }
+        }
+      });
+    this.operations = next;
+    return next;
+  }
+  private current(snapshot: Snapshot<TFile>, generation: number): boolean {
+    return (
+      !this.lifetime.signal.aborted &&
+      !this.host.signal.aborted &&
+      this.generation === generation &&
+      this.snapshot?.file === snapshot.file
+    );
+  }
+  private acceptsSource(
+    snapshot: Snapshot<TFile>,
+    displayed: string | undefined,
+    ownSelection = false,
+  ): boolean {
+    return (
+      displayed !== undefined &&
+      (displayed === snapshot.body ||
+        (ownSelection &&
+          this.ownDeferred?.displayed === displayed &&
+          this.ownDeferred.saved === snapshot.body))
+    );
+  }
+  private assertDisplayed(snapshot: Snapshot<TFile>, ownSelection = false): void {
+    if (!this.acceptsSource(snapshot, this.surface?.displayedBody, ownSelection))
+      throw new Error(
+        'Article text changed while Reader preserved your selection. Clear the selection to show current text, or Open Markdown. No stale edit was saved.',
+      );
+  }
+  private adoptSnapshot(snapshot: Snapshot<TFile>): void {
+    if (this.snapshot?.body !== snapshot.body) {
+      this.automatic = undefined;
+      this.lastSelection = '';
+    }
+    if (this.ownDeferred?.saved !== snapshot.body) this.ownDeferred = undefined;
+    this.snapshot = snapshot;
+  }
+  private syncPresentation(): void {
+    const title = this.getDisplayText();
+    if (this.articleTitle) this.articleTitle.textContent = title;
+    const key = JSON.stringify([this.file?.path, this.queue, title]);
+    if (!this.stopping && !this.host.signal.aborted && key !== this.presentationKey) {
+      this.presentationKey = key;
+      // Public layout persistence; no private leaf/header refresh hooks. The article
+      // title is also visible in our own DOM even if the native tab label refreshes later.
+      this.app.workspace.requestSaveLayout();
+    }
+  }
+  private error(error: unknown): void {
+    if (!this.host.signal.aborted)
+      new Notice(error instanceof Error ? error.message : String(error));
+  }
+  private button(
+    parent: HTMLElement,
+    label: string,
+    action: () => void | Promise<void>,
+  ): HTMLButtonElement {
+    const button = parent.createEl('button', { text: label });
+    button.addEventListener('click', () => {
+      void Promise.resolve()
+        .then(action)
+        .catch((error) => this.error(error));
+    });
+    return button;
+  }
+  private clear(): void {
+    clearTimeout(this.selectionTimer);
+    this.articleLifetime.abort();
+    this.articleLifetime = new AbortController();
+    this.surface?.dispose();
+    this.surface = undefined;
+    this.snapshot = undefined;
+    this.fallbackFile = undefined;
+    this.toolbar = undefined;
+    this.status = undefined;
+    this.articleTitle = undefined;
+    this.automatic = undefined;
+    this.lastSelection = '';
+    this.ownDeferred = undefined;
+    this.contentEl.empty();
+    this.contentEl.addClass('reader-view');
+    this.generation++;
+  }
+  private showFailure(file: TFile, error: unknown): void {
+    this.clear();
+    this.fallbackFile = file;
+    this.articleTitle = this.contentEl.createEl('h1', { cls: 'reader-article-title' });
+    this.syncPresentation();
+    this.contentEl.createEl('h3', { text: 'Cannot display this article' });
+    this.contentEl.createEl('p', {
+      text: error instanceof Error ? error.message : String(error),
+      attr: { role: 'alert' },
+    });
+    this.contentEl.createEl('p', {
+      text: 'Reader will not edit this file in its current state. Open Markdown to inspect it.',
+    });
+    this.button(this.contentEl, 'Open Markdown', () => this.host.edit(this, file));
+    this.button(this.contentEl, 'Retry Reader', () => this.openArticle(file.path));
+    this.button(this.contentEl, 'Back to list', () => this.readingList());
+  }
+  showList(queue = this.queue): void {
+    this.clear();
+    this.snapshot = undefined;
+    this.queue = queue;
+    this.syncPresentation();
+    const tabs = this.contentEl.createDiv({ cls: 'reader-toolbar' });
+    for (const name of queues) {
+      const button = this.button(tabs, name, () => {
+        this.search = '';
+        this.listLimit = 50;
+        this.showList(name);
+      });
+      button.classList.toggle('mod-cta', name === queue);
+    }
+    this.button(tabs, 'Add URL', () => this.host.capture());
+    this.button(tabs, 'Feeds', () => this.host.feeds());
+    const search = this.contentEl.createEl('input', {
+      type: 'search',
+      placeholder: 'Search titles and sources',
+      attr: { 'aria-label': 'Search articles' },
+    });
+    search.value = this.search;
+    const list = this.contentEl.createDiv({ cls: 'reader-list' });
+    const render = () => {
+      list.empty();
+      const rows = this.host.store.catalog.list(queue, this.search, 0, this.listLimit + 1);
+      for (const article of rows.slice(0, this.listLimit)) {
+        const button = this.button(list, article.title, () => this.openArticle(article.path, true));
+        button.addClass('reader-list-item');
+        button.createEl('small', {
+          text: article.url ? new URL(article.url).hostname : 'Local article',
+        });
+      }
+      if (!rows.length) list.createEl('p', { text: 'No articles in this queue.' });
+      if (rows.length > this.listLimit)
+        this.button(list, 'Show more', () => {
+          this.listLimit += 50;
+          render();
+        });
+    };
+    search.addEventListener('input', () => {
+      this.search = search.value;
+      this.listLimit = 50;
+      render();
+    });
+    render();
+  }
+  openArticle(path: string, fromList = false, signal?: AbortSignal): Promise<void> {
+    if (!signal?.aborted) this.nodeCreation?.controller.abort();
+    // Snapshot every matching result at the click, not just the rendered first 50.
+    const browsing = fromList
+      ? {
+          queue: this.queue,
+          paths: this.host.store.catalog
+            .list(this.queue, this.search, 0, this.host.store.catalog.size)
+            .map((article) => article.path),
+        }
+      : undefined;
+    return this.operation(() => this.openArticleNow(path, browsing, signal), false);
+  }
+  private async openArticleNow(
+    path: string,
+    browsing?: BrowsingContext,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    if (signal?.aborted) return;
+    const request = ++this.opening;
+    this.loadingPath = path;
+    let token: number | undefined,
+      targetFile = this.host.store.vault.file(path);
+    try {
+      await this.prepareToLeave();
+      if (this.stopping || this.host.signal.aborted || signal?.aborted || request !== this.opening)
+        return;
+      token = this.generation;
+      let snapshot = await this.host.store.read(path);
+      if (
+        this.stopping ||
+        this.lifetime.signal.aborted ||
+        this.host.signal.aborted ||
+        signal?.aborted ||
+        token !== this.generation
+      )
+        return;
+      targetFile = snapshot.file;
+      let article = articleInfo(path, snapshot.properties, this.host.store.root)!;
+      const origin =
+        browsing ??
+        (!this.readingQueue.current
+          ? {
+              queue: article.queue ?? this.queue,
+              paths: article.queue ? this.host.store.catalog.paths(article.queue) : [path],
+            }
+          : undefined);
+      // Fresh Stream articles are not scanned by expiry. Use the body already opened
+      // here to preserve native/synced annotations without changing the origin queue.
+      if (article.queue === 'Stream' && hasAnnotations(snapshot.body, snapshot.properties)) {
+        try {
+          snapshot = await this.host.store.move(snapshot, 'Inbox');
+        } catch (error) {
+          this.error(error);
+          // A failed multi-step host move may have changed the path. Never continue
+          // with an obsolete snapshot; a failed reread leaves the Markdown escape.
+          snapshot = await this.host.store.read(snapshot.file.path);
+        }
+        if (
+          this.stopping ||
+          this.host.signal.aborted ||
+          signal?.aborted ||
+          token !== this.generation
+        )
+          return;
+        article = articleInfo(snapshot.path, snapshot.properties, this.host.store.root)!;
+      }
+      // Keep the old article and browsing context until all awaited work and modal
+      // cancellation checks finish. A cancelled capture cannot steal the current view.
+      this.clear();
+      token = this.generation;
+      this.snapshot = snapshot;
+      if (origin) {
+        this.queue = origin.queue;
+        const paths = origin.paths.map((item) => (item === path ? snapshot.path : item));
+        this.readingQueue.open(
+          paths.includes(snapshot.path) ? paths : [...paths, snapshot.path],
+          snapshot.path,
+        );
+      } else {
+        this.readingQueue.rename(path, snapshot.path);
+        this.readingQueue.select(snapshot.path);
+      }
+      this.articleTitle = this.contentEl.createEl('h1', { cls: 'reader-article-title' });
+      this.syncPresentation();
+      this.toolbar = this.contentEl.createDiv({ cls: 'reader-toolbar' });
+      this.status = this.contentEl.createDiv({ cls: 'reader-status', attr: { role: 'status' } });
+      const surface = new ReadingSurface(
+        this.contentEl,
+        this.host.paged,
+        (marker) => this.persistPosition(marker),
+        (error) => {
+          if (this.current(snapshot, token!) && !this.stopping)
+            this.showFailure(snapshot.file, error);
+        },
+      );
+      this.surface = surface;
+      surface.setBody(snapshot.body, article.url);
+      if (this.surface !== surface) return; // The synchronous error callback installed the escape hatch.
+      surface.restore(readingMarker(snapshot.properties.reading_position) ?? '');
+      if (this.surface !== surface) return;
+      this.controls();
+      if (article.url)
+        void this.host.ingestion.acquire(snapshot.path, true).catch((error) => this.error(error));
+    } catch (error) {
+      if (signal?.aborted) return;
+      // A failed save before leaving must keep the current selection/article intact.
+      if (
+        token !== undefined &&
+        token === this.generation &&
+        request === this.opening &&
+        !this.stopping &&
+        !this.host.signal.aborted
+      ) {
+        const file = targetFile ?? this.host.store.vault.file(path);
+        if (file) {
+          this.showFailure(file, error);
+          return;
+        }
+        this.showList();
+      }
+      throw error;
+    } finally {
+      if (request === this.opening) this.loadingPath = undefined;
+    }
+  }
+  private controls(): void {
+    if (!this.snapshot || !this.toolbar || !this.surface) return;
+    this.syncPresentation();
+    this.toolbar.empty();
+    this.button(this.toolbar, 'List', () => this.readingList());
+    for (const [label, direction] of [
+      ['Previous', -1],
+      ['Next', 1],
+    ] as const) {
+      this.button(this.toolbar, label, () => this.navigate(direction)).disabled =
+        !this.readingQueue.neighbour(direction, (path) => !!this.host.store.catalog.article(path));
+    }
+    this.button(this.toolbar, 'Move…', () => this.move());
+    this.button(this.toolbar, 'Topics…', () => this.topics());
+    this.button(this.toolbar, 'Open Markdown', async () => {
+      if (this.snapshot) await this.host.edit(this, this.snapshot.file);
+    });
+    if (this.host.paged) {
+      this.button(this.toolbar, 'Previous page', () => this.surface?.page(-1));
+      this.button(this.toolbar, 'Next page', () => this.surface?.page(1));
+    }
+    const article = articleInfo(
+      this.snapshot.path,
+      this.snapshot.properties,
+      this.host.store.root,
+    )!;
+    this.status!.textContent =
+      article.error ||
+      (!this.snapshot.body.trim()
+        ? 'Article text is pending. Reader will fetch it while online and active.'
+        : '');
+    if (article.error)
+      this.button(this.status!, 'Retry', () =>
+        this.host.ingestion.acquire(this.snapshot!.file.path, true),
+      );
+    const finish = this.surface.finish;
+    finish.empty();
+    finish.createEl('h3', { text: 'End of article' });
+    if (article.queue !== 'Treasury') this.button(finish, 'Keep & next', () => this.finish('keep'));
+    this.button(finish, 'Next', () => this.finish('next'));
+    this.button(finish, 'Delete & next', () => this.finish('delete'));
+    this.button(finish, 'Back to list', () => this.readingList());
+  }
+  private selectionChanged(): void {
+    if (this.stopping) return;
+    clearTimeout(this.selectionTimer);
+    const selection = this.surface?.selection();
+    if (!selection) {
+      this.automatic = undefined;
+      this.lastSelection = '';
+      this.surface?.refresh();
+      return;
+    }
+    if (!this.stopping && !this.selecting && !this.dialog)
+      this.selectionTimer = setTimeout(() => {
+        void this.operation(() => this.saveSelection()).catch((error) => this.error(error));
+      }, 900);
+  }
+  private async saveSelection(pending?: PendingSelection): Promise<void> {
+    await this.positionWrite;
+    const selection = pending?.selection ?? this.surface?.selection(),
+      snapshot = this.snapshot;
+    if (!selection || !snapshot || this.selecting || this.dialog) return;
+    const key = JSON.stringify([selection.quote, selection.before, selection.after]);
+    if (key === this.lastSelection) return;
+    if (this.writing) {
+      await this.writing;
+      return this.saveSelection();
+    }
+    this.assertDisplayed(snapshot, true);
+    const displayed = pending?.body ?? this.surface!.displayedBody!;
+    if (!this.acceptsSource(snapshot, displayed, true))
+      throw new Error('The displayed article changed before the closing selection could be saved.');
+    const generation = this.generation,
+      previous = this.automatic;
+    let body = snapshot.body;
+    // Adjust only overlapping selections. Selecting the same words elsewhere must
+    // add a second highlight, not relocate the already-saved automatic one.
+    if (previous) {
+      const unmarked = changePassage(body, previous, 'remove');
+      const candidate = locateSelection(
+        unmarked,
+        selection.quote,
+        selection.before,
+        selection.after,
+      );
+      if (candidate.from < previous.from + previous.text.length && candidate.to > previous.from)
+        body = unmarked;
+    }
+    const range = locateSelection(body, selection.quote, selection.before, selection.after);
+    const next = addHighlight(body, range.from, range.to);
+    const promise = this.host.store.annotate(snapshot, (raw) => {
+      if (!this.current(snapshot, generation))
+        throw new Error('The article changed before the highlight was saved.');
+      this.assertDisplayed(snapshot, true);
+      if (!this.acceptsSource(snapshot, displayed, true))
+        throw new Error('The selected source is no longer current.');
+      return replaceBody(raw, snapshot.body, next);
+    });
+    this.writing = promise;
+    try {
+      const saved = await promise;
+      if (!this.current(snapshot, generation)) return;
+      this.snapshot = saved;
+      this.automatic = passages(next).find((item) => item.from === range.from);
+      this.lastSelection = key;
+      // Only our own byte-guarded automatic markup may bridge a deferred repaint.
+      // External snapshots, passage edits and arbitrary equal-looking text get no exception.
+      this.ownDeferred = { displayed, saved: saved.body };
+      this.surface?.setBody(next, text(saved.properties.url));
+      if (this.surface?.displayedBody === next) this.ownDeferred = undefined;
+      this.controls();
+    } finally {
+      if (this.writing === promise) this.writing = undefined;
+    }
+  }
+  private persistPosition(marker: string): void {
+    const snapshot = this.snapshot,
+      generation = this.generation;
+    const displayed = this.surface?.displayedBody;
+    if (!snapshot || this.host.signal.aborted || !this.acceptsSource(snapshot, displayed, true))
+      return;
+    this.positionWrite = this.positionWrite
+      .catch(() => {})
+      .then(async () => {
+        if (
+          !this.current(snapshot, generation) ||
+          !this.acceptsSource(this.snapshot!, displayed, true) ||
+          this.host.store.vault.file(snapshot.file.path) !== snapshot.file
+        )
+          return;
+        const before = this.snapshot;
+        const saved = await this.host.store.position(snapshot.file.path, marker);
+        if (this.current(snapshot, generation)) {
+          if (saved.file !== snapshot.file) {
+            this.showFailure(
+              saved.file,
+              new Error('The article file was replaced. Reopen it before continuing.'),
+            );
+            return;
+          }
+          if (this.snapshot === before) {
+            this.adoptSnapshot(saved);
+            this.surface?.setBody(saved.body, text(saved.properties.url));
+            this.syncPresentation();
+          } else {
+            this.refreshPending = true;
+            if (!this.operating)
+              void this.changed({ path: snapshot.file.path }).catch((error) => this.error(error));
+          }
+        }
+      })
+      .catch((error) => this.error(error));
+  }
+  private async prepareToLeave(pending?: PendingSelection): Promise<void> {
+    clearTimeout(this.selectionTimer);
+    await this.positionWrite;
+    await this.saveSelection(pending);
+    await this.writing;
+    this.surface?.flush();
+    await this.positionWrite;
+  }
+  flush(): Promise<void> {
+    return this.operation(() => this.prepareToLeave(), false);
+  }
+  prepareMarkdown(): Promise<void> {
+    this.nodeCreation?.controller.abort();
+    return this.operation(async () => {
+      const file = this.file;
+      try {
+        await this.positionWrite;
+        if (
+          this.snapshot &&
+          (await this.host.store.read(this.snapshot.file.path)).raw !== this.snapshot.raw
+        )
+          throw new Error('The file changed outside Reader. Pending selection was not saved.');
+        await this.prepareToLeave();
+      } catch (error) {
+        // An explicit editor escape must not be held hostage by malformed/stale Reader state.
+        if (file && this.host.store.vault.file(file.path) === file) this.showFailure(file, error);
+        this.error(error);
+      }
+    }, false);
+  }
+  readingList(): Promise<void> {
+    this.nodeCreation?.controller.abort();
+    return this.operation(async () => {
+      await this.prepareToLeave();
+      if (!this.stopping) this.showList();
+    }, false);
+  }
+  navigate(direction: -1 | 1): Promise<void> {
+    this.nodeCreation?.controller.abort();
+    return this.operation(async () => {
+      await this.prepareToLeave();
+      const next = this.readingQueue.neighbour(
+        direction,
+        (path) => !!this.host.store.catalog.article(path),
+      );
+      if (next) await this.openArticleNow(next);
+    }, false);
+  }
+  private finish(action: 'keep' | 'next' | 'delete'): Promise<void> {
+    return this.operation(async () => {
+      await this.prepareToLeave();
+      const snapshot = this.snapshot,
+        generation = this.generation;
+      if (!snapshot || this.stopping) return;
+      this.assertDisplayed(snapshot, true);
+      const next = this.readingQueue.neighbour(
+        1,
+        (path) => !!this.host.store.catalog.article(path),
+      );
+      if (action === 'keep') await this.host.store.move(snapshot, 'Treasury');
+      else if (action === 'delete') await this.host.store.trash(snapshot);
+      if (!this.current(snapshot, generation) || this.stopping) return;
+      this.snapshot = undefined;
+      this.surface?.dispose();
+      this.surface = undefined;
+      if (next) await this.openArticleNow(next);
+      else this.showList();
+    });
+  }
+  private move(): Promise<void> {
+    return this.operation(async () => {
+      await this.prepareToLeave();
+      const snapshot = this.snapshot,
+        generation = this.generation;
+      if (!snapshot || this.stopping) return;
+      const signal = this.articleLifetime.signal;
+      const target = await choose(
+        this.app,
+        'Move article to…',
+        [...queues],
+        (queue) => queue,
+        signal,
+      );
+      if (!target || signal.aborted || !this.current(snapshot, generation)) return;
+      this.assertDisplayed(snapshot, true);
+      const moved = await this.host.store.move(snapshot, target);
+      if (!this.current(snapshot, generation) || this.stopping) return;
+      this.snapshot = moved;
+      this.controls();
+      if (target === 'Inbox' || target === 'Later')
+        void this.host.ingestion.acquire(moved.path).catch((error) => this.error(error));
+    });
+  }
+  private topics(): Promise<void> {
+    return this.operation(async () => {
+      await this.prepareToLeave();
+      const snapshot = this.snapshot,
+        generation = this.generation;
+      if (!snapshot || this.stopping) return;
+      const signal = this.articleLifetime.signal;
+      const files = this.app.vault
+        .getMarkdownFiles()
+        .filter((file) => this.app.metadataCache.getFileCache(file)?.frontmatter?.type === 'topic');
+      this.assertDisplayed(snapshot, true);
+      const stored = snapshot.properties.topics;
+      if (stored !== undefined && !Array.isArray(stored))
+        throw new Error(
+          'Topics contains unrecognized data. Edit it in Markdown; Reader has not changed it.',
+        );
+      const originals = (stored ?? []).map((value) => {
+        const link = linkPath(text(value));
+        const file = link
+          ? this.app.metadataCache.getFirstLinkpathDest(link, snapshot.file.path)
+          : null;
+        if (!link || !file || !files.includes(file))
+          throw new Error(
+            'An existing topic is unresolved or is not a topic note. Edit it in Markdown; Reader has not changed it.',
+          );
+        return { value, link, file, path: file.path };
+      });
+      const selected = await chooseTopics(
+        this.app,
+        files,
+        new Set(originals.map((original) => original.path)),
+        signal,
+      );
+      if (selected === null || signal.aborted || !this.current(snapshot, generation)) return;
+      await this.positionWrite;
+      if (signal.aborted || !this.current(snapshot, generation)) return;
+      const base = this.snapshot!;
+      if (
+        base.body !== snapshot.body ||
+        JSON.stringify(base.properties.topics) !== JSON.stringify(stored)
+      )
+        throw new Error('The article or topics changed while the picker was open. Reopen Topics.');
+      const targets = selected.map((path) => ({
+        path,
+        file: files.find((file) => file.path === path),
+      }));
+      const saved = await this.host.store.annotate(base, (raw) => {
+        if (signal.aborted || !this.current(snapshot, generation))
+          throw new Error('The article changed; reopen Topics.');
+        this.assertDisplayed(base, true);
+        for (const { path, file } of targets) {
+          if (
+            !file ||
+            file.path !== path ||
+            this.host.store.vault.file(path) !== file ||
+            this.app.metadataCache.getFileCache(file)?.frontmatter?.type !== 'topic'
+          )
+            throw new Error('A topic changed; reopen the picker.');
+        }
+        const retained = originals.filter((original) => selected.includes(original.path));
+        for (const original of retained) {
+          if (
+            this.app.metadataCache.getFirstLinkpathDest(original.link, snapshot.file.path) !==
+            original.file
+          )
+            throw new Error('An existing topic link changed meaning. Reopen Topics.');
+        }
+        const values = [
+          ...retained.map((original) => original.value),
+          ...selected
+            .filter((path) => !retained.some((original) => original.path === path))
+            .map(vaultLink),
+        ];
+        return patchProperties(raw, { topics: values.length ? values : undefined });
+      });
+      if (!this.current(snapshot, generation) || this.stopping) return;
+      this.snapshot = saved;
+      this.controls();
+    });
+  }
+  private async openLinked(target: string, newLeaf = false): Promise<void> {
+    const snapshot = this.snapshot,
+      generation = this.generation;
+    if (!snapshot) return;
+    await this.flush();
+    if (!this.stopping && this.current(snapshot, generation))
+      await openExistingNote(this.app, target, this.snapshot!.file.path, newLeaf);
+  }
+  private targetGuard(path: string, api?: NodesApi, type?: string): () => void {
+    const file = this.host.store.vault.file(path);
+    return () => {
+      if (!file || file.path !== path || this.host.store.vault.file(path) !== file)
+        throw new Error('The selected note changed or was deleted. Reopen the picker.');
+      if (
+        api &&
+        (nodesApi(this.app) !== api ||
+          type === undefined ||
+          !api.getNode(path)?.classes.includes(type))
+      )
+        throw new Error('The selected node or Nodes API changed. Reopen the picker.');
+    };
+  }
+  private clicked(event: MouseEvent): void {
+    const element = event.target instanceof Element ? event.target : undefined;
+    const mark = element?.closest('mark');
+    if (mark && this.surface?.body.contains(mark) && this.snapshot && !this.surface.selection()) {
+      try {
+        this.assertDisplayed(this.snapshot);
+      } catch (error) {
+        event.preventDefault();
+        this.error(error);
+        return;
+      }
+      const marks = [...this.surface.body.querySelectorAll('mark')],
+        source = passages(this.snapshot.body);
+      if (marks.length !== source.length) {
+        event.preventDefault();
+        this.error(
+          new Error(
+            'This highlight contains unsupported formatting. Use Open Markdown to edit it safely.',
+          ),
+        );
+        return;
+      }
+      const passage = source[marks.indexOf(mark as HTMLElement)];
+      if (!passage) return;
+      event.preventDefault();
+      this.passageMenu(passage, event);
+      return;
+    }
+    const link = element?.closest<HTMLAnchorElement>('a[href]');
+    if (!link || !this.surface?.body.contains(link)) return;
+    event.preventDefault();
+    const href = link.getAttribute('href')!;
+    if (href.startsWith('#')) {
+      let id: string;
+      try {
+        id = decodeURIComponent(href.slice(1));
+      } catch {
+        return;
+      }
+      const target = [...this.surface.body.querySelectorAll<HTMLElement>('[id]')].find(
+        (element) => element.id === id,
+      );
+      if (target) this.surface.reveal(target);
+    } else if (link.classList.contains('internal-link')) {
+      const target = nativeLinkPath(href);
+      if (!target) {
+        this.error(new Error('This is not a safe vault-note link.'));
+        return;
+      }
+      void this.openLinked(target, event.ctrlKey || event.metaKey).catch((error) =>
+        this.error(error),
+      );
+    } else if (/^https?:/i.test(href)) window.open(href, '_blank', 'noopener,noreferrer');
+  }
+  private passageMenu(passage: Passage, event: MouseEvent): void {
+    if (!this.snapshot) return;
+    this.assertDisplayed(this.snapshot);
+    const menu = new Menu(),
+      snapshot = this.snapshot!,
+      signal = this.articleLifetime.signal,
+      generation = this.generation;
+    const apply = async (
+      action: 'remove' | 'unlink' | 'link',
+      target?: string,
+      validate: () => void = () => {},
+      requireCommit = false,
+    ) => {
+      await this.positionWrite;
+      if (signal.aborted || !this.current(snapshot, generation) || this.stopping) {
+        if (requireCommit) throw new Error('The article changed or linking was cancelled.');
+        return;
+      }
+      const base = this.snapshot!;
+      if (base.body !== snapshot.body)
+        throw new Error('The article text changed; reopen the highlight menu.');
+      const saved = await this.host.store.annotate(base, (raw) => {
+        if (signal.aborted || !this.current(snapshot, generation) || this.stopping)
+          throw new Error('The article changed; reopen the highlight menu.');
+        this.assertDisplayed(base);
+        validate(); // Runs again inside vault.process, not just when the picker closes.
+        return replaceBody(
+          raw,
+          snapshot.body,
+          changePassage(snapshot.body, passage, action, target),
+        );
+      });
+      if (signal.aborted || !this.current(snapshot, generation) || this.stopping) {
+        if (requireCommit)
+          throw new Error('The article changed while linking. Check the saved Markdown.');
+        return;
+      }
+      this.snapshot = saved;
+      this.surface?.setBody(saved.body, text(saved.properties.url));
+      this.controls();
+      return saved;
+    };
+    const action = (label: string, run: () => void | Promise<unknown>, serialize = true) =>
+      menu.addItem((item) =>
+        item.setTitle(label).onClick(() => {
+          const invoke = async () => {
+            if (!signal.aborted && this.current(snapshot, generation)) await run();
+          };
+          void (serialize ? this.operation(invoke) : invoke()).catch((error) => this.error(error));
+        }),
+      );
+    action(passage.target ? 'Change linked note…' : 'Link to note…', async () => {
+      this.dialog = true;
+      try {
+        const file = await choose(
+          this.app,
+          'Link passage to note',
+          this.app.vault.getMarkdownFiles(),
+          (file) => file.path,
+          signal,
+        );
+        if (file && this.host.store.vault.file(file.path) === file)
+          await apply('link', file.path, this.targetGuard(file.path));
+      } finally {
+        this.dialog = false;
+      }
+    });
+    const api = nodesApi(this.app);
+    if (api) {
+      action('Link to node…', async () => {
+        this.dialog = true;
+        try {
+          const node = await pickNode(this.app, api, passage.text, signal);
+          if (node) await apply('link', node.path, this.targetGuard(node.path, api, node.type));
+        } finally {
+          this.dialog = false;
+        }
+      });
+      action('Create node…', async () => {
+        this.dialog = true;
+        const request = { controller: new AbortController(), source: snapshot, writing: false };
+        this.nodeCreation = request;
+        const abort = () => request.controller.abort();
+        for (const lifetime of [signal, this.host.signal]) {
+          if (lifetime.aborted) abort();
+          else lifetime.addEventListener('abort', abort, { once: true });
+        }
+        let acceptingLink = true,
+          attemptedLink = false;
+        const checkCallback = () => {
+          if (!acceptingLink) throw new Error('The node creation request has finished.');
+          if (request.controller.signal.aborted)
+            throw new Error('The node creation request was cancelled.');
+        };
+        const link = async (node: NodeResult) => {
+          checkCallback();
+          if (attemptedLink) throw new Error('The node creation callback already ran.');
+          attemptedLink = true;
+          const validate = this.targetGuard(node.path, api, node.type);
+          // Already inside this action's operation: re-enqueueing would deadlock Nodes.
+          // Metadata echoes during our write/render must not cancel required completion.
+          request.writing = true;
+          try {
+            const saved = await apply(
+              'link',
+              node.path,
+              () => {
+                checkCallback();
+                validate();
+              },
+              true,
+            );
+            if (!saved) throw new Error('The node link was not committed.');
+            request.source = saved;
+          } finally {
+            request.writing = false;
+          }
+          await this.checkNodeCreation();
+          checkCallback();
+        };
+        try {
+          if (nodesApi(this.app) !== api)
+            throw new Error('The Nodes API changed. Reopen the menu.');
+          this.assertDisplayed(snapshot);
+          const options = {
+            suggestedTitle: passage.text.length <= 80 ? passage.text : undefined,
+            sourcePath: snapshot.path,
+            signal: request.controller.signal,
+          };
+          if (api.createNodeForLink !== undefined) {
+            // Nodes awaits our commit before required completion. Never link again from
+            // the returned identity/null, and never prune a created or partially filled note.
+            await api.createNodeForLink(options, link);
+          } else {
+            const node = await api.createNode(options);
+            if (node) await link(node);
+          }
+        } finally {
+          acceptingLink = false;
+          signal.removeEventListener('abort', abort);
+          this.host.signal.removeEventListener('abort', abort);
+          if (this.nodeCreation === request) this.nodeCreation = undefined;
+          this.dialog = false;
+        }
+      });
+    }
+    if (passage.target) {
+      action('Open linked note', () => this.openLinked(passage.target!), false);
+      action('Unlink (keep highlight)', () => apply('unlink'));
+    }
+    action('Remove highlight', () => apply('remove'));
+    menu.showAtMouseEvent(event);
+  }
+  /** Validate only the active Nodes request, independently of its occupied operation queue.
+   * Never await positionWrite here: this can run inside that write's metadata notification. */
+  private async checkNodeCreation(): Promise<void> {
+    const request = this.nodeCreation;
+    if (!request || request.writing || request.controller.signal.aborted) return;
+    const source = request.source;
+    const stillCurrent = () =>
+      this.nodeCreation === request && !request.writing && request.source === source;
+    if (source.file.path !== source.path || this.host.store.vault.file(source.path) !== source.file) {
+      request.controller.abort();
+      return;
+    }
+    try {
+      const current = await this.host.store.read(source.path);
+      if (stillCurrent() &&
+        (current.file !== source.file || current.path !== source.path || current.body !== source.body))
+        request.controller.abort();
+    } catch {
+      if (stillCurrent()) request.controller.abort();
+    }
+  }
+  async changed(change: LibraryChange): Promise<void> {
+    if (this.stopping || this.lifetime.signal.aborted || this.host.signal.aborted) return;
+    const source = this.nodeCreation?.source;
+    if (source && (change.path === source.path || change.path === source.file.path || change.previousPath === source.path)) {
+      if (change.deleted && !this.nodeCreation!.writing) this.nodeCreation!.controller.abort();
+      else await this.checkNodeCreation();
+    }
+    if (change.previousPath) this.readingQueue.rename(change.previousPath, change.path);
+    if (this.loadingPath) {
+      if (
+        this.snapshot &&
+        (this.snapshot.file.path === change.path || this.snapshot.path === change.previousPath)
+      )
+        this.refreshPending = true;
+      return;
+    }
+    if (!this.snapshot) {
+      if (this.fallbackFile) {
+        if (change.deleted && this.fallbackFile.path === change.path) this.showList();
+        return;
+      }
+      // Batch arriving feeds and leave a focused search input untouched.
+      if (change.metadataChanged && this.listFrame === undefined)
+        this.listFrame = requestAnimationFrame(() => {
+          this.listFrame = undefined;
+          if (
+            !this.snapshot &&
+            !this.loadingPath &&
+            !this.lifetime.signal.aborted &&
+            this.contentEl.ownerDocument.activeElement?.tagName !== 'INPUT'
+          )
+            this.showList();
+        });
+      return;
+    }
+    if (this.snapshot.file.path !== change.path) return;
+    if (this.operating || this.writing) {
+      this.refreshPending = true;
+      return;
+    }
+    if (change.deleted || !this.host.store.vault.file(change.path)) {
+      this.showList();
+      return;
+    }
+    const before = this.snapshot,
+      generation = this.generation;
+    try {
+      const current = await this.host.store.read(change.path);
+      if (this.stopping || !this.current(before, generation) || this.snapshot !== before) return;
+      if (this.operating || this.writing) {
+        this.refreshPending = true;
+        return;
+      }
+      if (current.file !== before.file) {
+        this.showFailure(
+          current.file,
+          new Error('The article file was replaced. Reopen it before continuing.'),
+        );
+        return;
+      }
+      this.adoptSnapshot(current);
+      this.surface?.setBody(current.body, text(current.properties.url));
+      this.controls();
+    } catch (error) {
+      if (!this.stopping && this.current(before, generation)) {
+        if (this.operating || this.writing) this.refreshPending = true;
+        else this.showFailure(before.file, error);
+      }
+    }
+  }
+  key(event: KeyboardEvent): void {
+    if (
+      this.stopping ||
+      event.defaultPrevented ||
+      event.ctrlKey ||
+      event.metaKey ||
+      event.altKey ||
+      this.dialog
+    )
+      return;
+    if (
+      (event.target as Element | null)?.closest?.(
+        'input,textarea,[contenteditable="true"],.modal,.menu',
+      ) ||
+      this.containerEl.ownerDocument.querySelector('.modal-container,.menu')
+    )
+      return;
+    if (this.host.paged && ['PageUp', 'PageDown'].includes(event.key)) {
+      event.preventDefault();
+      this.surface?.page(event.key === 'PageUp' ? -1 : 1);
+    } else if (['j', 'k'].includes(event.key)) {
+      event.preventDefault();
+      void this.navigate(event.key === 'j' ? 1 : -1).catch((error) => this.error(error));
+    }
+  }
+  protects(file: TFile): boolean {
+    return this.file === file || this.loadingPath === file.path;
+  }
+  get file(): TFile | undefined {
+    return this.snapshot?.file ?? this.fallbackFile;
+  }
+  get busy(): boolean {
+    return this.operating || !!this.writing || this.selecting || !!this.surface?.selection();
+  }
+}

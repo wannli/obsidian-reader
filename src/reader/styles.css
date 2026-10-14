@@ -1,0 +1,146 @@
+/* Reader's content only: native Obsidian chrome and dialogs stay under host control. */
+.reader-view {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  height: 100%;
+  min-height: 0;
+  padding: 12px;
+  overflow: hidden;
+}
+.reader-view *,
+.reader-view *::before,
+.reader-view *::after {
+  animation: none !important;
+  transition: none !important;
+  scroll-behavior: auto !important;
+}
+.reader-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+}
+.reader-status {
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+}
+.reader-status:empty {
+  display: none;
+}
+.reader-status button {
+  margin-inline-start: 8px;
+}
+.reader-list {
+  overflow: auto;
+  min-height: 0;
+}
+.reader-list-item {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  width: 100%;
+  height: auto;
+  min-height: 44px;
+  padding: 12px;
+  margin-block-end: 6px;
+  text-align: start;
+  white-space: normal;
+}
+.reader-list-item small {
+  color: var(--text-muted);
+  font-weight: normal;
+}
+.reader-viewport {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  overflow-anchor: none;
+  overscroll-behavior: contain;
+}
+.reader-document,
+.reader-finish {
+  max-width: 44rem;
+  margin-inline: auto;
+  padding: 16px;
+  overflow-wrap: anywhere;
+}
+.reader-document {
+  font-family: var(--font-text);
+  font-size: var(--font-text-size);
+  line-height: var(--line-height-normal);
+  user-select: text;
+  -webkit-user-select: text;
+}
+.reader-document img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  object-fit: contain;
+}
+.reader-document pre {
+  max-width: 100%;
+  overflow: auto;
+}
+.reader-document mark {
+  color: inherit;
+  background: var(--text-highlight-bg);
+  background: color-mix(in srgb, var(--text-highlight-bg) 35%, transparent);
+}
+.reader-document mark a {
+  color: inherit;
+}
+.reader-node-classes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--size-4-2);
+  color: var(--text-muted);
+}
+.reader-node-class {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--size-2-2);
+}
+.reader-node-class .svg-icon {
+  width: 1em;
+  height: 1em;
+}
+.reader-finish {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-content: flex-start;
+  margin-block: 24px;
+}
+.reader-finish h3 {
+  flex-basis: 100%;
+  margin: 0 0 8px;
+}
+.reader-finish button {
+  min-height: 44px;
+}
+.reader-paged {
+  overflow: hidden;
+}
+.reader-paged .reader-flow {
+  width: 100%;
+}
+.reader-paged .reader-document {
+  max-width: none;
+  margin: 0;
+}
+.reader-paged .reader-finish {
+  break-before: column;
+  break-inside: avoid;
+  margin-block: 0;
+}
+.reader-paged img {
+  max-height: calc(var(--reader-page-height, 100vh) - 48px);
+  break-inside: avoid;
+}
+.reader-paged pre,
+.reader-paged table {
+  max-height: calc(var(--reader-page-height, 100vh) - 48px);
+  overflow: auto;
+}

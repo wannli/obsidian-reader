@@ -1,0 +1,7 @@
+# Generated release/dependency metadata stays owned by its generator.
+CHANGELOG.md
+package-lock.json
+
+.sandbox/
+dist/
+node_modules/

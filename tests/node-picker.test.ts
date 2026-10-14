@@ -1,128 +1,210 @@
-import { expect, it, vi } from 'vitest';
-import { readFileSync } from 'node:fs';
-import ts from 'typescript';
-import * as adapter from '../src/nodes-api';
-function fixture(quote = 'Countess') {
-  const children: any[] = [], notices: string[] = [];
-  class SuggestModal {
-    inputEl = document.createElement('input');
-    constructor(public app: unknown) {} setPlaceholder() {} onOpen() {} onClose() {}
-    open() { this.onOpen(); } close() { this.onClose(); }
-  }
-  class ReaderPicker {
-    finished?: () => void;
-    constructor(_app: unknown, _label: string, public items: any[], _text: unknown, public choose: (item: any) => void) {}
-    open() { children.push(this); } close() { this.finished?.(); }
-    select() { this.close(); this.choose(this.items[0]); }
-  }
-  class ReaderInput {
-    finished?: () => void;
-    constructor(_app: unknown, _title: string, _label: string, public submit: (value: string) => Promise<void>) {}
-    open() { children.push(this); } close() { this.finished?.(); }
-  }
-  const deps: Record<string, unknown> = { obsidian: { SuggestModal, Notice: class { constructor(message: string) { notices.push(message); } } }, '../nodes-api': adapter, './native-dialogs': { ReaderPicker, ReaderInput } };
-  const output = ts.transpileModule(readFileSync('src/ui/node-picker.ts', 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
-  const exports: Record<string, any> = {}; new Function('require', 'exports', output)((key: string) => deps[key], exports);
-  const node = { path: 'Custom/Ada.md', title: 'Ada', type: 'Person', aliases: ['Countess'], color: 'blue' };
-  const api = { version: 1, listTypes: () => [{ type: 'Person', label: 'Person', color: 'blue' }], searchNodes: vi.fn(() => [node]), getNode: vi.fn(() => node), createNode: vi.fn(async (_options: any): Promise<any> => node) };
-  let live: unknown = api, current = true;
-  const app = { plugins: { getPlugin: () => ({ api: live }) } }, choose = vi.fn(async () => {}), finished = vi.fn(), preflight = vi.fn(async () => {});
-  const picker = new exports.NodePicker(app, quote, 'Reading/Inbox/Test.md', () => current, choose, finished, preflight);
-  return { picker, node, api, children, notices, choose, finished, preflight, stale: () => { current = false; }, disable: () => { live = undefined; }, reload: () => { live = { ...api }; } };
+// @vitest-environment node
+import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from 'vitest';
+import type { App } from 'obsidian';
+import { pickNode } from '../src/host/node-picker';
+import type { NodeResult, NodesApi } from '../src/host/nodes';
+
+const dom = await vi.hoisted(async () => {
+  const { builtinEnvironments } = await import('vitest/runtime');
+  return builtinEnvironments.jsdom.setup(globalThis, {});
+});
+afterAll(() => dom.teardown(globalThis));
+interface Picker {
+  inputEl: HTMLInputElement;
+  results: NodeResult[];
+  getSuggestions(query: string): NodeResult[];
+  renderSuggestion(node: NodeResult, element: HTMLElement): void;
+  onChooseSuggestion(node: NodeResult): void;
+  close(): void;
 }
-it('prefills search and picks a live path, not the quote filename; matches aliases through API', async () => {
-  const f = fixture(); f.picker.open(); expect(f.picker.inputEl.value).toBe('Countess');
-  expect(f.picker.getSuggestions('Countess')[0]).toBe(f.node); expect(f.api.searchNodes).toHaveBeenCalledWith('Countess');
-  f.api.getNode.mockReturnValue({ ...f.node, color: 'green' });
-  f.picker.close(); f.picker.onChooseSuggestion(f.node);
-  await vi.waitFor(() => expect(f.choose).toHaveBeenCalledExactlyOnceWith({ ...f.node, color: 'green' }));
-  expect(f.finished).toHaveBeenCalledOnce();
-});
-it('Escape cancellation and child cancellation notify the underlying menu', async () => {
-  const f = fixture(); f.picker.close(); await Promise.resolve(); expect(f.finished).toHaveBeenCalledOnce(); expect(f.choose).not.toHaveBeenCalled();
-  const child = fixture(); child.picker.onChooseSuggestion({ create: true }); child.children[0].close(); await Promise.resolve();
-  expect(child.finished).toHaveBeenCalledOnce(); expect(child.api.createNode).not.toHaveBeenCalled();
-});
-it('null cancellation from Nodes never links', async () => {
-  const f = fixture(); f.api.createNode.mockResolvedValue(null); f.picker.onChooseSuggestion({ create: true }); f.children[0].select();
-  await vi.waitFor(() => expect(f.finished).toHaveBeenCalled()); expect(f.choose).not.toHaveBeenCalled();
-});
-it('aborts the Nodes modal on disposal and keeps late-created nodes without linking', async () => {
-  const f = fixture(); let resolve!: (value: unknown) => void;
-  f.api.createNode.mockImplementation(() => new Promise(done => { resolve = done; }));
-  f.picker.onChooseSuggestion({ create: true }); f.children[0].select();
-  await vi.waitFor(() => expect(f.api.createNode).toHaveBeenCalled());
-  const signal = f.api.createNode.mock.calls[0][0].signal as AbortSignal;
-  f.stale(); f.picker.dispose(); expect(signal.aborted).toBe(true); resolve(f.node);
-  await vi.waitFor(() => expect(f.notices.join()).toContain('kept')); expect(f.choose).not.toHaveBeenCalled();
-});
-it.each(['disable', 'reload'] as const)('does not link if Nodes %s during creation', async operation => {
-  const f = fixture(); f.api.createNode.mockImplementation(async () => { f[operation](); return f.node; });
-  f.picker.onChooseSuggestion({ create: true }); f.children[0].select();
-  await vi.waitFor(() => expect(f.notices.join()).toContain('kept')); expect(f.choose).not.toHaveBeenCalled();
-});
-it('authoritative preflight blocks API creation even if the mounted UI remains current', async () => {
-  const f = fixture(); f.preflight.mockRejectedValue(new Error('Source changed'));
-  f.picker.onChooseSuggestion({ create: true }); f.children[0].select();
-  await vi.waitFor(() => expect(f.notices.join()).toContain('Source changed')); expect(f.api.createNode).not.toHaveBeenCalled();
-});
-it('rechecks navigation after an awaited source preflight', async () => {
-  const f = fixture(); f.preflight.mockImplementation(async () => { f.stale(); });
-  f.picker.onChooseSuggestion({ create: true }); f.children[0].select();
-  await vi.waitFor(() => expect(f.preflight).toHaveBeenCalled()); expect(f.api.createNode).not.toHaveBeenCalled();
-});
-it('long passage title cancellation never opens Nodes creation', async () => {
-  const f = fixture('a long passage '.repeat(20)); f.picker.onChooseSuggestion({ create: true }); f.children[0].select(); f.children[1].close();
-  expect(f.api.createNode).not.toHaveBeenCalled(); expect(f.finished).toHaveBeenCalled();
-});
-it('reports partial success on a failed link and never deletes the created node', async () => {
-  const f = fixture(); f.choose.mockRejectedValue(new Error('Stale highlight'));
-  f.picker.onChooseSuggestion({ create: true }); f.children[0].select();
-  await vi.waitFor(() => expect(f.notices.join()).toContain('Node created and kept; linking failed'));
-});
-
-it('disposal alone blocks late selection callbacks and settles exactly once', async () => {
-  const f = fixture(); f.picker.dispose(); f.picker.onChooseSuggestion(f.node); f.picker.onChooseSuggestion({ create: true });
-  await Promise.resolve(); await Promise.resolve();
-  expect(f.choose).not.toHaveBeenCalled(); expect(f.api.createNode).not.toHaveBeenCalled(); expect(f.children).toHaveLength(0); expect(f.finished).toHaveBeenCalledOnce();
-});
-it.each(['disable', 'stale', 'empty'] as const)('settles selected early exit %s exactly once', async operation => {
-  const f = fixture(); if (operation === 'empty') f.api.listTypes = () => []; else f[operation]();
-  f.picker.onChooseSuggestion({ create: true }); await Promise.resolve(); f.picker.dispose();
-  expect(f.finished).toHaveBeenCalledOnce(); expect(f.api.createNode).not.toHaveBeenCalled();
-});
-
-it('closing the short-title input aborts a pending Nodes form and ignores late results', async () => {
-  const f = fixture('long passage '.repeat(20)); let resolve!: (value: unknown) => void;
-  f.api.createNode.mockImplementation(() => new Promise(done => { resolve = done; }));
-  f.picker.onChooseSuggestion({ create: true }); f.children[0].select();
-  const pending = f.children[1].submit('Short title');
-  await vi.waitFor(() => expect(f.api.createNode).toHaveBeenCalled());
-  const signal = f.api.createNode.mock.calls[0][0].signal as AbortSignal;
-  f.children[1].close(); expect(signal.aborted).toBe(true); expect(f.finished).toHaveBeenCalledOnce();
-  resolve(f.node); await pending;
-  expect(f.choose).not.toHaveBeenCalled(); expect(f.finished).toHaveBeenCalledOnce();
-});
-it('opts into Nodes lifecycle and defers self-disposing refresh until registration completes', async () => {
-  const f = fixture(), order: string[] = [];
-  f.choose.mockImplementation(async () => { order.push('save'); return (() => { order.push('refresh'); f.picker.dispose(); }) as any; });
-  const createNodeForLink = vi.fn(async (options, link) => {
-    await link(f.node);
-    expect(options.signal.aborted).toBe(false);
-    order.push('register'); return f.node;
+const mocks = vi.hoisted(() => ({
+  picker: undefined as Picker | undefined,
+  open: vi.fn(),
+  close: vi.fn(),
+  setIcon: vi.fn(),
+  placeholder: vi.fn(),
+}));
+vi.mock('obsidian', () => ({
+  setIcon: mocks.setIcon,
+  SuggestModal: class {
+    inputEl = document.createElement('input');
+    results: NodeResult[] = [];
+    constructor() {
+      mocks.picker = this;
+    }
+    setPlaceholder(value: string) {
+      mocks.placeholder(value);
+    }
+    getSuggestions(_query: string): NodeResult[] {
+      return [];
+    }
+    renderSuggestion(_node: NodeResult, _element: HTMLElement) {}
+    onChooseSuggestion(_node: NodeResult) {}
+    private input = () => {
+      this.results = this.getSuggestions(this.inputEl.value);
+    };
+    open() {
+      mocks.open();
+      this.inputEl.addEventListener('input', this.input);
+    }
+    close() {
+      mocks.close();
+      this.onClose();
+    }
+    onClose() {
+      this.inputEl.removeEventListener('input', this.input);
+    }
+  },
+}));
+beforeAll(() => {
+  Object.assign(HTMLElement.prototype, {
+    createEl(
+      this: HTMLElement,
+      tag: string,
+      options: { text?: string; cls?: string; attr?: Record<string, string> } = {},
+    ) {
+      const element = document.createElement(tag);
+      if (options.text) element.textContent = options.text;
+      if (options.cls) element.className = options.cls;
+      for (const [name, value] of Object.entries(options.attr ?? {}))
+        element.setAttribute(name, value);
+      this.append(element);
+      return element;
+    },
+    createDiv(this: HTMLElement, options = {}) {
+      return this.createEl('div', options);
+    },
   });
-  Object.assign(f.api, { createNodeForLink });
-  f.picker.onChooseSuggestion({ create: true }); f.children[0].select();
-  await vi.waitFor(() => expect(f.finished).toHaveBeenCalled());
-  expect(order).toEqual(['save', 'register', 'refresh']);
-  expect(f.api.createNode).not.toHaveBeenCalled();
 });
-it('disposal during opt-in link save aborts registration and does not refresh', async () => {
-  const f = fixture(), refresh = vi.fn();
-  f.choose.mockImplementation(async () => { f.picker.dispose(); return refresh as any; });
-  Object.assign(f.api, { createNodeForLink: vi.fn(async (options, link) => {
-    await link(f.node); expect(options.signal.aborted).toBe(true); return f.node;
-  }) });
-  f.picker.onChooseSuggestion({ create: true }); f.children[0].select();
-  await vi.waitFor(() => expect(f.choose).toHaveBeenCalled()); expect(refresh).not.toHaveBeenCalled();
+beforeEach(() => {
+  vi.clearAllMocks();
+  mocks.picker = undefined;
+});
+afterEach(() => {
+  document.body.replaceChildren();
+});
+const node = (id = 0): NodeResult => ({
+  path: `Notes/Node ${id}.md`,
+  title: `Node ${id}`,
+  type: 'People/Person',
+  classes: ['Topic', 'People/Person'],
+  aliases: [],
+  icon: 'contact',
+});
+function fixture(nodes = [node()]) {
+  const api: NodesApi = {
+    version: 2,
+    listTypes: vi.fn(() => [
+      { type: 'Topic', label: 'Topic', icon: 'hash' },
+      { type: 'People/Person', label: 'People/Person' },
+    ]),
+    searchNodes: vi.fn(() => nodes),
+    getNode: vi.fn(() => null),
+    createNode: vi.fn(async () => null),
+  };
+  const signal = new AbortController();
+  return {
+    api,
+    signal,
+    open: (query = 'initial query') => pickNode({} as App, api, query, signal.signal),
+  };
+}
+
+it('caps the real picker at 100 without mutating results, and reads class metadata once, not per row', async () => {
+  const nodes = Array.from({ length: 150 }, (_, i) => node(i)),
+    f = fixture(nodes),
+    chosen = f.open();
+  const picker = mocks.picker!;
+  expect(picker.results).toEqual(nodes.slice(0, 100));
+  expect(nodes).toHaveLength(150);
+  expect(picker.inputEl.value).toBe('initial query');
+  for (const result of picker.results)
+    picker.renderSuggestion(result, document.createElement('div'));
+  expect(f.api.listTypes).toHaveBeenCalledOnce();
+  expect(f.api.searchNodes).toHaveBeenCalledExactlyOnceWith('initial query');
+  expect(f.api.getNode).not.toHaveBeenCalled();
+  picker.close();
+  expect(await chosen).toBeNull();
+});
+
+it('renders bound classes in their original order with optional public icons and no colors', async () => {
+  const value = node(),
+    f = fixture([value]),
+    chosen = f.open(),
+    row = document.createElement('div');
+  const original = structuredClone(value);
+  mocks.picker!.renderSuggestion(value, row);
+  expect(row.firstElementChild?.textContent).toBe('Node 0');
+  expect([...row.querySelectorAll('small')].map((el) => el.textContent)).toEqual([
+    'Topic',
+    'People/Person',
+  ]);
+  expect(mocks.setIcon.mock.calls.map(([, icon]) => icon)).toEqual(['hash', 'contact']);
+  expect(mocks.setIcon.mock.calls.every(([el]) => el.getAttribute('aria-hidden') === 'true')).toBe(
+    true,
+  );
+  expect(row.querySelector('[style]')).toBeNull();
+  expect(value).toEqual(original);
+  mocks.picker!.close();
+  await chosen;
+});
+
+it('keeps unknown class names and titles as text, without inventing missing icons', async () => {
+  const value = {
+    ...node(),
+    title: '<b>Literal</b>',
+    type: 'Unknown',
+    classes: ['Unknown'],
+    icon: undefined,
+  };
+  const f = fixture([value]),
+    chosen = f.open(),
+    row = document.createElement('div');
+  mocks.picker!.renderSuggestion(value, row);
+  expect(row.textContent).toBe('<b>Literal</b>Unknown');
+  expect(row.querySelector('b')).toBeNull();
+  expect(mocks.setIcon).not.toHaveBeenCalled();
+  mocks.picker!.close();
+  await chosen;
+});
+
+it('does not open or query an already-aborted picker', async () => {
+  const f = fixture();
+  f.signal.abort();
+  expect(await f.open()).toBeNull();
+  expect(mocks.open).not.toHaveBeenCalled();
+  expect(f.api.listTypes).not.toHaveBeenCalled();
+  expect(f.api.searchNodes).not.toHaveBeenCalled();
+});
+
+it('abort closes the picker, settles null and ignores late choices and queries', async () => {
+  const f = fixture(),
+    chosen = f.open(),
+    picker = mocks.picker!;
+  const remove = vi.spyOn(f.signal.signal, 'removeEventListener');
+  f.signal.abort();
+  picker.onChooseSuggestion(node());
+  expect(picker.getSuggestions('late')).toEqual([]);
+  expect(await chosen).toBeNull();
+  expect(mocks.close).toHaveBeenCalledOnce();
+  expect(f.api.searchNodes).toHaveBeenCalledOnce();
+  expect(remove).toHaveBeenCalledWith('abort', expect.any(Function));
+});
+
+it('ordinary close settles null and detaches the abort listener', async () => {
+  const f = fixture(),
+    chosen = f.open();
+  mocks.picker!.close();
+  expect(await chosen).toBeNull();
+  f.signal.abort();
+  expect(mocks.close).toHaveBeenCalledOnce();
+});
+
+it('honors Obsidian close-before-choice ordering without losing the selected snapshot', async () => {
+  const f = fixture(),
+    chosen = f.open(),
+    selected = node();
+  mocks.picker!.close();
+  mocks.picker!.onChooseSuggestion(selected);
+  expect(await chosen).toBe(selected);
 });

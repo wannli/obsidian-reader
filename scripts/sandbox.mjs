@@ -6,13 +6,16 @@ import { fileURLToPath } from 'node:url';
 export const repository = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 export const sandboxPath = join(repository, '.sandbox');
 for (const legacy of ['READER2_RUNTIME_TARGET', 'PULLMAN_RUNTIME_TARGET']) {
-  if (process.env[legacy] !== undefined) throw new Error(`Use READER_RUNTIME_TARGET; ${legacy} is not accepted`);
+  if (process.env[legacy] !== undefined)
+    throw new Error(`Use READER_RUNTIME_TARGET; ${legacy} is not accepted`);
 }
 export const runtimeTarget = process.env.READER_RUNTIME_TARGET ?? 'default';
-if (!['default', 'acceptance'].includes(runtimeTarget)) throw new Error('Only fixed default or acceptance runtime targets are allowed');
+if (!['default', 'acceptance'].includes(runtimeTarget))
+  throw new Error('Only fixed default or acceptance runtime targets are allowed');
 // Vault names and ownership markers identify existing safety boundaries, not the plugin brand.
 export const defaultVaultPath = join(sandboxPath, 'Reader2 Test Vault');
-export const vaultPath = runtimeTarget === 'default' ? defaultVaultPath : join(sandboxPath, 'Reader2 Acceptance Vault');
+export const vaultPath =
+  runtimeTarget === 'default' ? defaultVaultPath : join(sandboxPath, 'Reader2 Acceptance Vault');
 export const pluginId = 'obsidian-reader';
 export const pluginFiles = Object.freeze(['main.js', 'manifest.json', 'styles.css']);
 export const pluginPath = join(vaultPath, '.obsidian', 'plugins', pluginId);
@@ -27,23 +30,33 @@ export const ownership = Object.freeze({
 export function inside(root, path) {
   const resolved = resolve(path);
   const rel = relative(root, resolved);
-  if (rel === '..' || rel.startsWith(`..${process.platform === 'win32' ? '\\' : '/'}`) || isAbsolute(rel)) {
+  if (
+    rel === '..' ||
+    rel.startsWith(`..${process.platform === 'win32' ? '\\' : '/'}`) ||
+    isAbsolute(rel)
+  ) {
     throw new Error(`Path is outside ${root}: ${path}`);
   }
   return resolved;
 }
 
 export async function statOrNull(path) {
-  try { return await lstat(path); }
-  catch (error) { if (error.code === 'ENOENT') return null; throw error; }
+  try {
+    return await lstat(path);
+  } catch (error) {
+    if (error.code === 'ENOENT') return null;
+    throw error;
+  }
 }
 
 // Never follow a symlink, including one in any existing ancestor directory.
 export async function assertSafePath(path, kind) {
   path = inside(repository, path);
-  if (await realpath(repository) !== repository) throw new Error('Symlinked repository paths are not allowed');
+  if ((await realpath(repository)) !== repository)
+    throw new Error('Symlinked repository paths are not allowed');
   const parents = [];
-  for (let current = path; current !== repository; current = dirname(current)) parents.unshift(current);
+  for (let current = path; current !== repository; current = dirname(current))
+    parents.unshift(current);
   for (const current of parents) {
     const stat = await statOrNull(current);
     if (!stat) continue;
@@ -51,7 +64,8 @@ export async function assertSafePath(path, kind) {
     if (current !== path || kind === 'directory') {
       if (!stat.isDirectory()) throw new Error(`Expected directory: ${current}`);
     } else if (kind === 'file') {
-      if (!stat.isFile() || stat.nlink !== 1) throw new Error(`Expected regular, unlinked file: ${current}`);
+      if (!stat.isFile() || stat.nlink !== 1)
+        throw new Error(`Expected regular, unlinked file: ${current}`);
     }
   }
 }
@@ -61,8 +75,11 @@ export async function directory(path) {
   await assertSafePath(path, 'directory');
   if (path !== repository) {
     await directory(dirname(path));
-    try { await mkdir(path); }
-    catch (error) { if (error.code !== 'EEXIST') throw error; }
+    try {
+      await mkdir(path);
+    } catch (error) {
+      if (error.code !== 'EEXIST') throw error;
+    }
   }
   await assertSafePath(path, 'directory');
 }
@@ -74,27 +91,46 @@ export async function regularFile(path) {
     const stat = await handle.stat();
     if (!stat.isFile() || stat.nlink !== 1) throw new Error(`Unsafe file: ${path}`);
     return await handle.readFile();
-  } finally { await handle.close(); }
+  } finally {
+    await handle.close();
+  }
 }
 
 export async function createOnly(path, content) {
   // A brand change must not release the original quarantined artifacts either.
-  const heldPlugins = [pluginId, 'pullman', 'obsidian-reader2'].map(id => join(defaultVaultPath, '.obsidian', 'plugins', id));
-  if (heldPlugins.some(plugin => pluginFiles.some(name => resolve(path) === join(plugin, name))) || resolve(path) === join(defaultVaultPath, '.obsidian', 'community-plugins.json')) {
+  const heldPlugins = [pluginId, 'pullman', 'obsidian-reader2'].map((id) =>
+    join(defaultVaultPath, '.obsidian', 'plugins', id),
+  );
+  if (
+    heldPlugins.some((plugin) =>
+      pluginFiles.some((name) => resolve(path) === join(plugin, name)),
+    ) ||
+    resolve(path) === join(defaultVaultPath, '.obsidian', 'community-plugins.json')
+  ) {
     const { assertDefaultVaultNotHeld } = await import('./safety-hold.mjs');
-    await assertDefaultVaultNotHeld('create/reseed installed Reader artifacts or plugin enablement');
+    await assertDefaultVaultNotHeld(
+      'create/reseed installed Reader artifacts or plugin enablement',
+    );
   }
   await assertSafePath(path, 'file');
   await directory(dirname(path));
   let handle;
-  try { handle = await open(path, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600); }
-  catch (error) {
+  try {
+    handle = await open(
+      path,
+      constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW,
+      0o600,
+    );
+  } catch (error) {
     if (error.code !== 'EEXIST') throw error;
     await regularFile(path);
     return false;
   }
-  try { await handle.writeFile(content); }
-  finally { await handle.close(); }
+  try {
+    await handle.writeFile(content);
+  } finally {
+    await handle.close();
+  }
   return true;
 }
 
@@ -114,15 +150,22 @@ export async function assertNoLegacyPlugin() {
   for (const id of legacyIds) {
     const legacy = join(vaultPath, '.obsidian/plugins', id);
     await assertSafePath(legacy, 'directory');
-    if (await statOrNull(legacy)) throw new Error(`Legacy ${id} plugin exists; explicit migration approval required before installing Reader`);
+    if (await statOrNull(legacy))
+      throw new Error(
+        `Legacy ${id} plugin exists; explicit migration approval required before installing Reader`,
+      );
   }
   const enabledPath = join(vaultPath, '.obsidian/community-plugins.json');
   await assertSafePath(enabledPath, 'file');
   if (await statOrNull(enabledPath)) {
     const enabled = JSON.parse(await regularFile(enabledPath));
-    if (!Array.isArray(enabled)) throw new Error('Invalid enabled-plugin list; refusing installation');
+    if (!Array.isArray(enabled))
+      throw new Error('Invalid enabled-plugin list; refusing installation');
     for (const id of legacyIds) {
-      if (enabled.includes(id)) throw new Error(`Legacy ${id} plugin is enabled; explicit migration approval required before installing Reader`);
+      if (enabled.includes(id))
+        throw new Error(
+          `Legacy ${id} plugin is enabled; explicit migration approval required before installing Reader`,
+        );
     }
   }
 }
