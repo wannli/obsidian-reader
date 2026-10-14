@@ -1,5 +1,6 @@
 import { bookmarkRange, renderBody, selectedPassage, textBookmark } from './render';
 import { VisibleText } from './text';
+import { HighlightFeedback } from './highlight-feedback';
 
 const GAP = 32;
 
@@ -9,6 +10,7 @@ export class ReadingSurface {
   readonly flow: HTMLDivElement;
   readonly body: HTMLElement;
   readonly finish: HTMLDivElement;
+  private readonly feedback: HighlightFeedback;
   private disposeBody?: () => void;
   private readonly resize: ResizeObserver;
   private readonly events: AbortController;
@@ -51,6 +53,7 @@ export class ReadingSurface {
     this.flow.append(this.body, this.finish);
     this.viewport.append(this.flow);
     parent.append(this.viewport);
+    this.feedback = new HighlightFeedback(this.viewport, this.body);
     this.viewport.classList.toggle('reader-paged', paged);
     this.resize = new ResizeObserver(() => this.reflow());
     this.resize.observe(this.viewport);
@@ -154,6 +157,10 @@ export class ReadingSurface {
     }
   }
 
+  highlightFeedback(range: Range): () => void {
+    return this.feedback.prepare(range);
+  }
+
   selection(): ReturnType<typeof selectedPassage> {
     return this.dead ? undefined : selectedPassage(this.body);
   }
@@ -171,6 +178,7 @@ export class ReadingSurface {
 
   private reflow(): void {
     if (this.dead) return;
+    this.feedback.dismiss();
     if (this.saveTimer !== undefined && !this.nativeSelection()) this.flush();
     if (this.dead) return;
     this.layoutPending = this.restorePending = true;
@@ -303,6 +311,7 @@ export class ReadingSurface {
   dispose(): void {
     if (this.dead) return;
     this.dead = true;
+    this.feedback.dispose();
     clearTimeout(this.saveTimer);
     this.saveTimer = undefined;
     this.stopRestoring();

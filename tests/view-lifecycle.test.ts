@@ -170,6 +170,7 @@ vi.mock('../src/reader/surface', () => ({
     restore = vi.fn();
     page = vi.fn();
     reveal = vi.fn();
+    highlightFeedback = vi.fn(() => vi.fn());
     dispose = vi.fn();
     constructor(
       parent: HTMLElement,
@@ -480,6 +481,116 @@ describe('Reader operation and close lifecycle', () => {
   });
 });
 
+describe('highlight save feedback and native title refresh', () => {
+  it.each(['success', 'failure', 'stopping', 'stale', 'surface replaced'] as const)(
+    'acknowledges only a confirmed current save: %s',
+    async (outcome) => {
+      const f = hostFixture(),
+        file = await f.note('Reading/Inbox/A.md');
+      await f.view.openArticle(file.path);
+      const surface = f.probe.surface;
+      surface.selectionValue = {
+        quote: 'words',
+        before: 'before ',
+        after: ' after',
+        range: document.createRange(),
+      };
+      const acknowledge = vi.fn();
+      surface.highlightFeedback.mockReturnValue(acknowledge);
+      const entered = gate(),
+        release = gate();
+      const annotate = f.store.annotate.bind(f.store);
+      vi.spyOn(f.store, 'annotate').mockImplementation(async (...args) => {
+        entered.resolve();
+        await release.promise;
+        if (outcome === 'failure') throw new Error('Save failed');
+        return annotate(...args);
+      });
+      const saving = f.probe.saveSelection();
+      await entered.promise;
+      expect(acknowledge).not.toHaveBeenCalled();
+      if (outcome === 'stopping') f.probe.stopping = true;
+      if (outcome === 'surface replaced') f.probe.surface = undefined;
+      if (outcome === 'stale') f.probe.generation++;
+      release.resolve();
+      if (['failure', 'stale', 'surface replaced'].includes(outcome))
+        await expect(saving).rejects.toThrow();
+      else await saving;
+      expect(acknowledge).toHaveBeenCalledTimes(outcome === 'success' ? 1 : 0);
+      if (outcome === 'success') {
+        expect(surface.displayedBody).toBe('before words after');
+        expect(surface.selectionValue.quote).toBe('words');
+        await f.probe.saveSelection(); // identical selection is a no-op
+        expect(acknowledge).toHaveBeenCalledTimes(1);
+      }
+    },
+  );
+  it('refreshes cloned native state without recursively opening or remounting the article', async () => {
+    const f = hostFixture(),
+      file = await f.note('Reading/Inbox/A.md');
+    f.leaf.setViewState.mockImplementation(async ({ state }: any) =>
+      f.view.setState(JSON.parse(JSON.stringify(state)), { history: false }),
+    );
+    await f.view.openArticle(file.path);
+    const surface = f.probe.surface;
+    surface.selectionValue = { quote: 'words', before: 'before ', after: ' after' };
+    const selection = surface.selectionValue;
+    expect(f.view.getDisplayText()).toBe('Reader: A');
+    const raw = await f.vault.read(file);
+    f.vault.bytes.set(file, patchProperties(raw, { title: 'External title' }));
+    await f.view.changed({ path: file.path });
+    expect(f.view.getDisplayText()).toBe('Reader: External title');
+    expect(f.view.contentEl.querySelector('h1')?.textContent).toBe('External title');
+    expect(f.probe.surface).toBe(surface);
+    expect(surface.dispose).not.toHaveBeenCalled();
+    expect(surface.selectionValue).toBe(selection);
+    expect(f.view.getState()).not.toHaveProperty('readerPresentationOnly');
+    surface.selectionValue = undefined;
+    await f.view.readingList();
+    expect(f.view.getDisplayText()).toBe('Reading list');
+    expect(f.leaf.setViewState).toHaveBeenCalledTimes(3);
+  });
+  it('does not swallow concurrent navigation or replay an old article after delayed cloned refreshes', async () => {
+    const f = hostFixture(),
+      a = await f.note('Reading/Inbox/A.md'),
+      b = await f.note('Reading/Inbox/B.md');
+    const pending: { state: Record<string, unknown>; done: ReturnType<typeof gate> }[] = [];
+    f.leaf.setViewState.mockImplementation(({ state }: any) => {
+      const done = gate();
+      pending.push({ state: JSON.parse(JSON.stringify(state)), done });
+      return done.promise;
+    });
+    await f.view.openArticle(a.path);
+    const first = f.probe.surface;
+    // An ordinary state request must navigate even with a presentation refresh pending.
+    await f.view.setState({ file: b.path, queue: 'Inbox' }, { history: false });
+    const current = f.probe.surface;
+    expect(f.view.file).toBe(b);
+    expect(current).not.toBe(first);
+    current.selectionValue = { quote: 'words', before: 'before ', after: ' after' };
+    const selection = current.selectionValue;
+    expect(pending).toHaveLength(2);
+    for (const request of pending.reverse()) {
+      const result = { history: true };
+      await f.view.setState(request.state, result);
+      request.done.resolve();
+      expect(result.history).toBe(false);
+      expect(f.view.file).toBe(b);
+      expect(f.probe.surface).toBe(current);
+      expect(current.selectionValue).toBe(selection);
+    }
+    expect(current.dispose).not.toHaveBeenCalled();
+    expect(f.view.getDisplayText()).toBe('Reader: B');
+    expect(f.view.getState()).toEqual({ file: b.path, queue: 'Inbox' });
+    current.selectionValue = undefined;
+    await f.view.readingList();
+    const last = pending[pending.length - 1];
+    await f.view.setState(last.state, { history: false });
+    last.done.resolve();
+    expect(f.view.getDisplayText()).toBe('Reading list');
+  });
+});
+
 describe('displayed source and deferred rendering', () => {
   it('rejects stale selection, passage, move, topic, trash and position actions while newer source is deferred', async () => {
     const f = hostFixture(),
@@ -616,7 +727,7 @@ describe('browsing context and presentation', () => {
     expect(f.view.contentEl.querySelector('h1')?.textContent).toBe('A');
     await f.view.openArticle(b.path);
     expect(f.view.getState()).toEqual({ file: b.path, queue: 'Inbox' });
-    expect(f.view.getDisplayText()).toBe('B');
+    expect(f.view.getDisplayText()).toBe('Reader: B');
     expect(f.view.contentEl.querySelector('h1')?.textContent).toBe('B');
     expect(f.app.workspace.requestSaveLayout).toHaveBeenCalledTimes(2);
     f.probe.persistPosition('words');
@@ -626,9 +737,11 @@ describe('browsing context and presentation', () => {
     await f.vault.move(b, 'Reading/Inbox/Renamed.md');
     await f.view.changed({ path: b.path, previousPath: old });
     expect(f.view.contentEl.querySelector('h1')?.textContent).toBe('Renamed');
+    expect(f.view.getDisplayText()).toBe('Reader: Renamed');
     expect(f.view.getState().file).toBe(b.path);
     await f.view.readingList();
     expect(f.view.getState().file).toBeUndefined();
+    expect(f.view.getDisplayText()).toBe('Reading list');
     expect(f.app.workspace.requestSaveLayout).toHaveBeenCalledTimes(4);
   });
 
@@ -1817,6 +1930,7 @@ describe('plugin routing and conservative expiry', () => {
     const view = new ReaderView(f.leaf, f.plugin);
     f.leaf.view = view;
     await view.openArticle(article.path);
+    f.leaf.setViewState.mockClear(); // Ignore the presentation-only refresh on open.
     f.leaf.setViewState.mockImplementation(async (state: any) => {
       if (state.type === 'markdown') {
         const native = new MarkdownView(f.leaf);

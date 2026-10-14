@@ -126,6 +126,9 @@ export class ReaderView extends ItemView {
     return READER_VIEW;
   }
   getDisplayText(): string {
+    return this.file ? `Reader: ${this.articleLabel()}` : 'Reading list';
+  }
+  private articleLabel(): string {
     return this.snapshot
       ? (articleInfo(this.snapshot.path, this.snapshot.properties, this.host.store.root)?.title ??
           this.snapshot.file.basename)
@@ -138,6 +141,14 @@ export class ReaderView extends ItemView {
     return { file: this.file?.path, queue: this.queue };
   }
   async setState(state: Record<string, unknown>, result: ViewStateResult): Promise<void> {
+    // Request-local discriminator survives host cloning. Unlike an ambient refresh
+    // flag, it cannot swallow concurrent navigation. Delayed refreshes use current
+    // state, never an old article snapshot. getState() never persists this marker.
+    if (state.readerPresentationOnly === true) {
+      result.history = false;
+      await super.setState(this.getState(), result);
+      return;
+    }
     if (queues.includes(state.queue as Queue)) this.queue = state.queue as Queue;
     if (typeof state.file === 'string') await this.openArticle(state.file);
     else await this.readingList();
@@ -284,13 +295,16 @@ export class ReaderView extends ItemView {
     this.snapshot = snapshot;
   }
   private syncPresentation(): void {
-    const title = this.getDisplayText();
+    const title = this.articleLabel();
     if (this.articleTitle) this.articleTitle.textContent = title;
     const key = JSON.stringify([this.file?.path, this.queue, title]);
     if (!this.stopping && !this.host.signal.aborted && key !== this.presentationKey) {
       this.presentationKey = key;
-      // Public layout persistence; no private leaf/header refresh hooks. The article
-      // title is also visible in our own DOM even if the native tab label refreshes later.
+      // Public same-view state refresh lets Obsidian update its header/tab from
+      // getDisplayText; never reach into native chrome or call private updateHeader.
+      void this.leaf
+        .setViewState({ type: READER_VIEW, state: { readerPresentationOnly: true } })
+        .catch((error) => this.error(error));
       this.app.workspace.requestSaveLayout();
     }
   }
@@ -610,6 +624,11 @@ export class ReaderView extends ItemView {
     }
     const range = locateSelection(body, selection.quote, selection.before, selection.after);
     const next = addHighlight(body, range.from, range.to);
+    const feedbackSurface = this.surface;
+    const acknowledge =
+      !pending && !this.stopping && selection.range
+        ? feedbackSurface?.highlightFeedback(selection.range)
+        : undefined;
     const promise = this.host.store.annotate(snapshot, (raw) => {
       if (!this.current(snapshot, generation))
         throw new Error('The article changed before the highlight was saved.');
@@ -631,6 +650,13 @@ export class ReaderView extends ItemView {
       this.surface?.setBody(next, text(saved.properties.url));
       if (this.surface?.displayedBody === next) this.ownDeferred = undefined;
       this.controls();
+      if (
+        !this.stopping &&
+        this.surface === feedbackSurface &&
+        saved.body === next &&
+        next !== snapshot.body
+      )
+        acknowledge?.();
     } finally {
       if (this.writing === promise) this.writing = undefined;
     }

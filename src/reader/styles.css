@@ -1,4 +1,24 @@
 /* Reader's content only: native Obsidian chrome and dialogs stay under host control. */
+.reader-highlight-feedback {
+  position: fixed;
+  z-index: 10;
+  pointer-events: none;
+  user-select: none;
+  box-sizing: border-box;
+  padding: 4px 8px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 4px;
+  background: var(--background-primary);
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+  animation: none !important;
+  transition: none !important;
+}
+.reader-highlight-feedback[hidden] {
+  display: none;
+}
 .reader-view {
   display: flex;
   flex-direction: column;
