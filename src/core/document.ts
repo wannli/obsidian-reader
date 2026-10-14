@@ -1,5 +1,5 @@
 import { isMap, isNode, isScalar, isSeq, parseDocument, Scalar, type Document } from 'yaml';
-import { type Properties } from './model';
+import { formatPublished, type Properties } from './model';
 
 interface ArticleDocument {
   raw: string;
@@ -71,7 +71,11 @@ export function patchProperties(raw: string, changes: Properties): string {
     } else {
       const previous = yaml.get(key, true);
       const next = typeof value === 'string' ? new Scalar(value) : yaml.createNode(value);
-      if (next instanceof Scalar && typeof value === 'string') next.type = Scalar.QUOTE_DOUBLE;
+      if (next instanceof Scalar && typeof value === 'string')
+        next.type =
+          key === 'published' && formatPublished(value) === value
+            ? Scalar.PLAIN
+            : Scalar.QUOTE_DOUBLE;
       if (isNode(previous)) {
         next.comment = previous.comment;
         next.commentBefore = previous.commentBefore;

@@ -37,7 +37,7 @@ export default class ReaderPlugin extends Plugin {
   private attempted = new Set<string>();
   private promotions = new Map<TFile, boolean>();
   private promoting = new Set<TFile>();
-  private lastRefresh = 0;
+  private lastMaintenance = 0;
   private refreshing = false;
   private referencesReady = false;
   private referencesRecovered = false;
@@ -164,7 +164,7 @@ export default class ReaderPlugin extends Plugin {
     );
     this.registerDomEvent(window, 'online', () => {
       this.attempted.clear();
-      void this.tick(true, true).catch((error) => this.notice(error));
+      void this.tick(false, true, true).catch((error) => this.notice(error));
     });
     this.registerDomEvent(document, 'visibilitychange', () => {
       if (document.visibilityState === 'visible')
@@ -172,6 +172,7 @@ export default class ReaderPlugin extends Plugin {
       else this.flushViews();
     });
     this.registerDomEvent(window, 'pagehide', () => this.flushViews());
+    // Automatic ticks retain housekeeping, never feed imports.
     this.registerInterval(
       window.setInterval(() => {
         void this.tick().catch((error) => this.notice(error));
@@ -328,7 +329,7 @@ export default class ReaderPlugin extends Plugin {
       this.attempted = new Set();
       this.promotions = new Map();
       this.promoting = new Set();
-      this.lastRefresh = 0;
+      this.lastMaintenance = 0;
       this.refreshing = false;
       this.referencesReady = this.referencesRecovered = false;
       this.lifetime = new AbortController();
@@ -574,21 +575,34 @@ export default class ReaderPlugin extends Plugin {
       if (!signal.aborted) this.notice(error);
     });
   }
-  private async tick(force = false, recover = false): Promise<void> {
+  private async tick(syncFeeds = false, recover = false, forceMaintenance = false): Promise<void> {
     const signal = this.signal,
       ingestion = this.ingestion;
-    if (signal.aborted || document.visibilityState !== 'visible' || this.refreshing) return;
+    if (signal.aborted || document.visibilityState !== 'visible') return;
+    if (this.refreshing) {
+      // An explicit Sync must not disappear behind expiry-only housekeeping.
+      // Keep its captured ingestion generation, without taking maintenance ownership.
+      try {
+        if (syncFeeds && navigator.onLine) await ingestion.refreshAll();
+      } catch (error) {
+        if (!signal.aborted) throw error;
+      }
+      return;
+    }
     if (!this.referencesRecovered && this.recoverReferences()) this.referencesReady = true;
     if (recover)
       for (const article of this.store.catalog.values()) {
         const file = this.store.vault.file(article.path);
         if (file) this.recover(file);
       }
-    if (!force && Date.now() - this.lastRefresh < 4 * 60 * 60 * 1000) return;
+    if (!syncFeeds && !forceMaintenance && Date.now() - this.lastMaintenance < 4 * 60 * 60 * 1000)
+      return;
     this.refreshing = true;
-    this.lastRefresh = Date.now();
+    this.lastMaintenance = Date.now();
     try {
-      if (navigator.onLine) await ingestion.refreshAll();
+      // Only the explicit Refresh feeds command sets syncFeeds. Online/startup/
+      // visibility/timer callbacks may recover captures and expire Stream notes.
+      if (syncFeeds && navigator.onLine) await ingestion.refreshAll();
       if (!signal.aborted) await this.expire();
     } catch (error) {
       if (!signal.aborted) throw error;

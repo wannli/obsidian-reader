@@ -114,6 +114,20 @@ function host() {
   return { vault, store, notify, ingestion };
 }
 type Host = ReturnType<typeof host>;
+function pausedSubscriptionCreate(h: Host) {
+  const entered = deferred<void>(),
+    release = deferred<void>(),
+    create = h.store.vault.create.bind(h.store.vault);
+  const creating = vi
+    .spyOn(h.store.vault, 'create')
+    .mockImplementationOnce(async (path, raw, guard) => {
+      entered.resolve();
+      await release.promise;
+      await guard?.();
+      return create(path, raw);
+    });
+  return { entered, release, creating };
+}
 async function seedFeed({ vault, store }: Host, url = FEED, path = 'Reading/Wires/Example.md') {
   const properties = { type: 'feed', title: 'Example', url, prefix: 'Example', enabled: true };
   await vault.create(path, createDocument(properties));
@@ -168,11 +182,83 @@ afterEach(() => {
 });
 
 describe('subscription import contracts', () => {
-  it('initially imports exactly the latest 20, in Stream, regardless of feed order', async () => {
+  it('adds a subscription offline with editable hostname defaults and no network or imports', async () => {
+    const h = host();
+    vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(false);
+    await h.ingestion.subscribe(` ${FEED}#fragment `);
+    const feed = h.store.catalog.feeds()[0];
+    expect(readDocument(await h.vault.read(h.vault.file(feed.path)!)).properties).toEqual({
+      type: 'feed',
+      title: 'example.com',
+      url: FEED,
+      prefix: 'example.com',
+      enabled: true,
+    });
+    expect(request).not.toHaveBeenCalled();
+    expect(extraction).not.toHaveBeenCalled();
+    expect(urls(h.store)).toEqual([]);
+  });
+
+  it.each(['not a URL', 'file:///tmp/feed.xml', 'javascript:alert(1)'])(
+    'rejects invalid feed URLs locally without requests or notes: %s',
+    async (url) => {
+      const h = host();
+      await expect(h.ingestion.subscribe(url)).rejects.toThrow();
+      expect(request).not.toHaveBeenCalled();
+      expect(h.vault.files.size).toBe(0);
+    },
+  );
+
+  it('honors the URL and prefix edited after Add and before the first explicit Sync', async () => {
+    const h = host();
+    await h.ingestion.subscribe(FEED);
+    const feed = h.store.catalog.feeds()[0],
+      file = h.vault.file(feed.path)!;
+    const url = 'https://example.com/edited-feed.xml';
+    await h.vault.process(file, (raw) =>
+      patchProperties(raw, {
+        url,
+        title: 'Edited feed',
+        prefix: 'Edited prefix',
+      }),
+    );
+    h.store.catalog.update(file.path, readDocument(await h.vault.read(file)).properties);
+    expect(request).not.toHaveBeenCalled();
+    serve((requested) => {
+      expect(requested).toBe(url);
+      return response(xml([item(1)]));
+    });
+    await h.ingestion.refreshAll();
+    expect(request).toHaveBeenCalledOnce();
+    const article = h.store.catalog.findUrl(item(1).url)!;
+    expect(article.path).toContain('Edited prefix');
+    expect((await h.store.read(article.path)).properties.feed).toBe(vaultLink(feed.path));
+    expect(h.store.catalog.feed(file.path)?.title).toBe('Edited feed');
+  });
+
+  it('neither disabling nor re-enabling imports; explicit Sync respects disabled feeds', async () => {
+    const h = host();
+    await h.ingestion.subscribe(FEED);
+    const feed = h.store.catalog.feeds()[0];
+    await h.ingestion.setFeed(feed, false);
+    await h.ingestion.refreshAll();
+    await h.ingestion.setFeed(feed, true);
+    expect(request).not.toHaveBeenCalled();
+    expect(urls(h.store)).toEqual([]);
+    serve(() => response(xml([item(1)])));
+    await h.ingestion.refreshAll();
+    expect(request).toHaveBeenCalledOnce();
+    expect(urls(h.store)).toEqual([item(1).url]);
+  });
+
+  it('adds locally, then imports exactly the latest 20 on explicit Sync regardless of feed order', async () => {
     const h = host(),
       entries = Array.from({ length: 25 }, (_, i) => item(i + 1));
     serve(() => response(xml(entries)));
     await h.ingestion.subscribe(FEED);
+    expect(request).not.toHaveBeenCalled();
+    expect(urls(h.store)).toEqual([]);
+    await h.ingestion.refreshAll();
     expect(urls(h.store)).toEqual(
       entries
         .slice(5)
@@ -182,10 +268,13 @@ describe('subscription import contracts', () => {
     const feed = h.store.catalog.feeds()[0];
     expect(h.store.catalog.list('Stream')).toHaveLength(20);
     const snapshot = await h.store.read(h.store.catalog.findUrl(item(25).url)!.path);
+    const published = new Date(item(25).published!),
+      pad = (part: number) => String(part).padStart(2, '0');
+    const expectedPublished = `${published.getFullYear()}-${pad(published.getMonth() + 1)}-${pad(published.getDate())}T${pad(published.getHours())}:${pad(published.getMinutes())}`;
     expect(snapshot.body).toBe(await feeds.feedMarkdown(item(25)));
     expect(snapshot.properties).toMatchObject({
       feed: vaultLink(feed.path),
-      published: item(25).published,
+      published: expectedPublished,
     });
     expect(extraction).not.toHaveBeenCalled();
     expect(h.notify).not.toHaveBeenCalled();
@@ -199,6 +288,7 @@ describe('subscription import contracts', () => {
       let current = entries;
       serve(() => response(xml(current)));
       await h.ingestion.subscribe(FEED);
+      await h.ingestion.refreshAll();
       let ingestion = h.ingestion;
       if (restart) {
         ingestion.stop();
@@ -224,6 +314,7 @@ describe('subscription import contracts', () => {
     let current = [item(1)];
     serve(() => response(xml(current)));
     await h.ingestion.subscribe(FEED);
+    await h.ingestion.refreshAll();
     const feedFile = h.vault.file(h.store.catalog.feeds()[0].path)!;
     const feedBefore = await h.vault.read(feedFile);
     const conversion = vi.spyOn(feeds, 'feedMarkdown');
@@ -244,6 +335,7 @@ describe('subscription import contracts', () => {
     let current = entries;
     serve(() => response(xml(current)));
     await h.ingestion.subscribe(FEED);
+    await h.ingestion.refreshAll();
     current = [...entries].reverse();
     await h.ingestion.refreshAll();
     expect(urls(h.store)).toEqual(
@@ -271,6 +363,7 @@ describe('subscription import contracts', () => {
     ];
     serve(() => response(xml(entries)));
     await h.ingestion.subscribe(FEED);
+    await h.ingestion.refreshAll();
     expect(urls(h.store)).toEqual([item(2).url, item(3).url]);
   });
 
@@ -296,6 +389,7 @@ describe('subscription import contracts', () => {
     let current = entries.slice(0, 20);
     serve(() => response(xml(current)));
     await h.ingestion.subscribe(FEED);
+    await h.ingestion.refreshAll();
     const outside = await h.store.read(h.store.catalog.findUrl(item(1).url)!.path);
     const inside = await h.store.read(h.store.catalog.findUrl(item(20).url)!.path);
     await h.store.trash(outside);
@@ -352,7 +446,7 @@ describe('subscription import contracts', () => {
 });
 
 describe('subscription filename allocation and external metadata', () => {
-  it('serializes different concurrent feed URLs with the same title through note creation', async () => {
+  it('serializes different concurrent feed URLs with the same hostname through local note creation', async () => {
     const h = host(),
       secondUrl = 'https://example.com/other-feed.xml';
     const entered = deferred<void>(),
@@ -370,8 +464,8 @@ describe('subscription filename allocation and external metadata', () => {
     ];
     await entered.promise;
     try {
-      await flush(); // Drain the other response without sleeps; the first create is still blocked.
-      expect(creating.mock.calls.map(([path]) => path)).toEqual(['Reading/Wires/Example.md']);
+      await flush(); // Drain the other queued addition without sleeps; the first create is still blocked.
+      expect(creating.mock.calls.map(([path]) => path)).toEqual(['Reading/Wires/example.com.md']);
     } finally {
       release.resolve();
     }
@@ -381,10 +475,13 @@ describe('subscription filename allocation and external metadata', () => {
     ]);
     const subscriptions = h.store.catalog.feeds();
     expect(subscriptions.map((feed) => feed.path).sort()).toEqual([
-      'Reading/Wires/Example 2.md',
-      'Reading/Wires/Example.md',
+      'Reading/Wires/example.com 2.md',
+      'Reading/Wires/example.com.md',
     ]);
     expect(subscriptions.map((feed) => feed.url).sort()).toEqual([FEED, secondUrl].sort());
+    expect(request).not.toHaveBeenCalled();
+    expect(urls(h.store)).toEqual([]);
+    await h.ingestion.refreshAll();
     for (const [url, id] of [
       [FEED, 1],
       [secondUrl, 2],
@@ -393,7 +490,7 @@ describe('subscription filename allocation and external metadata', () => {
       const persisted = readDocument(await h.vault.read(h.vault.file(feed.path)!));
       expect(persisted.properties).toMatchObject({
         type: 'feed',
-        title: 'Example',
+        title: 'example.com',
         url,
         enabled: true,
       });
@@ -406,9 +503,9 @@ describe('subscription filename allocation and external metadata', () => {
 
   it('uses vault.exists to skip a folder and a case-alias collision without touching either', async () => {
     const h = host(),
-      folder = 'Reading/Wires/Example.md';
+      folder = 'Reading/Wires/example.com.md';
     const alias = await h.vault.create(
-      'Reading/Wires/EXAMPLE 2.md',
+      'Reading/Wires/EXAMPLE.COM 2.md',
       '# Existing user note\n\nPreserve me exactly.\n',
     );
     const before = await h.vault.read(alias);
@@ -427,13 +524,13 @@ describe('subscription filename allocation and external metadata', () => {
     serve(() => response(xml([])));
     await h.ingestion.subscribe(FEED);
     expect(exists.mock.calls.map(([path]) => path)).toEqual([
-      'Reading/Wires/Example.md',
-      'Reading/Wires/Example 2.md',
-      'Reading/Wires/Example 3.md',
+      'Reading/Wires/example.com.md',
+      'Reading/Wires/example.com 2.md',
+      'Reading/Wires/example.com 3.md',
     ]);
-    expect(creating.mock.calls.map(([path]) => path)).toEqual(['Reading/Wires/Example 3.md']);
+    expect(creating.mock.calls.map(([path]) => path)).toEqual(['Reading/Wires/example.com 3.md']);
     expect(h.store.catalog.feeds().map((feed) => feed.path)).toEqual([
-      'Reading/Wires/Example 3.md',
+      'Reading/Wires/example.com 3.md',
     ]);
     expect(await h.vault.read(alias)).toBe(before);
     expect(h.vault.file(folder)).toBeUndefined();
@@ -450,7 +547,7 @@ describe('subscription filename allocation and external metadata', () => {
       'Too many subscriptions share this filename.',
     );
     expect(exists).toHaveBeenCalledTimes(1000);
-    expect(exists).toHaveBeenLastCalledWith('Reading/Wires/Example 1000.md');
+    expect(exists).toHaveBeenLastCalledWith('Reading/Wires/example.com 1000.md');
     expect(create).not.toHaveBeenCalled();
     expect(h.vault.files.size).toBe(0);
     expect(h.store.catalog.feeds()).toEqual([]);
@@ -461,17 +558,22 @@ describe('subscription filename allocation and external metadata', () => {
     '`= this.file.name`',
     '`$= dv.current().file.name`',
     '```dataview\nLIST\n```',
-  ])('rejects an unsafe parsed feed title at the persistence boundary: %s', async (title) => {
-    const h = host(),
-      create = vi.spyOn(h.vault, 'create');
-    // Parsing/security has separate tests. Simulate externally supplied metadata
-    // reaching ingestion and require the last boundary to reject it independently.
-    vi.spyOn(feeds, 'parseFeed').mockReturnValue({ title, items: [] });
+  ])('never persists externally supplied feed titles on Add or Sync: %s', async (title) => {
+    const h = host();
+    const parse = vi.spyOn(feeds, 'parseFeed').mockReturnValue({ title, items: [] });
     serve(() => response(xml([])));
-    await expect(h.ingestion.subscribe(FEED)).rejects.toThrow('Cannot capture publisher content');
-    expect(create).not.toHaveBeenCalled();
-    expect(h.vault.bytes.size).toBe(0);
-    expect(h.store.catalog.feeds()).toEqual([]);
+    await h.ingestion.subscribe(FEED);
+    expect(request).not.toHaveBeenCalled();
+    expect(parse).not.toHaveBeenCalled();
+    const feed = h.store.catalog.feeds()[0],
+      file = h.vault.file(feed.path)!;
+    const before = await h.vault.read(file);
+    expect(readDocument(before).properties.title).toBe('example.com');
+    await h.ingestion.refreshAll();
+    expect(parse).toHaveBeenCalledOnce();
+    expect(await h.vault.read(file)).toBe(before);
+    expect(h.vault.files.size).toBe(1);
+    expect(urls(h.store)).toEqual([]);
   });
 });
 
@@ -488,61 +590,50 @@ describe('subscription caller cancellation', () => {
   });
 
   it.each([1, 2])(
-    'drops a pending response after all %s joined callers cancel, and permits retry',
+    'cancels a pending local create after all %s joined callers close and permits retry',
     async (count) => {
       const h = host(),
-        pending = deferred<ReturnType<typeof response>>(),
-        entered = deferred<void>();
+        pending = pausedSubscriptionCreate(h);
       const controllers = Array.from({ length: count }, () => new AbortController());
-      serve(() => {
-        entered.resolve();
-        return pending.promise;
-      });
       const results = controllers.map((controller) =>
         observe(h.ingestion.subscribe(FEED, controller.signal)),
       );
-      await entered.promise;
+      await pending.entered.promise;
       controllers.forEach((controller) => controller.abort());
       expect(
         (await Promise.all(results)).every((result) => result.error?.name === 'AbortError'),
       ).toBe(true);
-      pending.resolve(response(xml([item(1)])));
+      pending.release.resolve();
       await flush();
-      expect(request).toHaveBeenCalledTimes(1);
       expect(h.vault.files.size).toBe(0);
       expect(h.store.catalog.feeds()).toEqual([]);
-      expect(h.notify).not.toHaveBeenCalled();
-      serve(() => response(xml([item(1)])));
       await h.ingestion.subscribe(FEED);
       expect(h.store.catalog.feeds()).toHaveLength(1);
-      expect(urls(h.store)).toEqual([item(1).url]);
+      expect(urls(h.store)).toEqual([]);
+      expect(request).not.toHaveBeenCalled();
+      expect(h.notify).not.toHaveBeenCalled();
     },
   );
 
   it.each([0, 1])(
-    'keeps shared normalized-URL work alive when caller %s cancels',
+    'keeps shared normalized-URL creation alive when caller %s cancels',
     async (cancelled) => {
       const h = host(),
-        pending = deferred<ReturnType<typeof response>>(),
-        entered = deferred<void>();
+        pending = pausedSubscriptionCreate(h);
       const controllers = [new AbortController(), new AbortController()];
       const removed = controllers.map((controller) =>
         vi.spyOn(controller.signal, 'removeEventListener'),
       );
-      serve(() => {
-        entered.resolve();
-        return pending.promise;
-      });
       const results = [observe(h.ingestion.subscribe(FEED, controllers[0].signal))];
-      await entered.promise;
+      await pending.entered.promise;
       results.push(observe(h.ingestion.subscribe(` ${FEED}#joined `, controllers[1].signal)));
       controllers[cancelled].abort();
       expect((await results[cancelled]).error).toMatchObject({ name: 'AbortError' });
-      pending.resolve(response(xml([item(1)])));
+      pending.release.resolve();
       expect((await results[1 - cancelled]).error).toBeUndefined();
       expect(h.store.catalog.feeds()).toHaveLength(1);
-      expect(urls(h.store)).toEqual([item(1).url]);
-      expect(request).toHaveBeenCalledTimes(2); // One shared lookup, then the guarded initial refresh.
+      expect(urls(h.store)).toEqual([]);
+      expect(request).not.toHaveBeenCalled();
       removed.forEach((remove) =>
         expect(remove).toHaveBeenCalledWith('abort', expect.any(Function)),
       );
@@ -550,42 +641,37 @@ describe('subscription caller cancellation', () => {
     },
   );
 
-  it('removes caller listeners and shared tracking after failure so a live signal can retry', async () => {
+  it('removes caller listeners and shared tracking after a local failure so a live signal can retry', async () => {
     const h = host(),
       controller = new AbortController();
     const remove = vi.spyOn(controller.signal, 'removeEventListener');
-    serve(() => response('', 503));
+    vi.spyOn(h.store.vault, 'create').mockRejectedValueOnce(new Error('Disk unavailable.'));
     await expect(h.ingestion.subscribe(FEED, controller.signal)).rejects.toThrow(
-      'Feed returned HTTP 503.',
+      'Disk unavailable.',
     );
     expect(remove).toHaveBeenCalledWith('abort', expect.any(Function));
     expect(h.vault.files.size).toBe(0);
-    serve(() => response(xml([item(1)])));
     await h.ingestion.subscribe(FEED, controller.signal);
     expect(h.store.catalog.feeds()).toHaveLength(1);
-    expect(urls(h.store)).toEqual([item(1).url]);
+    expect(urls(h.store)).toEqual([]);
     expect(remove).toHaveBeenCalledTimes(2);
+    expect(request).not.toHaveBeenCalled();
   });
 
-  it('allows a new live caller to join an uncancellable request after earlier callers closed', async () => {
+  it('allows a new live caller to join a pending local create after earlier callers closed', async () => {
     const h = host(),
-      controller = new AbortController();
-    const pending = deferred<ReturnType<typeof response>>(),
-      entered = deferred<void>();
-    serve(() => {
-      entered.resolve();
-      return pending.promise;
-    });
+      controller = new AbortController(),
+      pending = pausedSubscriptionCreate(h);
     const cancelled = observe(h.ingestion.subscribe(FEED, controller.signal));
-    await entered.promise;
+    await pending.entered.promise;
     controller.abort();
     expect((await cancelled).error).toMatchObject({ name: 'AbortError' });
     const live = h.ingestion.subscribe(FEED);
-    pending.resolve(response(xml([item(1)])));
+    pending.release.resolve();
     await live;
     expect(h.store.catalog.feeds()).toHaveLength(1);
-    expect(urls(h.store)).toEqual([item(1).url]);
-    expect(request).toHaveBeenCalledTimes(2);
+    expect(urls(h.store)).toEqual([]);
+    expect(request).not.toHaveBeenCalled();
   });
 
   it('does not start queued subscription work after its caller cancels', async () => {
@@ -615,38 +701,75 @@ describe('subscription caller cancellation', () => {
     'guards feed creation after a folder await when callers %s',
     async (action) => {
       const h = host(),
-        controller = new AbortController();
-      const folder = deferred<void>(),
-        entered = deferred<void>(),
-        create = h.store.vault.create.bind(h.store.vault);
-      const creating = vi
-        .spyOn(h.store.vault, 'create')
-        .mockImplementationOnce(async (path, raw, guard) => {
-          entered.resolve();
-          await folder.promise;
-          await guard?.();
-          return create(path, raw);
-        });
-      serve(() => response(xml([item(1)])));
+        controller = new AbortController(),
+        pending = pausedSubscriptionCreate(h);
       const result = observe(h.ingestion.subscribe(FEED, controller.signal));
-      await entered.promise;
-      expect(creating.mock.calls[0][2]).toBeTypeOf('function');
+      await pending.entered.promise;
+      expect(pending.creating.mock.calls[0][2]).toBeTypeOf('function');
       if (action === 'abort') controller.abort();
       else h.ingestion.stop();
-      folder.resolve();
+      pending.release.resolve();
       expect((await result).error).toMatchObject(
         action === 'abort' ? { name: 'AbortError' } : { message: 'Reader has stopped.' },
       );
       await flush();
       expect(h.vault.files.size).toBe(0);
       expect(h.store.catalog.feeds()).toEqual([]);
+      expect(request).not.toHaveBeenCalled();
       expect(h.notify).not.toHaveBeenCalled();
     },
   );
 
   it('allows feed creation after a folder await if another joined caller is still live', async () => {
     const h = host(),
+      controller = new AbortController(),
+      pending = pausedSubscriptionCreate(h);
+    const cancelled = observe(h.ingestion.subscribe(FEED, controller.signal));
+    await pending.entered.promise;
+    const live = h.ingestion.subscribe(FEED);
+    controller.abort();
+    expect((await cancelled).error).toMatchObject({ name: 'AbortError' });
+    pending.release.resolve();
+    await live;
+    expect(h.store.catalog.feeds()).toHaveLength(1);
+    expect(urls(h.store)).toEqual([]);
+    expect(request).not.toHaveBeenCalled();
+  });
+
+  it('does not undo an already-dispatched subscription create when its caller closes', async () => {
+    const h = host(),
       controller = new AbortController();
+    const entered = deferred<void>(),
+      release = deferred<void>(),
+      create = h.store.vault.create.bind(h.store.vault);
+    vi.spyOn(h.store.vault, 'create').mockImplementationOnce(async (path, raw, guard) => {
+      await guard?.();
+      const file = await create(path, raw);
+      entered.resolve();
+      await release.promise;
+      return file;
+    });
+    const result = observe(h.ingestion.subscribe(FEED, controller.signal));
+    await entered.promise;
+    const file = [...h.vault.files.values()][0],
+      before = await h.vault.read(file);
+    controller.abort();
+    expect((await result).error).toMatchObject({ name: 'AbortError' });
+    release.resolve();
+    await flush();
+    expect(h.store.catalog.feeds()).toHaveLength(1);
+    expect(urls(h.store)).toEqual([]);
+    expect(h.vault.files.size).toBe(1);
+    expect(await h.vault.read(file)).toBe(before);
+    expect(request).not.toHaveBeenCalled();
+    expect(h.notify).not.toHaveBeenCalled();
+  });
+
+  it('does not bind a later explicit Sync to the completed Add caller lifetime', async () => {
+    const h = host(),
+      controller = new AbortController();
+    await h.ingestion.subscribe(FEED, controller.signal);
+    expect(request).not.toHaveBeenCalled();
     const folder = deferred<void>(),
       entered = deferred<void>(),
       create = h.store.vault.create.bind(h.store.vault);
@@ -659,71 +782,14 @@ describe('subscription caller cancellation', () => {
         return create(path, raw);
       });
     serve(() => response(xml([item(1)])));
-    const cancelled = observe(h.ingestion.subscribe(FEED, controller.signal));
+    const syncing = h.ingestion.refreshAll();
     await entered.promise;
     expect(creating.mock.calls[0][2]).toBeTypeOf('function');
-    const live = h.ingestion.subscribe(FEED);
     controller.abort();
-    expect((await cancelled).error).toMatchObject({ name: 'AbortError' });
     folder.resolve();
-    await live;
+    await syncing;
     expect(h.store.catalog.feeds()).toHaveLength(1);
     expect(urls(h.store)).toEqual([item(1).url]);
-  });
-
-  it('cancels the initial refresh without deleting a feed whose creation already completed', async () => {
-    const h = host(),
-      controller = new AbortController();
-    const pending = deferred<ReturnType<typeof response>>(),
-      entered = deferred<void>();
-    let requests = 0;
-    serve(() => {
-      if (++requests === 1) return response(xml([item(1)]));
-      entered.resolve();
-      return pending.promise;
-    });
-    const result = observe(h.ingestion.subscribe(FEED, controller.signal));
-    await entered.promise;
-    const feed = h.store.catalog.feeds()[0],
-      file = h.vault.file(feed.path)!;
-    const before = await h.vault.read(file);
-    controller.abort();
-    expect((await result).error).toMatchObject({ name: 'AbortError' });
-    pending.resolve(response(xml([item(1)])));
-    await flush();
-    expect(urls(h.store)).toEqual([]);
-    expect(h.vault.files.size).toBe(1);
-    expect(await h.vault.read(file)).toBe(before);
-    expect(h.notify).not.toHaveBeenCalled();
-  });
-
-  it('guards initial article creation after a folder await when every caller closes', async () => {
-    const h = host(),
-      controller = new AbortController();
-    const folder = deferred<void>(),
-      entered = deferred<void>(),
-      create = h.store.vault.create.bind(h.store.vault);
-    const creating = vi
-      .spyOn(h.store.vault, 'create')
-      .mockImplementation(async (path, raw, guard) => {
-        if (readDocument(raw).properties.type === 'article') {
-          entered.resolve();
-          await folder.promise;
-        }
-        await guard?.();
-        return create(path, raw);
-      });
-    serve(() => response(xml([item(1)])));
-    const result = observe(h.ingestion.subscribe(FEED, controller.signal));
-    await entered.promise;
-    expect(creating.mock.calls[1][2]).toBeTypeOf('function');
-    controller.abort();
-    expect((await result).error).toMatchObject({ name: 'AbortError' });
-    folder.resolve();
-    await flush();
-    expect(h.store.catalog.feeds()).toHaveLength(1);
-    expect(urls(h.store)).toEqual([]);
-    expect(h.vault.files.size).toBe(1);
     expect(h.store.catalog.feeds()[0].error).toBeUndefined();
     expect(h.notify).not.toHaveBeenCalled();
   });
@@ -1290,19 +1356,15 @@ describe('unsubscribe and unload cancellation', () => {
     expect(h.vault.trashed).toEqual([]);
   });
 
-  it('drops a late subscription response after stop without creating a feed or article', async () => {
+  it('stops a pending subscription create without creating a feed or article', async () => {
     const h = host(),
-      pending = deferred<ReturnType<typeof response>>(),
-      entered = deferred<void>();
-    serve(() => {
-      entered.resolve();
-      return pending.promise;
-    });
+      pending = pausedSubscriptionCreate(h);
     const result = observe(h.ingestion.subscribe(FEED));
-    await entered.promise;
+    await pending.entered.promise;
     h.ingestion.stop();
-    pending.resolve(response(xml([item(1)])));
+    pending.release.resolve();
     expect((await result).error).toBeInstanceOf(Error);
+    expect(request).not.toHaveBeenCalled();
     expect(h.vault.files.size).toBe(0);
   });
 

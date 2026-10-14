@@ -47,7 +47,7 @@ export function showFeeds(
               }),
           );
       this.contentEl.createEl('p', {
-        text: 'Unsubscribing stops imports and trashes the subscription note. Existing articles are kept.',
+        text: 'Adding saves a subscription without fetching. Edit its note before clicking Sync. Unsubscribing trashes only the subscription note; existing articles are kept.',
       });
       new Setting(this.contentEl)
         .addButton((button) =>
@@ -65,7 +65,7 @@ export function showFeeds(
           }),
         )
         .addButton((button) =>
-          button.setButtonText('Refresh feeds').onClick(() => {
+          button.setButtonText('Sync').onClick(() => {
             void run(() => ingestion.refreshAll());
           }),
         );
@@ -153,7 +153,7 @@ export class ReaderSettings extends PluginSettingTab {
         }),
       );
     this.containerEl.createEl('p', {
-      text: 'Feeds refresh every four hours while Obsidian is active. Stream expires after one calendar month; adding highlights or links keeps articles in Inbox. Saved text works offline; remote images need a connection.',
+      text: 'Feeds import only when you click Sync or run Refresh feeds. Stream expires after one calendar month; adding highlights or links keeps articles in Inbox. Saved text works offline; remote images need a connection.',
     });
   }
 }

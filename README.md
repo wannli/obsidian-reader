@@ -5,7 +5,7 @@ A small Markdown-first article and RSS reader for Obsidian desktop, iPhone/iPad,
 ## Read and keep
 
 - **Add URL** saves a note immediately, including offline; available article text is acquired while Reader is active and online. Clicking a web link offers **Save to Inbox**, **Open link** or **Cancel**; saving keeps the current article open and reuses existing-URL deduplication.
-- RSS/Atom subscriptions import at most the **latest 20 entries on every refresh**, every four active hours or on demand. There is no backlog/history service.
+- **Add feed** saves an RSS/Atom subscription without importing articles, so you can edit its parameters first. **Sync feeds explicitly** when ready; startup and periodic timers do not refresh feeds. Each Sync considers at most the **latest 20 entries**, before age filtering and deduplication. There is no backlog/history service.
 - Browse **Inbox, Later and Stream** in a flat, titles-only list; use **Open Treasury** and **Manage feeds** commands for those views. Search through native Obsidian rather than an embedded search bar. Source URLs remain stored in the notes.
 - Right-side indicators show **Opened before** from an existing saved reading position and **Has highlights** from Markdown. No extra metadata, completion flag or persisted history is added.
 - Select text to highlight it. Link passages to existing notes, add topic links, or use the optional public **Nodes API v2** integration for Fileclass-aware note selection/creation.
@@ -40,7 +40,7 @@ An article such as `Reading/Inbox/261014 A useful article.md`:
 type: article
 url: https://example.com/article
 title: A useful article
-published: 2026-10-14T08:00:00.000Z
+published: 2026-10-14T08:00
 feed: '[[Reading/Wires/Example feed.md]]'
 topics:
   - '[[Topics/Reading.md]]'
@@ -53,6 +53,8 @@ A ==[[Notes/A useful idea.md|linked passage]]== links directly to a note.
 ```
 
 `type: article` identifies the note. Capture/acquisition uses `url`; local articles can be read without it. `title`, `published`, `feed`, `topics` and `reading_position` are optional; `error` can describe an acquisition failure. The position is a text anchor, not a page number or completion flag. Inline highlights and passage links live in the body; feed and topic links are frontmatter properties.
+
+New captures write `published` as an unquoted **local wall-clock minute** in Obsidian’s `YYYY-MM-DDTHH:mm` format, without seconds or a timezone suffix. Zone-free values follow the current device’s timezone and native date/DST interpretation; they do not preserve a unique instant across timezones or repeated DST hours. Existing date-only, offset and full ISO values remain readable and are not rewritten or migrated. UTC filename dates still come from the original parsed publication instant, before local formatting.
 
 A subscription such as `Reading/Wires/Example feed.md`:
 

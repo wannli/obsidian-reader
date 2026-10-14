@@ -28,11 +28,12 @@
 - Offline capture saves the URL immediately; acquisition resumes online while Obsidian is active.
 - Capturing an existing URL opens the existing article rather than making a duplicate.
 - Clicking a web link in Reader offers Save to Inbox, Open link, or Cancel. Saving reuses capture/deduplication and keeps the current article open; internal note links and section anchors retain their normal behavior.
-- RSS/Atom subscriptions automatically import entries into Stream.
-- Save feed-provided content immediately; fetch missing full text on open or move to Inbox/Later.
+- Adding an RSS/Atom subscription saves only its feed note, with no network request or article import. Initial title/prefix use the URL hostname and can be edited before Sync.
+- Import feed entries into Stream only through explicit Sync in Manage feeds or the Refresh feeds command. No startup, timer, online, visibility or metadata-driven feed imports.
+- On Sync, save feed-provided content immediately; fetch missing full text on open or move to Inbox/Later.
 - Saved text is available offline; unfetched full text is not guaranteed offline.
-- Refresh every four hours while active, plus a manual refresh command.
-- Consider at most the latest 20 entries on every initial, manual, and scheduled refresh, before deduplication/age filtering; no historical backfill feature.
+- Automatic housekeeping still recovers offline URL captures and safely expires Stream notes; it never refreshes subscriptions.
+- Consider at most the latest 20 entries on every explicit refresh, before deduplication/age filtering; no historical backfill feature.
 - Deduplicate feed imports against existing articles, including articles moved to another queue.
 - No permanent deleted-URL history; a deleted entry still listed by its feed may reappear.
 - Unsubscribing stops imports and leaves existing articles untouched.

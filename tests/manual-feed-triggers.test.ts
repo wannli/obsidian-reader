@@ -1,0 +1,221 @@
+import { afterEach, expect, it, vi } from 'vitest';
+import { runtimeFixture } from './helpers/folder-runtime';
+import { gate } from './helpers/memory-vault';
+import { Plugin } from 'obsidian';
+
+let plugin: any;
+afterEach(() => {
+  plugin?.onunload();
+  plugin = undefined;
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+});
+
+async function fixture() {
+  const dom = new Map<string, () => void>();
+  vi.spyOn(Plugin.prototype, 'registerDomEvent').mockImplementation((_target, event, callback) => {
+    dom.set(event, callback as () => void);
+  });
+  const commands = vi.spyOn(Plugin.prototype, 'addCommand');
+  const f = await runtimeFixture();
+  plugin = f.plugin;
+  f.app.workspace.getMostRecentLeaf = () => undefined;
+  f.app.vault = { getMarkdownFiles: () => [...f.app.notes.values()].map((note) => note.file) };
+  f.app.metadataCache.getFileCache = (file: { path: string }) => ({
+    frontmatter: f.app.notes.get(file.path)?.properties ?? {},
+    sections: [{ type: 'yaml' }],
+  });
+  const expire = vi.spyOn(f.plugin.store, 'expire').mockResolvedValue(undefined);
+  const flushViews = vi.spyOn(f.plugin, 'flushViews').mockImplementation(() => {});
+  const settle = async () => {
+    // Lifecycle callbacks intentionally launch async work without returning it.
+    for (let i = 0; i < 6; i++) await Promise.resolve();
+  };
+  return {
+    ...f,
+    expire,
+    flushViews,
+    async ready() {
+      f.app.workspace.onLayoutReady.mock.calls[0][0]();
+      await settle();
+    },
+    async event(name: string) {
+      expect(dom.has(name)).toBe(true);
+      dom.get(name)!();
+      await settle();
+    },
+    async interval() {
+      (vi.mocked(window.setInterval).mock.calls[0][0] as () => void)();
+      await settle();
+    },
+    async sync() {
+      commands.mock.calls.find(([command]) => command.id === 'refresh-feeds')![0].callback!();
+      await settle();
+    },
+    async metadata(name: string, file?: unknown) {
+      f.app.metadataCache.on.mock.calls.find(([event]: [string]) => event === name)![1](file);
+      await settle();
+    },
+  };
+}
+
+it('never polls feeds on startup, four-hour timers, online or visible events; expiry still runs', async () => {
+  let now = Date.now();
+  vi.spyOn(Date, 'now').mockImplementation(() => now);
+  const f = await fixture();
+  await f.ready();
+  expect(f.expire).toHaveBeenCalledTimes(1);
+  for (let i = 0; i < 3; i++) {
+    now += 4 * 60 * 60 * 1000;
+    await f.interval();
+  }
+  expect(f.expire).toHaveBeenCalledTimes(4);
+  await f.event('online');
+  expect(f.expire).toHaveBeenCalledTimes(5); // Preserve immediate online housekeeping.
+  await f.event('visibilitychange');
+  expect(f.expire).toHaveBeenCalledTimes(5);
+  expect(f.plugin.ingestion.refreshAll).not.toHaveBeenCalled();
+});
+
+it.each(['startup', 'online', 'timer'])(
+  'honors the actual Refresh feeds command while %s expiry is pending',
+  async (trigger) => {
+    const f = await fixture(),
+      release = gate();
+    f.expire.mockImplementation(() => release.promise);
+    try {
+      if (trigger === 'startup') await f.ready();
+      else if (trigger === 'online') await f.event('online');
+      else await f.interval();
+      expect(f.plugin.refreshing).toBe(true);
+      await f.sync();
+      expect(f.plugin.ingestion.refreshAll).toHaveBeenCalledOnce();
+      expect(f.expire).toHaveBeenCalledOnce();
+      expect(f.plugin.refreshing).toBe(true);
+      await f.interval();
+      expect(f.plugin.ingestion.refreshAll).toHaveBeenCalledOnce();
+      expect(f.expire).toHaveBeenCalledOnce();
+    } finally {
+      release.resolve();
+    }
+    await f.event('visibilitychange');
+    expect(f.plugin.refreshing).toBe(false);
+  },
+);
+
+it('does not report or alter a replacement generation after a busy manual sync retires', async () => {
+  const f = await fixture(),
+    expiry = gate(),
+    sync = gate();
+  f.expire.mockImplementation(() => expiry.promise);
+  f.plugin.ingestion.refreshAll.mockImplementation(async () => {
+    await sync.promise;
+    throw new Error('Retired sync failed');
+  });
+  const notice = vi.spyOn(f.plugin, 'notice');
+  await f.ready();
+  await f.sync();
+  expect(f.plugin.ingestion.refreshAll).toHaveBeenCalledOnce();
+  await f.plugin.applyFolders({
+    inbox: 'Capture',
+    stream: 'Disposable',
+    later: 'Plans',
+    treasury: 'Kept',
+    feeds: 'Subscriptions',
+  });
+  f.plugin.refreshing = true;
+  sync.resolve();
+  expiry.resolve();
+  await f.event('visibilitychange');
+  expect(f.plugin.refreshing).toBe(true);
+  expect(f.plugin.ingestion.refreshAll).not.toHaveBeenCalled();
+  expect(notice).not.toHaveBeenCalled();
+});
+
+it('Refresh feeds is explicit and is never throttled by the housekeeping interval', async () => {
+  const f = await fixture();
+  await f.ready();
+  await f.sync();
+  await f.sync();
+  expect(f.plugin.ingestion.refreshAll).toHaveBeenCalledTimes(2);
+  expect(f.expire).toHaveBeenCalledTimes(3);
+});
+
+it('recovers an offline URL capture online without refreshing subscriptions', async () => {
+  const f = await fixture();
+  const file = { path: 'Reading/Inbox/Captured.md' };
+  const properties = { type: 'article', url: 'https://example.com/article', title: 'Captured' };
+  f.app.notes.set(file.path, { file, properties });
+  f.plugin.store.catalog.update(file.path, properties);
+  vi.stubGlobal('navigator', { onLine: false });
+  await f.ready();
+  expect(f.plugin.ingestion.acquire).not.toHaveBeenCalled();
+  vi.stubGlobal('navigator', { onLine: true });
+  await f.event('online');
+  expect(f.plugin.ingestion.acquire).toHaveBeenCalledExactlyOnceWith(file.path);
+  expect(f.plugin.ingestion.refreshAll).not.toHaveBeenCalled();
+});
+
+it.each(['startup', 'foreground', 'metadata'])(
+  'still acquires pending article captures on %s without importing feeds',
+  async (trigger) => {
+    const f = await fixture();
+    const file = { path: 'Reading/Inbox/Pending.md' };
+    const properties = { type: 'article', url: 'https://example.com/pending', title: 'Pending' };
+    f.app.notes.set(file.path, { file, properties });
+    f.plugin.store.catalog.update(file.path, properties);
+    if (trigger === 'startup') await f.ready();
+    else if (trigger === 'foreground') await f.event('visibilitychange');
+    else f.runtime.watchers[0].changed({ path: file.path });
+    expect(f.plugin.ingestion.acquire).toHaveBeenCalledExactlyOnceWith(file.path);
+    expect(f.plugin.ingestion.refreshAll).not.toHaveBeenCalled();
+  },
+);
+
+it('feed creation, enablement and metadata resolution never start imports', async () => {
+  const f = await fixture();
+  const file = { path: 'Reading/Wires/Example.md' };
+  for (const enabled of [false, true]) {
+    const properties = { type: 'feed', url: 'https://example.com/feed', enabled };
+    f.app.notes.set(file.path, { file, properties });
+    f.plugin.store.catalog.update(file.path, properties);
+    f.runtime.watchers[0].changed({ path: file.path });
+    await f.metadata('changed', file);
+    await f.metadata('resolve', file);
+    await f.metadata('resolved');
+  }
+  expect(f.plugin.ingestion.acquire).not.toHaveBeenCalled();
+  expect(f.plugin.ingestion.refreshAll).not.toHaveBeenCalled();
+  expect(f.expire).toHaveBeenCalled();
+});
+
+it('Folder Apply reseeds metadata without acquiring articles or syncing old/new feeds', async () => {
+  const f = await fixture();
+  const old = f.plugin.ingestion;
+  await f.plugin.applyFolders({
+    inbox: 'Capture',
+    stream: 'Disposable',
+    later: 'Plans',
+    treasury: 'Kept',
+    feeds: 'Subscriptions',
+  });
+  expect(old.refreshAll).not.toHaveBeenCalled();
+  expect(f.plugin.ingestion.refreshAll).not.toHaveBeenCalled();
+  expect(f.plugin.ingestion.acquire).not.toHaveBeenCalled();
+});
+
+it('preserves hidden/unloaded guards and hidden-view flushing', async () => {
+  const f = await fixture();
+  Object.assign(document, { visibilityState: 'hidden' });
+  await f.event('visibilitychange');
+  await f.interval();
+  await f.sync();
+  expect(f.flushViews).toHaveBeenCalledOnce();
+  expect(f.expire).not.toHaveBeenCalled();
+  Object.assign(document, { visibilityState: 'visible' });
+  f.plugin.onunload();
+  await f.interval();
+  await f.sync();
+  expect(f.plugin.ingestion.refreshAll).not.toHaveBeenCalled();
+  expect(f.expire).not.toHaveBeenCalled();
+});

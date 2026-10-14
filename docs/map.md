@@ -13,7 +13,7 @@ src/main.ts                         Obsidian lifecycle, commands, routing
   └─ reader/view.ts → core/store.ts      guarded user operations → vault files
 ```
 
-`main.ts` owns plugin lifetime, active/online refresh, safe native routing, tracked generation-aware presentation transitions and unload cleanup. It wires the library, ingestion and Reader view; there is no parallel legacy entry point.
+`main.ts` owns plugin lifetime, explicit feed refresh, active/online capture recovery and expiry housekeeping, safe native routing, tracked generation-aware presentation transitions and unload cleanup. It wires the library, ingestion and Reader view; there is no parallel legacy entry point.
 
 ## Core: data and guarded writes
 
@@ -44,7 +44,7 @@ Runtime libraries: `yaml`, `marked`, `entities`, `dompurify`, `defuddle`. No UI 
 
 - `host/vault.ts`: public vault/metadata/editor APIs, dirty-buffer protection, folder/case collisions, recoverable trash, link-aware moves, change subscriptions.
 - `host/network.ts`: bounded request slots and delivery timeouts. An uncancellable timed-out request retains its slot until the host settles it.
-- `host/ingestion.ts`: subscriptions, latest-20 refresh, dedupe, cancellation, and acquisition proof against current excerpt bytes.
+- `host/ingestion.ts`: local-only subscription creation (editable hostname title/prefix), explicit latest-20 Sync/Refresh feeds imports, dedupe, cancellation, and acquisition proof against current excerpt bytes. No automatic feed polling or add-time fetch/import.
 - `host/dialogs.ts` / `settings.ts`: native input/dialogs, staged independent-folder settings and subscription controls.
 - `host/folder-settings.ts` / `folder-picker.ts`: explicit five-role folder-group persistence and native suggestions. Native Apply at the same current locations persisted `folders` in Reader `data.json`, preserving all three legacy keys/values; it aborted the old generation and opened a fresh list. All 43 Markdown/Base files were byte-identical across Apply: no automatic migration. Legacy keys stay inert; unknown settings remain preserved.
 - `host/nodes.ts` / `node-picker.ts`: optional public Nodes v2 API; Fileclass class/icon discovery, existing-note fallback and delegated creation. No private Fileclass calls, invented schema colors, or duplicate schema system.

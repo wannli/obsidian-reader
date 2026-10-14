@@ -135,32 +135,30 @@ export class Ingestion {
           }
         });
       if (exists()) return;
-      const data = await this.loadFeed(url, true, check);
-      check();
-      if (exists()) return;
-      const feed = await this.feedCreates.run('subscriptions', async () => {
+      // Add is local-only: callers can edit URL/prefix/enabled before explicit Sync.
+      const title = new URL(url).hostname;
+      await this.feedCreates.run('subscriptions', async () => {
         check();
         if (exists()) return;
-        assertSafeExternalText(data.title);
-        const base = filename(data.title, new Date()).replace(/^\d{6} /, '');
+        assertSafeExternalText(title);
+        const base = filename(title, new Date()).replace(/^\d{6} /, '');
         for (let suffix = 1; suffix <= 1000; suffix++) {
           const name = suffix === 1 ? base : base.replace(/\.md$/, ` ${suffix}.md`);
           const path = `${this.store.folders.feeds}/${name}`;
           if (this.store.vault.exists?.(path) ?? this.store.vault.file(path)) continue;
           const properties = {
             type: 'feed',
-            title: data.title,
+            title,
             url,
-            prefix: data.title,
+            prefix: title,
             enabled: true,
           };
           const file = await this.store.vault.create(path, createDocument(properties), check);
           this.store.catalog.update(file.path, properties);
-          return this.store.catalog.feed(file.path)!;
+          return;
         }
         throw new Error('Too many subscriptions share this filename.');
       });
-      if (feed) await this.refresh(feed, this.feedGuard(feed, check));
     });
     const clear = () => {
       if (this.subscriptionClients.get(url) === clients) this.subscriptionClients.delete(url);
@@ -236,7 +234,7 @@ export class Ingestion {
     try {
       await guard.validate();
       const data = await this.loadFeed(feed.url, true, guard.check);
-      // Bound every import before dedup/age checks; later polls do not walk a backlog.
+      // Bound every import before dedup/age checks; later syncs do not walk a backlog.
       const latest20 = [...data.items]
         .sort((a, b) => Date.parse(b.published ?? '') - Date.parse(a.published ?? ''))
         .slice(0, 20);

@@ -12,7 +12,9 @@ import { hasAnnotations } from './annotations';
 import {
   filename,
   filenameDay,
+  formatPublished,
   monthCutoff,
+  publicationBefore,
   queueAt,
   queueFolder,
   timestamp,
@@ -136,9 +138,16 @@ export class ArticleStore<File extends NoteFile> {
         }
         this.catalog.remove(existing.path);
       }
-      const published = timestamp(input.published) === undefined ? undefined : input.published;
-      const date = published ? new Date(published) : now;
-      const name = filename(input.title || new URL(url).hostname, date, input.prefix, !!published);
+      const publishedAt = timestamp(input.published);
+      const published = formatPublished(input.published);
+      // Keep the original instant for the UTC filename; only persisted publication loses seconds.
+      const date = publishedAt === undefined ? now : new Date(publishedAt);
+      const name = filename(
+        input.title || new URL(url).hostname,
+        date,
+        input.prefix,
+        publishedAt !== undefined,
+      );
       const path = await this.unique(queueFolder(input.queue ?? 'Inbox', this.folders), name);
       const properties: Properties = { type: 'article', url };
       if (input.title?.trim()) properties.title = input.title.trim();
@@ -336,8 +345,7 @@ export class ArticleStore<File extends NoteFile> {
       if (article.queue !== 'Stream') continue;
       // Cleanup needs bodies only for potentially expired notes. Fresh/undated
       // annotation promotion belongs to native change handling and reader writes.
-      const indexedAge = timestamp(article.published) ?? filenameDay(article.path);
-      if (indexedAge === undefined || indexedAge >= cutoff) continue;
+      if (!publicationBefore(article.published, cutoff, filenameDay(article.path))) continue;
       const file = this.vault.file(article.path);
       if (!file || this.busy(file) || inUse(file)) {
         result.retained++;
@@ -345,11 +353,12 @@ export class ArticleStore<File extends NoteFile> {
       }
       try {
         const snapshot = await this.read(article.path);
-        const age = timestamp(snapshot.properties.published) ?? filenameDay(snapshot.path);
         if (hasAnnotations(snapshot.body, snapshot.properties)) {
           await this.move(snapshot, 'Inbox');
           result.promoted++;
-        } else if (age !== undefined && age < cutoff) {
+        } else if (
+          publicationBefore(snapshot.properties.published, cutoff, filenameDay(snapshot.path))
+        ) {
           await this.trash(snapshot, () => {
             if (inUse(file)) throw new ChangedNote('Article is in use.');
           });

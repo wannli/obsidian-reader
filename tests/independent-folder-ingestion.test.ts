@@ -29,7 +29,7 @@ afterEach(() => {
   external.items = [];
 });
 
-it('creates subscriptions and latest-20 Stream captures in separate folders, deduplicating retained URLs', async () => {
+it('adds locally, then explicitly syncs latest-20 Stream captures in separate folders, deduplicating retained URLs', async () => {
   const vault = new MemoryVault(),
     store = storeFor(vault);
   external.items = Array.from({ length: 25 }, (_, i) => ({
@@ -47,14 +47,17 @@ it('creates subscriptions and latest-20 Stream captures in separate folders, ded
   });
   const ingestion = new Ingestion(store, vi.fn());
   await ingestion.subscribe('https://example.com/feed');
-  expect(store.catalog.feeds().map((feed) => feed.path)).toEqual(['Subscriptions/Example.md']);
+  expect(store.catalog.feeds().map((feed) => feed.path)).toEqual(['Subscriptions/example.com.md']);
+  expect(external.request).not.toHaveBeenCalled();
+  expect(store.catalog.list('Stream', '', 0, 100)).toEqual([]);
+  await ingestion.refreshAll();
   expect(store.catalog.list('Stream', '', 0, 100)).toHaveLength(19);
   expect(store.catalog.findUrl('https://example.com/0')?.path).toBe(keep.path);
   expect(store.catalog.findUrl('https://example.com/20')).toBeUndefined();
   for (const article of store.catalog.list('Stream', '', 0, 100)) {
     expect(article.path.startsWith('Disposable/')).toBe(true);
     const doc = readDocument(await vault.read(vault.file(article.path)!));
-    expect(doc.properties.feed).toBe('[[Subscriptions/Example.md]]');
+    expect(doc.properties.feed).toBe('[[Subscriptions/example.com.md]]');
     expect(doc.properties).not.toHaveProperty('queue');
   }
   ingestion.stop();
@@ -76,7 +79,6 @@ it('retains native network slots when replacing a stopped ingestion generation',
     started = [gate(), gate(), gate()];
   external.request.mockImplementation(async () => {
     const index = external.request.mock.calls.length - 1;
-    if (index >= started.length) return response; // Normal post-subscription refresh.
     started[index].resolve();
     await releases[index].promise;
     return response;
@@ -85,14 +87,23 @@ it('retains native network slots when replacing a stopped ingestion generation',
     oldVault = new MemoryVault(),
     oldStore = storeFor(oldVault);
   const old = new Ingestion(oldStore, vi.fn(), network);
-  const first = old.subscribe('https://example.com/one').catch((error) => error);
-  const second = old.subscribe('https://example.com/two').catch((error) => error);
+  external.items = [
+    { url: 'https://example.com/article', title: 'Article', body: 'Publisher text' },
+  ];
+  await Promise.all([
+    old.subscribe('https://example.com/one'),
+    old.subscribe('https://example.com/two'),
+  ]);
+  expect(external.request).not.toHaveBeenCalled();
+  const before = new Map(oldVault.bytes);
+  const oldSync = old.refreshAll();
   await Promise.all([started[0].promise, started[1].promise]);
   old.stop();
   oldStore.dispose();
   const nextStore = storeFor(new MemoryVault()),
     next = new Ingestion(nextStore, vi.fn(), network);
-  const third = next.subscribe('https://example.com/three');
+  await next.subscribe('https://example.com/three');
+  const third = next.refreshAll();
   await Promise.resolve();
   await Promise.resolve();
   expect(external.request).toHaveBeenCalledTimes(2);
@@ -101,11 +112,11 @@ it('retains native network slots when replacing a stopped ingestion generation',
   expect(external.request).toHaveBeenCalledTimes(3);
   releases[1].resolve();
   releases[2].resolve();
-  expect(await first).toBeInstanceOf(Error);
-  expect(await second).toBeInstanceOf(Error);
-  await third;
-  expect(oldVault.files.size).toBe(0);
+  await Promise.all([oldSync, third]);
+  expect(oldVault.files.size).toBe(2); // Only the subscriptions saved before stopping.
+  expect(oldVault.bytes).toEqual(before); // No late article imports or error writes.
   expect(nextStore.catalog.feeds()).toHaveLength(1);
+  expect(nextStore.catalog.list('Stream')).toHaveLength(1);
   next.stop();
   network.stop();
 });

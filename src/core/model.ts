@@ -53,6 +53,26 @@ export function timestamp(input: unknown): number | undefined {
     return;
   return value;
 }
+/** New publication writes only; existing note values are never normalized on read. */
+export function formatPublished(input: unknown): string | undefined {
+  const value = timestamp(input);
+  if (value === undefined) return;
+  const date = new Date(value),
+    pad = (part: number) => String(part).padStart(2, '0');
+  const minute = `${String(date.getFullYear()).padStart(4, '0')}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+  return timestamp(minute) === undefined ? undefined : minute;
+}
+/** A minute-only publication may have lost seconds; retain its entire parsed minute. */
+export function publicationBefore(published: unknown, cutoff: number, fallback?: number): boolean {
+  const publishedAt = timestamp(published),
+    date = publishedAt ?? fallback;
+  if (date === undefined) return false;
+  const minute =
+    publishedAt !== undefined &&
+    typeof published === 'string' &&
+    /^\d{4}-\d{2}-\d{2}T(?:[01]\d|2[0-3]):[0-5]\d$/.test(published);
+  return minute ? date + 60_000 <= cutoff : date < cutoff;
+}
 export function filenameDay(path: string): number | undefined {
   const match = /^(\d{2})(\d{2})(\d{2}) /.exec(path.split('/').pop() ?? '');
   return match ? timestamp(`20${match[1]}-${match[2]}-${match[3]}`) : undefined;
