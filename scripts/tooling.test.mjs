@@ -287,7 +287,13 @@ test('seed library emits YAML-backed inline Markdown without active sidecars', (
   assert.equal(Object.hasOwn(files, '.obsidian/core-plugins.json'), false);
   assert.equal(Object.hasOwn(files, '.obsidian/daily-notes.json'), false);
   assert.deepEqual(JSON.parse(files['.obsidian/plugins/obsidian-reader/data.json']), {
-    root: 'Reading',
+    folders: {
+      inbox: 'Reading/Inbox',
+      stream: 'Reading/Stream',
+      later: 'Reading/Later',
+      treasury: 'Reading/Treasury',
+      feeds: 'Reading/Wires',
+    },
   });
   assert.deepEqual(seedFiles(day), files);
 });

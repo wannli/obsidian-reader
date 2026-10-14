@@ -22,7 +22,15 @@ export function seedFiles(day = localDay()) {
   const files = {
     '.obsidian/app.json': json({}),
     '.obsidian/community-plugins.json': json([pluginId]),
-    [`.obsidian/plugins/${pluginId}/data.json`]: json({ root: 'Reading' }),
+    [`.obsidian/plugins/${pluginId}/data.json`]: json({
+      folders: {
+        inbox: 'Reading/Inbox',
+        stream: 'Reading/Stream',
+        later: 'Reading/Later',
+        treasury: 'Reading/Treasury',
+        feeds: 'Reading/Wires',
+      },
+    }),
     'Welcome.md':
       '# Reader Test Vault\n\nThis vault is exclusively for synthetic Reader development and testing. Never put personal notes here.\n\nUse Reader’s Open reading list command, then choose The quiet library. Highlights use ==ordinary inline Markdown== inside each article, and state stays in YAML frontmatter. Links are ordinary inline links. Reader does not maintain daily copies or require JSON sidecars; existing journal text stays untouched.\n\nThe sample feed is disabled and offline. Setup preserves every existing file. Plugin updates back up and replace only the three plugin distribution files.\n\nNative Obsidian, device behavior, and sync require manual acceptance; unit tests do not prove them.\n',
     ...managedNote(

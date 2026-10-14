@@ -3,12 +3,18 @@ import {
   MarkdownView,
   Notice,
   parseLinktext,
+  Platform,
   Plugin,
   TFile,
   type WorkspaceLeaf,
 } from 'obsidian';
 import { hasAnnotations, hasPropertyAnnotations, isAnnotationProperty } from './core/annotations';
-import { rootPath } from './core/model';
+import { type Queue } from './core/model';
+import { defaultFolders, validateFolders, type ReaderFolders } from './core/folders';
+import { SerialWrites } from './core/work';
+import { loadFolders, saveFolderSettings } from './host/folder-settings';
+import { Network } from './host/network';
+import { readDocument } from './core/document';
 import { ArticleStore } from './core/store';
 import { input } from './host/dialogs';
 import { Ingestion } from './host/ingestion';
@@ -20,6 +26,13 @@ export default class ReaderPlugin extends Plugin {
   store!: ArticleStore<TFile>;
   ingestion!: Ingestion;
   private lifetime = new AbortController();
+  private unloaded = false;
+  private vault!: ObsidianVault;
+  private network = new Network();
+  private folderSaves = new SerialWrites<string>();
+  private viewWrites = new Set<Promise<unknown>>();
+  private presentations = new Map<WorkspaceLeaf, Promise<void>>();
+  private routingEpoch = 0;
   private sourceLeaves = new Map<WorkspaceLeaf, { file: TFile; transitioning: boolean }>();
   private attempted = new Set<string>();
   private promotions = new Map<TFile, boolean>();
@@ -50,25 +63,41 @@ export default class ReaderPlugin extends Plugin {
   }
   async onload(): Promise<void> {
     const data = await this.loadData();
-    let root = 'Reading';
+    if (this.unloaded) return;
+    let folders = defaultFolders;
+    let invalid = false;
     try {
-      if (typeof data?.root === 'string') root = rootPath(data.root);
+      folders = loadFolders(data);
     } catch (error) {
-      this.notice(error);
+      invalid = true;
+      this.notice(`Reader is paused until its folder settings are corrected: ${String(error)}`);
     }
-    const vault = new ObsidianVault(this.app, () => !this.signal.aborted);
-    this.store = new ArticleStore(vault, root);
-    this.ingestion = new Ingestion(this.store, (message) => this.notice(message));
-    this.stopIndex = watchLibrary(this, this.store, (change) => this.changed(change));
-    this.registerView(READER_VIEW, (leaf) => new ReaderView(leaf, this));
-    this.addRibbonIcon('book-open', 'Reading list', () => {
-      void this.openList().catch((error) => this.notice(error));
-    });
+    this.startFolders(folders);
+    if (invalid) this.stopFolders();
+    this.registerView(READER_VIEW, (leaf) => new ReaderView(leaf, this.readerHost()));
+    const openReadingList = () => {
+      if (!this.signal.aborted) void this.openList().catch((error) => this.notice(error));
+    };
+    this.addRibbonIcon('book-open', 'Reading list', openReadingList);
     this.addCommand({
       id: 'open-reader',
       name: 'Open reading list',
+      callback: openReadingList,
+    });
+    this.registerObsidianProtocolHandler(READER_VIEW, (params) => {
+      // Core Obsidian URI routing selects the vault. Interpret only our view selector.
+      if (params.view === 'list') openReadingList();
+    });
+    this.addCommand({
+      id: 'copy-reading-list-link',
+      name: 'Copy reading-list link',
+      callback: () => this.copyReadingListLink(),
+    });
+    this.addCommand({
+      id: 'open-treasury',
+      name: 'Open Treasury',
       callback: () => {
-        void this.openList().catch((error) => this.notice(error));
+        void this.openList('Treasury').catch((error) => this.notice(error));
       },
     });
     this.addCommand({ id: 'add-url', name: 'Add URL', callback: () => this.capture() });
@@ -80,25 +109,25 @@ export default class ReaderPlugin extends Plugin {
         void this.tick(true).catch((error) => this.notice(error));
       },
     });
-    this.addCommand({
-      id: 'open-markdown',
-      name: 'Open article as Markdown',
-      checkCallback: (checking) => {
-        const view = this.app.workspace.getActiveViewOfType(ReaderView);
-        if (!view?.file) return false;
-        if (!checking) void this.edit(view, view.file).catch((error) => this.notice(error));
-        return true;
-      },
-    });
+    for (const [id, name] of [
+      ['move', 'Move article…'],
+      ['topics', 'Edit article topics…'],
+      ['open-markdown', 'Open article as Markdown'],
+    ] as const) {
+      this.addCommand({
+        id,
+        name,
+        checkCallback: (checking) =>
+          this.app.workspace.getActiveViewOfType(ReaderView)?.articleCommand(id, checking) ?? false,
+      });
+    }
     this.addSettingTab(
       new ReaderSettings(
         this.app,
         this,
-        root,
+        folders,
         this.paged,
-        async (next) => {
-          await this.saveData({ root: next });
-        },
+        (next) => this.applyFolders(next),
         (value) => {
           try {
             localStorage.setItem('obsidian-reader:eink', value ? '1' : '0');
@@ -109,29 +138,23 @@ export default class ReaderPlugin extends Plugin {
       ),
     );
     this.registerEvent(
-      this.app.workspace.on('file-open', (file) => {
+      this.app.workspace.on('active-leaf-change', () => {
+        this.syncMobileNavigation();
         this.pruneSourceLeaves();
-        if (
-          !(file instanceof TFile) ||
-          this.signal.aborted ||
-          this.app.metadataCache.getFileCache(file)?.frontmatter?.type !== 'article'
-        )
-          return;
-        const leaf = this.app.workspace.getMostRecentLeaf();
-        if (
-          !leaf ||
-          !(leaf.view instanceof MarkdownView) ||
-          leaf.view.file !== file ||
-          this.sourceLeaves.get(leaf)?.file === file
-        )
-          return;
-        void leaf
-          .setViewState({ type: READER_VIEW, state: { file: file.path }, active: true })
-          .catch((error) => this.notice(error));
+        this.routeArticle();
+      }),
+    );
+    this.syncMobileNavigation();
+    this.registerEvent(
+      this.app.workspace.on('file-open', (file) => {
+        this.syncMobileNavigation();
+        this.pruneSourceLeaves();
+        this.routeArticle(file);
       }),
     );
     this.registerEvent(
       this.app.workspace.on('layout-change', () => {
+        this.syncMobileNavigation();
         this.pruneSourceLeaves();
         for (const file of this.promotions.keys()) void this.promote(file);
       }),
@@ -155,13 +178,17 @@ export default class ReaderPlugin extends Plugin {
       }, 60_000),
     );
     this.registerEvent(
-      this.app.metadataCache.on('changed', () => {
+      this.app.metadataCache.on('changed', (file) => {
         this.referencesReady = false;
+        if (this.app.workspace.getActiveViewOfType(MarkdownView)?.file === file)
+          this.routeArticle(file);
       }),
     );
     this.registerEvent(
       this.app.metadataCache.on('resolve', (file) => {
         if (!this.signal.aborted) this.keepReferences(file);
+        if (this.app.workspace.getActiveViewOfType(MarkdownView)?.file === file)
+          this.routeArticle(file);
       }),
     );
     this.registerEvent(
@@ -175,11 +202,228 @@ export default class ReaderPlugin extends Plugin {
     );
     this.app.workspace.onLayoutReady(() => {
       if (this.signal.aborted) return;
+      this.syncMobileNavigation();
+      this.routeArticle();
       // Late plugin loads may never see the initial resolved event. Complete per-file
       // metadata lets us reconstruct native references directly, without resolvedLinks.
       if (!this.referencesRecovered && this.recoverReferences()) this.referencesReady = true;
       void this.tick(false, true).catch((error) => this.notice(error));
     });
+  }
+  private readerHost(): ConstructorParameters<typeof ReaderView>[1] {
+    const plugin = this,
+      signal = this.signal;
+    return Object.freeze({
+      app: this.app,
+      store: this.store,
+      ingestion: this.ingestion,
+      signal,
+      get paged() {
+        return plugin.paged;
+      },
+      capture: () => {
+        if (!signal.aborted) plugin.capture();
+      },
+      feeds: () => {
+        if (!signal.aborted) plugin.feeds();
+      },
+      edit: async (view: ReaderView, file: TFile) => {
+        if (!signal.aborted) await plugin.edit(view, file);
+      },
+      refreshPresentation: async (view: ReaderView, valid: () => boolean) => {
+        if (!signal.aborted) await plugin.refreshPresentation(view, valid);
+      },
+    });
+  }
+  private startFolders(folders: ReaderFolders): void {
+    const signal = this.signal;
+    this.vault = new ObsidianVault(this.app, () => !signal.aborted);
+    this.store = new ArticleStore(this.vault, folders);
+    this.ingestion = new Ingestion(
+      this.store,
+      (message) => {
+        if (!signal.aborted) this.notice(message);
+      },
+      this.network,
+    );
+    this.stopIndex = watchLibrary(this, this.store, (change) => {
+      if (!signal.aborted) this.changed(change);
+    });
+  }
+  private stopFolders(): void {
+    this.lifetime.abort();
+    this.routingEpoch++;
+    this.ingestion?.stop();
+    this.stopIndex?.();
+    this.store?.dispose();
+  }
+  private dispatchView<T>(operation: () => Promise<T>): Promise<T> {
+    if (this.signal.aborted) return Promise.reject(new Error('Reader is paused.'));
+    const result = operation();
+    this.viewWrites.add(result);
+    const clear = () => this.viewWrites.delete(result);
+    void result.then(clear, clear);
+    return result;
+  }
+  refreshPresentation(view: ReaderView, valid: () => boolean = () => true): Promise<void> {
+    const signal = this.signal,
+      leaf = view.leaf;
+    const current = () =>
+      !signal.aborted &&
+      valid() &&
+      leaf.view === view &&
+      !this.sourceLeaves.get(leaf)?.transitioning;
+    if (!current()) return Promise.resolve();
+    const previous = this.presentations.get(leaf) ?? Promise.resolve();
+    const request = previous
+      .catch(() => {})
+      .then(async () => {
+        if (!current()) return;
+        await this.dispatchView(() =>
+          leaf.setViewState({ type: READER_VIEW, state: { readerPresentationOnly: true } }),
+        );
+      });
+    this.presentations.set(leaf, request);
+    const clear = () => {
+      if (this.presentations.get(leaf) === request) this.presentations.delete(leaf);
+    };
+    void request.then(clear, clear);
+    return request;
+  }
+  private applyFolders(candidate: ReaderFolders): Promise<void> {
+    const folders = validateFolders(candidate);
+    return this.folderSaves.run('folders', async () => {
+      const assertLoaded = () => {
+        if (this.unloaded) throw new Error('Reader has stopped.');
+      };
+      assertLoaded();
+      const data = await this.loadData();
+      assertLoaded();
+      await this.saveData(saveFolderSettings(data, folders));
+      assertLoaded();
+      // No candidate path becomes live until the complete group is valid and durable.
+      for (const view of this.views()) view.stopForUnload();
+      this.stopFolders();
+      while (this.viewWrites.size) await Promise.allSettled([...this.viewWrites]);
+      await this.vault.drain();
+      assertLoaded();
+      const cleared = await Promise.allSettled(
+        this.views().map(async (view) => {
+          const leaf = view.leaf;
+          view.stopForUnload();
+          if (leaf.view !== view) return;
+          await leaf.setViewState({ type: 'empty', active: false });
+          const empty = leaf.view;
+          return empty.getViewType() === 'empty' ? { leaf, empty } : undefined;
+        }),
+      );
+      assertLoaded();
+      if (cleared.some((result) => result.status === 'rejected'))
+        throw new Error(
+          'Folders saved, but a Reader tab could not close. Reader is paused; retry Apply folders.',
+        );
+      const reset = cleared.flatMap((result) =>
+        result.status === 'fulfilled' && result.value ? [result.value] : [],
+      );
+      this.attempted = new Set();
+      this.promotions = new Map();
+      this.promoting = new Set();
+      this.lastRefresh = 0;
+      this.refreshing = false;
+      this.referencesReady = this.referencesRecovered = false;
+      this.lifetime = new AbortController();
+      this.startFolders(folders);
+      const signal = this.signal;
+      // Metadata-only reseed above: never recover/acquire/promote or reopen articles here.
+      const reopened = await Promise.allSettled(
+        reset.map(async (entry) => {
+          if (!entry || entry.leaf.view !== entry.empty || signal.aborted) return;
+          let attached = false;
+          this.app.workspace.iterateAllLeaves((leaf) => {
+            if (leaf === entry.leaf) attached = true;
+          });
+          if (attached)
+            await this.dispatchView(() =>
+              entry.leaf.setViewState({ type: READER_VIEW, state: {}, active: false }),
+            );
+        }),
+      );
+      assertLoaded();
+      if (reopened.some((result) => result.status === 'rejected'))
+        this.notice('Folders applied, but a Reader tab could not reopen. Use Open reading list.');
+      this.syncMobileNavigation();
+    });
+  }
+  private routeArticle(opened?: TFile | null): void {
+    const epoch = ++this.routingEpoch,
+      signal = this.signal,
+      store = this.store;
+    if (this.signal.aborted || opened === null) return;
+    const leaf = this.app.workspace.getMostRecentLeaf(),
+      view = this.app.workspace.getActiveViewOfType(MarkdownView),
+      file = view?.file;
+    if (
+      !leaf ||
+      !view ||
+      leaf.view !== view ||
+      !(file instanceof TFile) ||
+      (opened !== undefined && opened !== file) ||
+      file.extension !== 'md' ||
+      this.sourceLeaves.get(leaf)?.file === file
+    )
+      return;
+    const path = file.path,
+      revision = file.stat && { mtime: file.stat.mtime, size: file.stat.size };
+    if (!revision) return;
+    // Public Editor bytes are the only evidence of a clean native buffer. Never
+    // replace a loading/uncertain editor, even when the metadata cache says article.
+    let buffer: string;
+    try {
+      buffer = view.editor?.getValue();
+      if (typeof buffer !== 'string') return;
+    } catch {
+      return;
+    }
+    const current = () =>
+      !signal.aborted &&
+      epoch === this.routingEpoch &&
+      this.app.workspace.getMostRecentLeaf() === leaf &&
+      this.app.workspace.getActiveViewOfType(MarkdownView) === view &&
+      leaf.view === view &&
+      view.file === file &&
+      file.path === path &&
+      store.vault.file(path) === file &&
+      file.stat.mtime === revision.mtime &&
+      file.stat.size === revision.size &&
+      this.sourceLeaves.get(leaf)?.file !== file &&
+      !document.querySelector('.modal-container,.menu') &&
+      document.getSelection()?.isCollapsed !== false &&
+      // Inline properties/titles may have uncommitted input outside Editor bytes.
+      (!(document.activeElement instanceof Element) ||
+        !document.activeElement.closest(
+          'input,textarea,select,[contenteditable]:not([contenteditable="false"])',
+        ) ||
+        view.editor?.hasFocus?.() === true) &&
+      view.editor?.getValue() === buffer;
+    void (async () => {
+      const raw = await store.vault.read(file);
+      if (!current() || raw !== buffer || readDocument(raw).properties.type !== 'article') return;
+      // No await between the final intent/buffer check and public dispatch. Do not
+      // request focus: a host transition must not activate a now-background leaf.
+      await this.dispatchView(() =>
+        leaf.setViewState({ type: READER_VIEW, state: { file: path } }),
+      );
+      if (!signal.aborted) this.syncMobileNavigation();
+    })().catch(() => {
+      // Passive routing is optional. Read/parse/editor uncertainty leaves Markdown intact.
+    });
+  }
+  private syncMobileNavigation(): void {
+    if (this.signal.aborted) return;
+    document.body.classList.toggle(
+      'reader-mobile-active',
+      Platform.isMobile && !!this.app.workspace.getActiveViewOfType(ReaderView),
+    );
   }
   private pruneSourceLeaves(): void {
     const open = new Set<WorkspaceLeaf>();
@@ -195,11 +439,20 @@ export default class ReaderPlugin extends Plugin {
     }
   }
   private flushViews(): void {
-    for (const view of this.views()) void view.flush().catch((error) => this.notice(error));
+    const signal = this.signal;
+    if (signal.aborted) return;
+    for (const view of this.views())
+      void view.flush().catch((error) => {
+        if (!signal.aborted) this.notice(error);
+      });
   }
   private changed(change: LibraryChange): void {
-    if (this.signal.aborted) return;
-    for (const view of this.views()) void view.changed(change).catch((error) => this.notice(error));
+    const signal = this.signal;
+    if (signal.aborted) return;
+    for (const view of this.views())
+      void view.changed(change).catch((error) => {
+        if (!signal.aborted) this.notice(error);
+      });
     const file = this.store.vault.file(change.path);
     if (!file) return;
     this.recover(file);
@@ -250,16 +503,21 @@ export default class ReaderPlugin extends Plugin {
       return;
     }
     if (this.views().some((view) => view.protects(file) && view.busy)) return;
-    this.promoting.add(file);
+    const signal = this.signal,
+      store = this.store,
+      promotions = this.promotions,
+      promoting = this.promoting;
+    promoting.add(file);
     try {
-      const snapshot = await this.store.read(file.path);
-      if (this.promotions.get(file) || hasAnnotations(snapshot.body, snapshot.properties))
-        await this.store.move(snapshot, 'Inbox');
-      this.promotions.delete(file);
+      const snapshot = await store.read(file.path);
+      if (signal.aborted) return;
+      if (promotions.get(file) || hasAnnotations(snapshot.body, snapshot.properties))
+        await store.move(snapshot, 'Inbox');
+      promotions.delete(file);
     } catch {
       /* A native editor or a concurrent edit can defer the move; retry on layout/save. */
     } finally {
-      this.promoting.delete(file);
+      promoting.delete(file);
     }
   }
   private recoverReferences(): boolean {
@@ -279,12 +537,15 @@ export default class ReaderPlugin extends Plugin {
     return true;
   }
   private expire(): Promise<unknown> {
-    if (!this.referencesReady || this.signal.aborted) return Promise.resolve();
-    return this.store.expire(new Date(), (file) => {
+    const signal = this.signal,
+      store = this.store,
+      promotions = this.promotions;
+    if (!this.referencesReady || signal.aborted) return Promise.resolve();
+    return store.expire(new Date(), (file) => {
       if (
+        signal.aborted ||
         !this.referencesReady ||
-        this.signal.aborted ||
-        this.promotions.has(file) ||
+        promotions.has(file) ||
         this.views().some((view) => view.protects(file))
       )
         return true;
@@ -308,10 +569,16 @@ export default class ReaderPlugin extends Plugin {
     const cache = this.app.metadataCache.getFileCache(file);
     if (!cache?.sections || cache.sections.some((section) => section.type !== 'yaml')) return;
     this.attempted.add(file.path);
-    void this.ingestion.acquire(file.path).catch((error) => this.notice(error));
+    const signal = this.signal;
+    void this.ingestion.acquire(file.path).catch((error) => {
+      if (!signal.aborted) this.notice(error);
+    });
   }
   private async tick(force = false, recover = false): Promise<void> {
-    if (this.signal.aborted || document.visibilityState !== 'visible' || this.refreshing) return;
+    const signal = this.signal,
+      ingestion = this.ingestion;
+    if (signal.aborted || document.visibilityState !== 'visible' || this.refreshing) return;
+    if (!this.referencesRecovered && this.recoverReferences()) this.referencesReady = true;
     if (recover)
       for (const article of this.store.catalog.values()) {
         const file = this.store.vault.file(article.path);
@@ -321,34 +588,63 @@ export default class ReaderPlugin extends Plugin {
     this.refreshing = true;
     this.lastRefresh = Date.now();
     try {
-      if (navigator.onLine) await this.ingestion.refreshAll();
-      await this.expire();
+      if (navigator.onLine) await ingestion.refreshAll();
+      if (!signal.aborted) await this.expire();
+    } catch (error) {
+      if (!signal.aborted) throw error;
     } finally {
-      this.refreshing = false;
+      if (!signal.aborted) this.refreshing = false;
     }
   }
-  async openList(): Promise<ReaderView> {
+  private async copyReadingListLink(): Promise<void> {
+    if (this.signal.aborted) return;
+    try {
+      const clipboard = navigator.clipboard;
+      if (typeof clipboard?.writeText !== 'function') {
+        this.notice('Clipboard is unavailable on this device. Reading-list link was not copied.');
+        return;
+      }
+      const link = `obsidian://${READER_VIEW}?vault=${encodeURIComponent(this.app.vault.getName())}&view=list`;
+      await clipboard.writeText(link);
+      this.notice('Reading-list link copied.');
+    } catch (error) {
+      this.notice(
+        `Could not copy the reading-list link: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+  async openList(queue?: Queue): Promise<ReaderView> {
+    const signal = this.signal;
+    if (signal.aborted) throw new Error('Reader is paused.');
     const existing = this.app.workspace.getActiveViewOfType(ReaderView);
     if (existing) {
-      await existing.readingList();
+      await existing.readingList(queue);
+      if (signal.aborted) throw new Error('Reader settings changed.');
       return existing;
     }
     const leaf = this.app.workspace.getLeaf('tab');
-    await leaf.setViewState({ type: READER_VIEW, state: {}, active: true });
+    await this.dispatchView(() =>
+      leaf.setViewState({ type: READER_VIEW, state: queue ? { queue } : {}, active: true }),
+    );
+    if (signal.aborted) throw new Error('Reader settings changed.');
+    this.syncMobileNavigation();
     return leaf.view as ReaderView;
   }
   capture(): void {
+    const signal = this.signal,
+      store = this.store;
+    if (signal.aborted) return;
     input(
       this.app,
       'Save article',
       'URL',
-      async (url, modalSignal = this.signal) => {
-        const active = () => !this.signal.aborted && !modalSignal.aborted;
+      async (url, modalSignal = signal) => {
+        const active = () => !signal.aborted && !modalSignal.aborted;
         const guard = () => {
           if (!active()) throw new Error('Reader capture was cancelled.');
         };
         guard();
-        const file = await this.store.capture({ url }, new Date(), guard);
+        const file = await store.capture({ url }, new Date(), guard);
         if (!active()) return;
         let view = this.app.workspace.getActiveViewOfType(ReaderView);
         let created: WorkspaceLeaf | undefined;
@@ -356,7 +652,9 @@ export default class ReaderPlugin extends Plugin {
           const leaf = this.app.workspace.getLeaf('tab');
           created = leaf;
           // Do not focus a new tab while asynchronous host view creation is pending.
-          await leaf.setViewState({ type: READER_VIEW, state: {}, active: false });
+          await this.dispatchView(() =>
+            leaf.setViewState({ type: READER_VIEW, state: {}, active: false }),
+          );
           if (!(leaf.view instanceof ReaderView)) return;
           view = leaf.view;
         }
@@ -374,39 +672,61 @@ export default class ReaderPlugin extends Plugin {
         // openArticle starts acquisition only after its final cancellation check.
         // Cancellation cannot roll back a note/native host operation already committed.
       },
-      this.signal,
+      signal,
     );
   }
   feeds(): void {
+    if (this.signal.aborted) return;
     showFeeds(this.app, this.store, this.ingestion, this.signal);
   }
   async edit(view: ReaderView, file: TFile): Promise<void> {
+    const signal = this.signal,
+      store = this.store;
+    if (signal.aborted) return;
     await view.prepareMarkdown();
     if (
-      this.signal.aborted ||
+      signal.aborted ||
       view.leaf.view !== view ||
       view.file !== file ||
-      this.store.vault.file(file.path) !== file
+      store.vault.file(file.path) !== file
     )
       return;
     const entry = { file, transitioning: true };
     this.sourceLeaves.set(view.leaf, entry);
     try {
-      await view.leaf.setViewState({
-        type: 'markdown',
-        state: { file: file.path, mode: 'source' },
-        active: true,
-      });
+      // A dispatched title-only refresh must settle before Markdown takes ownership.
+      // The exemption above prevents any queued refresh from dispatching meanwhile.
+      await this.presentations.get(view.leaf);
+      if (
+        signal.aborted ||
+        view.leaf.view !== view ||
+        view.file !== file ||
+        store.vault.file(file.path) !== file
+      )
+        return;
+      await this.dispatchView(() =>
+        view.leaf.setViewState({
+          type: 'markdown',
+          state: { file: file.path, mode: 'source' },
+          active: true,
+        }),
+      );
     } finally {
       entry.transitioning = false;
-      this.pruneSourceLeaves();
+      if (!signal.aborted) {
+        this.pruneSourceLeaves();
+        this.syncMobileNavigation();
+      }
     }
   }
   onunload(): void {
     // Obsidian does not await this hook. Stop writes rather than allow old instances
     // to finish mutations after Hot Reload. Normal closes/visibility changes drain earlier;
     // abrupt unload/process termination cannot guarantee the final unsaved selection/position.
+    this.unloaded = true;
     this.lifetime.abort();
+    this.network.stop();
+    document.body.classList.remove('reader-mobile-active');
     this.ingestion?.stop();
     this.stopIndex?.();
     this.store?.dispose();

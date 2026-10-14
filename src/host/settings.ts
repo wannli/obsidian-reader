@@ -1,5 +1,6 @@
 import { Modal, Notice, PluginSettingTab, Setting, type App, type Plugin } from 'obsidian';
-import { rootPath } from '../core/model';
+import { folderKeys, folderLabels, validateFolders, type ReaderFolders } from '../core/folders';
+import { FolderPicker } from './folder-picker';
 import type { Ingestion } from './ingestion';
 import type { ArticleStore } from '../core/store';
 import type { TFile } from 'obsidian';
@@ -85,9 +86,9 @@ export class ReaderSettings extends PluginSettingTab {
   constructor(
     app: App,
     plugin: Plugin,
-    private root: string,
+    private folders: ReaderFolders,
     private paged: boolean,
-    private saveRoot: (root: string) => Promise<void>,
+    private saveFolders: (folders: ReaderFolders) => Promise<void>,
     private savePaged: (value: boolean) => void,
   ) {
     super(app, plugin);
@@ -95,27 +96,50 @@ export class ReaderSettings extends PluginSettingTab {
   display(): void {
     this.containerEl.empty();
     this.containerEl.createEl('h2', { text: 'Reader' });
-    let candidate = this.root;
+    const candidate = { ...this.folders };
+    this.containerEl.createEl('p', {
+      text: 'Choose five independent vault folders. They cannot overlap. Applying changes never moves existing files or changes their Markdown.',
+    });
+    for (const key of folderKeys) {
+      const setting = new Setting(this.containerEl).setName(folderLabels[key]);
+      setting.addText((control) => {
+        control.setValue(candidate[key]).onChange((value) => {
+          candidate[key] = value;
+        });
+        setting.addButton((button) =>
+          button.setButtonText('Choose folder').onClick(() => {
+            new FolderPicker(this.app, (path) => {
+              candidate[key] = path;
+              control.setValue(path);
+            }).open();
+          }),
+        );
+      });
+    }
     new Setting(this.containerEl)
-      .setName('Reading folder')
+      .setName('Apply folder locations')
       .setDesc(
-        'Inbox, Later, Stream, Treasury and Wires live here. Changing this never moves notes. Reload Reader to apply.',
-      )
-      .addText((control) =>
-        control.setValue(this.root).onChange((value) => {
-          candidate = value;
-        }),
+        'All five locations are checked and applied together. Reader returns to the reading list. New folders are created only when needed for a new note or an explicit move.',
       )
       .addButton((button) =>
-        button.setButtonText('Save').onClick(async () => {
-          try {
-            this.root = rootPath(candidate);
-            await this.saveRoot(this.root);
-            new Notice('Reading folder saved. Reload Reader to apply it.');
-          } catch (error) {
-            new Notice(String(error));
-          }
-        }),
+        button
+          .setButtonText('Apply folders')
+          .setCta()
+          .onClick(async () => {
+            button.setDisabled(true);
+            try {
+              const folders = validateFolders(candidate);
+              await this.saveFolders(folders);
+              this.folders = folders;
+              new Notice(
+                'Reader folders applied; Reader returned to the reading list. Existing files were not moved.',
+              );
+            } catch (error) {
+              new Notice(error instanceof Error ? error.message : String(error));
+            } finally {
+              button.setDisabled(false);
+            }
+          }),
       );
     new Setting(this.containerEl)
       .setName('Boox / e-ink pagination (this device)')

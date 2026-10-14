@@ -6,6 +6,7 @@ import {
   type Queue,
   type Subscription,
 } from './model';
+import { defaultFolders, isWithinFolder, validateFolders, type ReaderFolders } from './folders';
 
 /** Metadata only. Bodies, rendered HTML, selections and acquisition state do not live here. */
 export class Catalog {
@@ -13,11 +14,14 @@ export class Catalog {
   private subscriptions = new Map<string, Subscription>();
   private urls = new Map<string, Set<string>>();
   private sorted = new Map<Queue | undefined, readonly ArticleInfo[]>();
-  constructor(readonly root = 'Reading') {}
+  readonly folders: ReaderFolders;
+  constructor(folders: ReaderFolders = defaultFolders) {
+    this.folders = validateFolders(folders);
+  }
 
   update(path: string, properties: Properties): boolean {
-    const next = articleInfo(path, properties, this.root),
-      feed = subscription(path, properties);
+    const next = articleInfo(path, properties, this.folders),
+      feed = isWithinFolder(path, this.folders.feeds) ? subscription(path, properties) : undefined;
     const previous = this.articles.get(path),
       oldFeed = this.subscriptions.get(path);
     if (

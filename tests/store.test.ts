@@ -1,5 +1,6 @@
 // @vitest-environment node
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import { Lexer } from 'marked';
 import { Catalog, ReadingQueue } from '../src/core/catalog';
 import { addHighlight, locateSelection } from '../src/core/annotations';
 import { ChangedNote, readDocument, replaceBody } from '../src/core/document';
@@ -144,6 +145,111 @@ describe('guarded article operations', () => {
     expect(vault.trashed).toHaveLength(2);
     expect(store.catalog.list('Inbox')).toHaveLength(1);
   });
+  it.each([
+    '> ==first\n> second==',
+    '- ==first\n  second==',
+    '> ==first\r\n> second==',
+    '- ==first\r\n  second==',
+    '123. ==first\n     second==',
+    '- outer\r\n  - ==first\r\n    second==',
+    '> ==first\n> second==\n> ---',
+    '- ==first\r\n  `second`==',
+    '==first\n    second==',
+    '==first\n\tsecond==',
+    '==first\r\n    second==',
+    '==first\r\n\tsecond==',
+    '==first\n    second==\n---',
+    '==first\n\tsecond==\n---',
+    '==first\r\n    second==\r\n---',
+    '==first\r\n\tsecond==\r\n---',
+    '\\`==keep==\\`',
+    '\\\\\\`==keep==\\\\\\`',
+    'before ``==keep==` after',
+    '==before `literal== after`',
+    '%% hidden\r\n\r\nsecret %% ==keep==',
+    '==keep %% hidden  \nsecret %% visible==',
+  ])(
+    'expiry promotes and byte-preserves paragraph/heading/container highlights: %j',
+    async (body) => {
+      const vault = new MemoryVault(),
+        store = new ArticleStore(vault);
+      const file = await store.capture({
+        title: 'Nested highlight',
+        url: 'https://example.com/nested',
+        body,
+        queue: 'Stream',
+        published: '2026-08-01',
+      });
+      const raw = await vault.read(file);
+      expect(await store.expire(new Date('2026-10-13'))).toEqual({
+        deleted: 0,
+        promoted: 1,
+        retained: 0,
+      });
+      expect(file.path).toContain('/Inbox/');
+      expect(await vault.read(file)).toBe(raw);
+      expect((await store.read(file.path)).body).toBe(readDocument(raw).body);
+      expect(vault.trashed).toEqual([]);
+    },
+  );
+
+  it.each([
+    '`==literal==`',
+    '\\\\`==literal==\\\\`',
+    '``a ` ==literal== ``',
+    '%% ==hidden== %%',
+    '%%\n\n==hidden==\n\n%%',
+    '```\n%% ==literal== %%\n```',
+  ])('does not invent annotations in literal code or hidden comments: %j', async (body) => {
+    const vault = new MemoryVault(),
+      store = new ArticleStore(vault);
+    await store.capture({
+      title: 'Literal',
+      url: 'https://example.com/literal',
+      body,
+      queue: 'Stream',
+      published: '2026-08-01',
+    });
+    expect(await store.expire(new Date('2026-10-13'))).toEqual({
+      deleted: 1,
+      promoted: 0,
+      retained: 0,
+    });
+    expect(vault.trashed).toHaveLength(1);
+  });
+
+  it('retains highlighted Markdown if block source offsets cannot be proven', async () => {
+    const { store, vault, file, snapshot } = await setup();
+    vault.bytes.set(file, replaceBody(snapshot.raw, snapshot.body, '> ==first\n> second=='));
+    const before = await vault.read(file);
+    // A future/unsupported lexer transformation must not turn uncertainty into unannotated data.
+    const lex = vi.spyOn(Lexer, 'lex').mockReturnValueOnce(
+      Object.assign(
+        [
+          {
+            type: 'paragraph',
+            raw: 'not present in the original source',
+            text: 'first second',
+            tokens: [],
+          },
+        ],
+        { links: {} },
+      ),
+    );
+    try {
+      expect(await store.expire(new Date('2026-10-13'))).toEqual({
+        deleted: 0,
+        promoted: 0,
+        retained: 1,
+      });
+      expect(lex).toHaveBeenCalledOnce();
+      expect(vault.trashed).toEqual([]);
+      expect(await vault.read(file)).toBe(before);
+    } finally {
+      lex.mockRestore();
+    }
+  });
+
   it('does not delete articles exactly on the cutoff, newer articles, or other queues', async () => {
     const vault = new MemoryVault(),
       store = new ArticleStore(vault);
@@ -226,15 +332,15 @@ describe('incremental index and bounded work', () => {
   });
   it('lists indexed descendants at folder boundaries, including subscriptions but not sibling prefixes', () => {
     const catalog = new Catalog();
-    catalog.update('Reading/Inbox/Group/Article.md', { type: 'article' });
-    catalog.update('Reading/Inbox/Group/Nested/Feed.md', {
+    catalog.update('Reading/Wires/Group/Article.md', { type: 'article' });
+    catalog.update('Reading/Wires/Group/Nested/Feed.md', {
       type: 'feed',
       url: 'https://example.com/feed',
     });
-    catalog.update('Reading/Inbox/Grouped/Other.md', { type: 'article' });
-    expect(catalog.pathsWithin('Reading/Inbox/Group').sort()).toEqual([
-      'Reading/Inbox/Group/Article.md',
-      'Reading/Inbox/Group/Nested/Feed.md',
+    catalog.update('Reading/Wires/Grouped/Other.md', { type: 'article' });
+    expect(catalog.pathsWithin('Reading/Wires/Group').sort()).toEqual([
+      'Reading/Wires/Group/Article.md',
+      'Reading/Wires/Group/Nested/Feed.md',
     ]);
     expect(catalog.pathsWithin('Missing')).toEqual([]);
   });

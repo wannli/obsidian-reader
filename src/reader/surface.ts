@@ -9,8 +9,9 @@ export class ReadingSurface {
   readonly viewport: HTMLDivElement;
   readonly flow: HTMLDivElement;
   readonly body: HTMLElement;
-  readonly finish: HTMLDivElement;
+  readonly title: HTMLHeadingElement;
   private readonly feedback: HighlightFeedback;
+  private titleText = '';
   private disposeBody?: () => void;
   private readonly resize: ResizeObserver;
   private readonly events: AbortController;
@@ -20,7 +21,7 @@ export class ReadingSurface {
   private index?: VisibleText;
   private next?: { body: string; url: string };
   private marker = '';
-  // Device-local position for image/finish-only viewports; never sent to position().
+  // Device-local position for image-only viewports; never sent to position().
   private fallback?: { page: number; left: number; top: number };
   private explicitRestore = false;
   private readonly pointers = new Set<number>();
@@ -48,9 +49,10 @@ export class ReadingSurface {
     this.flow.className = 'reader-flow';
     this.body = document.createElement('article');
     this.body.className = 'reader-document markdown-rendered';
-    this.finish = document.createElement('div');
-    this.finish.className = 'reader-finish';
-    this.flow.append(this.body, this.finish);
+    this.title = document.createElement('h1');
+    this.title.className = 'reader-article-title';
+    this.title.hidden = true;
+    this.flow.append(this.title, this.body);
     this.viewport.append(this.flow);
     parent.append(this.viewport);
     this.feedback = new HighlightFeedback(this.viewport, this.body);
@@ -104,6 +106,12 @@ export class ReadingSurface {
     );
   }
 
+  setTitle(title: string): void {
+    if (this.dead || this.titleText === title) return;
+    this.titleText = title;
+    this.reflow();
+  }
+
   setBody(body: string, url: string): void {
     if (this.dead) return;
     // A newer snapshot can revert a queued change, or change only the URL base.
@@ -146,6 +154,21 @@ export class ReadingSurface {
       this.url = next.url;
       this.layoutPending = this.restorePending = true;
     }
+    // Keep every authored heading/text node in the body and its source index.
+    // Only Reader's synthetic title is redundant when the leading heading matches.
+    const leading = this.body.firstElementChild;
+    const normalize = (value: string) => value.trim().replace(/\s+/g, ' ');
+    const hidden =
+      !this.titleText ||
+      !!(
+        leading?.matches('h1,h2,h3,h4,h5,h6') &&
+        normalize(leading.textContent ?? '') === normalize(this.titleText)
+      );
+    if (this.title.textContent !== this.titleText || this.title.hidden !== hidden) {
+      this.title.textContent = this.titleText;
+      this.title.hidden = hidden;
+      this.layoutPending = this.restorePending = true;
+    }
     if (this.layoutPending) {
       this.layoutPending = false;
       this.layout();
@@ -157,8 +180,8 @@ export class ReadingSurface {
     }
   }
 
-  highlightFeedback(range: Range): () => void {
-    return this.feedback.prepare(range);
+  get pointerActive(): boolean {
+    return !this.dead && this.pointers.size > 0;
   }
 
   selection(): ReturnType<typeof selectedPassage> {
@@ -176,6 +199,10 @@ export class ReadingSurface {
     return false;
   }
 
+  highlightFeedback(range: Range): () => void {
+    return this.feedback.prepare(range);
+  }
+
   private reflow(): void {
     if (this.dead) return;
     this.feedback.dismiss();
@@ -188,10 +215,14 @@ export class ReadingSurface {
   private layout(): void {
     this.flow.style.setProperty('--reader-image-height', `${this.viewport.clientHeight * 0.3}px`);
     if (!this.paged) return;
-    const height = `${Math.max(100, this.viewport.clientHeight)}px`;
+    const height = `${Math.max(100, this.viewport.clientHeight)}px`,
+      width = `${this.columnWidth()}px`;
     this.flow.style.height = height;
     this.flow.style.setProperty('--reader-page-height', height);
-    this.flow.style.columnWidth = `${this.columnWidth()}px`;
+    // column-width is preferred, not exact: a fractional 100% flow stretches every
+    // column and accumulates a micro-page. Pin the flow to the navigation width too.
+    this.flow.style.width = width;
+    this.flow.style.columnWidth = width;
     this.flow.style.columnGap = `${GAP}px`;
     this.flow.style.columnFill = 'auto';
   }
@@ -230,6 +261,40 @@ export class ReadingSurface {
     clearTimeout(this.saveTimer);
     this.saveTimer = undefined;
     this.capture();
+  }
+
+  atBoundary(direction: -1 | 1): boolean {
+    if (
+      this.dead ||
+      this.restoring ||
+      this.restorePending ||
+      !this.index ||
+      this.viewport.clientHeight <= 0
+    )
+      return false;
+    if (this.paged) {
+      if (this.viewport.clientWidth <= 0 || this.flow.scrollWidth <= 0) return false;
+      const last = (this.pageCount() - 1) * (this.columnWidth() + GAP),
+        extent = this.viewport.scrollWidth;
+      // Integer column metrics can put the nominal last page beyond scrollLeft's
+      // fractional, clamped limit. Bound by the scroller, not rounded canPage().
+      // An unmeasured extent must not turn the start of a long article into its end.
+      const end =
+        extent > 0 ? Math.min(last, Math.max(0, extent - this.viewport.clientWidth)) : last;
+      return direction === -1 ? this.viewport.scrollLeft <= 1 : this.viewport.scrollLeft >= end - 1;
+    }
+    if (this.viewport.scrollHeight <= 0) return false;
+    return direction === -1
+      ? this.viewport.scrollTop <= 1
+      : this.viewport.scrollTop + this.viewport.clientHeight >= this.viewport.scrollHeight - 1;
+  }
+
+  canPage(direction: -1 | 1): boolean {
+    if (this.dead || !this.paged) return false;
+    // A rounded phantom column must not trap Next after the guarded endpoint is reached.
+    if (direction === 1 && this.atBoundary(1)) return false;
+    const current = Math.round(this.viewport.scrollLeft / (this.columnWidth() + GAP));
+    return direction < 0 ? current > 0 : current < this.pageCount() - 1;
   }
 
   page(direction: -1 | 1): void {

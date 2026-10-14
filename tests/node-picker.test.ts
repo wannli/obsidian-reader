@@ -118,6 +118,7 @@ it('caps the real picker at 100 without mutating results, and reads class metada
   expect(picker.results).toEqual(nodes.slice(0, 100));
   expect(nodes).toHaveLength(150);
   expect(picker.inputEl.value).toBe('initial query');
+  expect(mocks.placeholder).toHaveBeenCalledWith('Link passage to note by class');
   for (const result of picker.results)
     picker.renderSuggestion(result, document.createElement('div'));
   expect(f.api.listTypes).toHaveBeenCalledOnce();

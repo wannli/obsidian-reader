@@ -1,4 +1,5 @@
-import { Marked, type Token } from 'marked';
+import type { Token } from 'marked';
+import { readerMarkdown, visibleMarkdown } from '../core/markdown';
 import { fragment } from '../content/html';
 import { VisibleText } from './text';
 import { imageViewer } from './images';
@@ -9,7 +10,7 @@ const escape = (value: string): string =>
     (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]!,
   );
 type Inline = Token & { target: string; label: string; tokens: Token[] };
-const markdown = new Marked({ gfm: true, breaks: false });
+const markdown = readerMarkdown();
 markdown.use({
   renderer: {
     html: (token) => escape(token.text),
@@ -21,18 +22,6 @@ markdown.use({
   extensions: [
     {
       name: 'readerWiki',
-      level: 'inline',
-      start: (source) => source.indexOf('[['),
-      tokenizer(source) {
-        const match = /^\[\[([^\]|\r\n]+)(?:\|([^\]\r\n]+))?\]\]/.exec(source);
-        if (match)
-          return {
-            type: 'readerWiki',
-            raw: match[0],
-            target: match[1],
-            label: match[2] ?? match[1].replace(/\.md$/, '').split('/').pop()!,
-          };
-      },
       renderer(token) {
         const link = token as Inline;
         return `<a class="internal-link" href="${escape(encodeURI(link.target))}">${escape(link.label)}</a>`;
@@ -40,17 +29,6 @@ markdown.use({
     },
     {
       name: 'readerHighlight',
-      level: 'inline',
-      start: (source) => source.indexOf('=='),
-      tokenizer(source) {
-        const match = /^==([^\n]+?)==/.exec(source);
-        if (match)
-          return {
-            type: 'readerHighlight',
-            raw: match[0],
-            tokens: this.lexer.inlineTokens(match[1]),
-          };
-      },
       renderer(token) {
         return `<mark>${this.parser.parseInline((token as Inline).tokens)}</mark>`;
       },
@@ -60,8 +38,15 @@ markdown.use({
 
 const imageFailures = new Map<string, number>();
 export function renderBody(body: string, root: HTMLElement, base: string): () => void {
-  const html = markdown.parse(body, { async: false });
+  const html = markdown.parse(visibleMarkdown(body), { async: false });
   root.replaceChildren(fragment(html, base || 'https://example.invalid/', true));
+  // A defined-but-empty CSS custom property does NOT use var()'s fallback.
+  // Scope this fallback to Reader; leave a usable theme highlight color intact.
+  const highlight = root.ownerDocument.defaultView
+    ?.getComputedStyle(root)
+    .getPropertyValue('--text-highlight-bg')
+    .trim();
+  root.classList.toggle('reader-highlight-fallback', !highlight);
   const headings = new Map<string, number>();
   for (const heading of root.querySelectorAll<HTMLElement>('h1,h2,h3,h4,h5,h6')) {
     const slug = (heading.textContent ?? '')

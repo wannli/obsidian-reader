@@ -4,21 +4,71 @@ A small Markdown-first article and RSS reader for Obsidian desktop, iPhone/iPad,
 
 ## Read and keep
 
-- **Add URL** saves a note immediately, including offline; available article text is acquired while Reader is active and online.
+- **Add URL** saves a note immediately, including offline; available article text is acquired while Reader is active and online. Clicking a web link offers **Save to Inbox**, **Open link** or **Cancel**; saving keeps the current article open and reuses existing-URL deduplication.
 - RSS/Atom subscriptions import at most the **latest 20 entries on every refresh**, every four active hours or on demand. There is no backlog/history service.
 - Browse **Inbox, Later and Stream** in a flat, titles-only list; use **Open Treasury** and **Manage feeds** commands for those views. Search through native Obsidian rather than an embedded search bar. Source URLs remain stored in the notes.
 - Right-side indicators show **Opened before** from an existing saved reading position and **Has highlights** from Markdown. No extra metadata, completion flag or persisted history is added.
-- Select text to highlight it. Link passages to existing notes, add topic links, or use the optional public **Nodes API v2** integration for Fileclass-aware node selection/creation.
+- Select text to highlight it. Link passages to existing notes, add topic links, or use the optional public **Nodes API v2** integration for Fileclass-aware note selection/creation.
 - Both views use compact, leaf-owned **floating bottom controls**, accessible labels and 44px targets. Articles use the pane width, one title and scrollbar/final-text clearance. **Previous, Next, Keep, Delete, List** have no action divider; Keep and recoverable Delete advance within the original browsing context.
 - Exact `type: article` notes open in Reader; **Open Markdown** preserves an explicit native-editor escape, and dirty editors are protected. **Topics** and **Move article** remain commands. Reading position travels with the note; pagination is device-local.
 - Obsidian’s separate floating mobile navigation bar hides only while Reader is active. At article boundaries, **Up/PageUp** opens the previous article and **Down/PageDown** the next, without held-key skipping or interfering with editing. Every article entry still resumes its own saved position.
 - **Open reading list** forces the library. On iPhone, **Copy reading-list link** supplies a vault-aware `obsidian://obsidian-reader` URL for a Shortcuts **URL → Open URLs → Add to Home Screen** shortcut; no extra plugin is needed.
 
-Nodes v2 exposes class membership and icons, not schema colors; Reader keeps its ordinary highlight appearance. Linked creation uses the public callback-before-required-completion API when available. Failed/cancelled creation or linking can leave a node: Reader never prunes it. Older Nodes APIs are not silently accepted; ordinary note links remain available without Nodes.
+The combined Nodes/Fileclass integration requires Obsidian **1.12.7 or newer**. Nodes v2 exposes class membership and icons, not schema colors; Reader keeps its ordinary highlight appearance. Linked creation uses the public callback-before-required-completion API when available. Failed/cancelled creation or linking can leave a note: Reader never prunes it. Older Nodes APIs are not silently accepted; ordinary note links remain available without Nodes.
 
-Markdown is the only article store. Reader preserves authored text, unknown YAML, and existing links; it does not maintain sidecars, copied highlights, custom sync, or migration code. Images remain remote.
+Markdown is the only article store. Reader preserves authored text, unknown YAML, and existing links; it does not maintain sidecars, copied highlights, custom sync, or migration code. Images remain remote; inline images fit the reading area and open a larger view when clicked or tapped.
 
 **Stream is disposable:** annotations and vault links promote articles to Inbox; unprotected entries older than one clamped UTC calendar month go to vault-local recoverable trash. Unknown-age and in-use notes are retained. See the [approved storage contract](docs/storage-contract.md).
+
+## Markdown structure
+
+The default layout below is only a starting point: all five folders can live independently anywhere in the vault. A note's folder determines its queue; there is no queue property.
+
+```text
+Reading/
+  Inbox/     # captured and protected articles
+  Stream/    # disposable feed articles
+  Later/     # articles saved for later
+  Treasury/  # retained articles
+  Wires/     # feed-subscription notes
+```
+
+An article such as `Reading/Inbox/261014 A useful article.md`:
+
+```markdown
+---
+type: article
+url: https://example.com/article
+title: A useful article
+published: 2026-10-14T08:00:00.000Z
+feed: '[[Reading/Wires/Example feed.md]]'
+topics:
+  - '[[Topics/Reading.md]]'
+reading_position: An important passage remains ordinary Markdown
+---
+
+An ==important passage== remains ordinary Markdown.
+
+A ==[[Notes/A useful idea.md|linked passage]]== links directly to a note.
+```
+
+`type: article` identifies the note. Capture/acquisition uses `url`; local articles can be read without it. `title`, `published`, `feed`, `topics` and `reading_position` are optional; `error` can describe an acquisition failure. The position is a text anchor, not a page number or completion flag. Inline highlights and passage links live in the body; feed and topic links are frontmatter properties.
+
+A subscription such as `Reading/Wires/Example feed.md`:
+
+```yaml
+---
+type: feed
+url: https://example.com/feed.xml
+title: Example feed
+prefix: Example
+enabled: true
+---
+```
+
+Subscriptions need `type: feed` and a URL. `title`, `prefix` and `enabled` are optional; enabled defaults to true, and `error` may describe a failed refresh. Removing a subscription does not delete its articles.
+
+Reader adds no note IDs, ownership stamps, copied highlight collections or persisted read history. Unknown YAML and authored text are preserved. See the [storage contract](docs/storage-contract.md) for acquisition, promotion and expiry rules.
 
 ## Install a release
 
@@ -67,6 +117,6 @@ Start with the [codebase map](docs/map.md), [approved scope](docs/rebuild-spec.m
 
 The [joint iPhone smoke plan](docs/mobile-smoke.md) uses one disposable Sync vault for Reader, Nodes and Fileclass, excluding Hot Reload and instrumentation. Sync is connected and running with Wannes’s restored choices; do not change those settings or request device-plugin disabling. Native-input holds still govern shared installation/checks.
 
-Native Hot Reload, touch selection, physical iOS/Boox pagination, and real sync need separate manual acceptance in synthetic vaults. They are not claimed as verified by automated tests. No personal-vault installation, commit, push, version change, or publication is part of this rebuild.
+Native Hot Reload, touch selection, physical iOS/Boox pagination, and real sync need separate manual acceptance in synthetic vaults. They are not claimed as verified by automated tests. Local commits/merges do not authorize personal-vault installation, pushing, version changes or publication.
 
 Release Please remains the only release/version path. It prepares the release PR and draft release; the existing workflow validates the build, checks exact tag/version equality, and uploads only plugin artifacts before publication.

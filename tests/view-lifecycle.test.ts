@@ -1,11 +1,25 @@
 // @vitest-environment node
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { FileView, MarkdownView, TFile, type App, type WorkspaceLeaf } from 'obsidian';
+import { readFileSync } from 'node:fs';
+import {
+  FileView,
+  MarkdownView,
+  Platform,
+  setIcon,
+  setTooltip,
+  TFile,
+  type App,
+  type Command,
+  type WorkspaceLeaf,
+} from 'obsidian';
 import { ArticleStore, type VaultPort } from '../src/core/store';
+import { defaultFolders, type ReaderFolders } from '../src/core/folders';
 import { createDocument, patchProperties, readDocument } from '../src/core/document';
 import { passages } from '../src/core/annotations';
-import { ReaderView, nativeLinkPath, openExistingNote } from '../src/reader/view';
+import { READER_VIEW, ReaderView, nativeLinkPath, openExistingNote } from '../src/reader/view';
+import * as surfaceModule from '../src/reader/surface';
 import ReaderPlugin from '../src/main';
+import { showFeeds } from '../src/host/settings';
 import type { NodesApi, NodeResult } from '../src/host/nodes';
 import { gate, MemoryVault } from './helpers/memory-vault';
 
@@ -25,6 +39,8 @@ const mocks = vi.hoisted(() => ({
   confirmWebLink: vi.fn(),
   menus: [] as Map<string, () => void>[],
   dom: new Map<string, () => void>(),
+  commands: new Map<string, Command>(),
+  protocols: new Map<string, (params: Record<string, string>) => unknown>(),
   renderError: undefined as Error | undefined,
 }));
 vi.mock('obsidian', () => {
@@ -77,6 +93,10 @@ vi.mock('obsidian', () => {
       build(item);
       return this;
     }
+    addSeparator() {
+      this.items.set('---', () => {});
+      return this;
+    }
     showAtMouseEvent() {}
   }
   class Plugin {
@@ -87,8 +107,16 @@ vi.mock('obsidian', () => {
     registerEvent() {}
     registerView() {}
     addRibbonIcon() {}
-    addCommand() {}
+    addCommand(command: Command) {
+      mocks.commands.set(command.id, command);
+    }
     addSettingTab() {}
+    registerObsidianProtocolHandler(
+      name: string,
+      handler: (params: Record<string, string>) => unknown,
+    ) {
+      mocks.protocols.set(name, handler);
+    }
     registerInterval(id: number) {
       window.clearInterval(id);
     }
@@ -103,6 +131,16 @@ vi.mock('obsidian', () => {
     ItemView,
     Menu,
     Plugin,
+    Platform: { isMobile: false },
+    setIcon: vi.fn((element: HTMLElement, icon: string) => {
+      const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+      svg.classList.add('svg-icon');
+      svg.setAttribute('data-icon', icon);
+      element.replaceChildren(svg);
+    }),
+    setTooltip: vi.fn((element: HTMLElement, label: string) => {
+      element.setAttribute('aria-label', label);
+    }),
     Notice: class {
       constructor(message: string) {
         mocks.notice(message);
@@ -142,7 +180,12 @@ vi.mock('../src/host/ingestion', () => ({
 vi.mock('../src/reader/surface', () => ({
   ReadingSurface: class {
     body = document.createElement('article');
-    finish = document.createElement('div');
+    title = document.createElement('h1');
+    setTitle = (title: string) => {
+      this.title.textContent = title;
+    };
+    canPage = vi.fn(() => false);
+    atBoundary = vi.fn(() => false);
     selectionValue?: unknown;
     marker?: string;
     displayedBody?: string;
@@ -178,7 +221,7 @@ vi.mock('../src/reader/surface', () => ({
       private position: (marker: string) => void,
       private renderError?: (error: unknown) => void,
     ) {
-      parent.append(this.body, this.finish);
+      parent.append(this.title, this.body);
     }
     flush() {
       if (this.marker) this.position(this.marker);
@@ -214,16 +257,22 @@ beforeEach(() => {
   vi.clearAllMocks();
   mocks.menus.length = 0;
   mocks.dom.clear();
+  mocks.commands.clear();
+  mocks.protocols.clear();
   mocks.renderError = undefined;
-  mocks.choose.mockResolvedValue(null);
+  Platform.isMobile = false;
+  mocks.choose.mockReset().mockResolvedValue(null);
+  mocks.pickNode.mockReset().mockResolvedValue(null);
   mocks.topics.mockResolvedValue(null);
 });
 afterEach(() => {
+  document.getSelection()?.removeAllRanges();
   document.body.replaceChildren();
+  document.body.classList.remove('is-mobile', 'reader-mobile-active');
   vi.restoreAllMocks();
 });
 
-function hostFixture() {
+function hostFixture(folders: ReaderFolders = defaultFolders) {
   const vault = new MemoryVault();
   const workspaceEvents = new Map<string, ((...args: any[]) => void)[]>(),
     metadataEvents = new Map<string, ((...args: any[]) => void)[]>();
@@ -242,6 +291,7 @@ function hostFixture() {
   const app: any = {
     __vault: vault,
     vault: {
+      getName: vi.fn(() => 'Device-local Reader vault'),
       getMarkdownFiles: () => [...vault.files.values()],
       getAbstractFileByPath: (path: string) => vault.file(path),
     },
@@ -264,7 +314,7 @@ function hostFixture() {
       revealLeaf: vi.fn(async () => {}),
     },
   };
-  const store = new ArticleStore(vault as unknown as VaultPort<TFile>);
+  const store = new ArticleStore(vault as unknown as VaultPort<TFile>, folders);
   const signal = new AbortController();
   const host: any = {
     app,
@@ -312,6 +362,11 @@ async function pluginFixture() {
   await plugin.onload();
   plugin.store = fixture.store;
   return { ...fixture, plugin, pluginProbe: plugin as any };
+}
+function actionName(button: Element): string {
+  const label = button.getAttribute('aria-label') ?? button.textContent ?? '';
+  if (label === 'Trash article and advance') return 'Delete';
+  return label.replace(/ (?:page or article|article(?: and advance)?)$/, '');
 }
 function menu(view: ReaderView, title: string) {
   const probe = view as any;
@@ -481,113 +536,437 @@ describe('Reader operation and close lifecycle', () => {
   });
 });
 
-describe('highlight save feedback and native title refresh', () => {
-  it.each(['success', 'failure', 'stopping', 'stale', 'surface replaced'] as const)(
-    'acknowledges only a confirmed current save: %s',
-    async (outcome) => {
-      const f = hostFixture(),
-        file = await f.note('Reading/Inbox/A.md');
-      await f.view.openArticle(file.path);
-      const surface = f.probe.surface;
-      surface.selectionValue = {
-        quote: 'words',
-        before: 'before ',
-        after: ' after',
-        range: document.createRange(),
+describe('automatic selection event ownership', () => {
+  let f: Awaited<ReturnType<typeof selectionFixture>>;
+  async function selectionFixture() {
+    const actual = await vi.importActual<typeof surfaceModule>('../src/reader/surface');
+    vi.spyOn(surfaceModule, 'ReadingSurface').mockImplementation(function (...args) {
+      return new actual.ReadingSurface(...args);
+    });
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        observe() {}
+        disconnect() {}
+      },
+    );
+    const createRange = document.createRange.bind(document);
+    vi.spyOn(document, 'createRange').mockImplementation(() => {
+      const range = createRange();
+      range.getClientRects = () => [] as unknown as DOMRectList;
+      range.getBoundingClientRect = () => new DOMRect();
+      return range;
+    });
+    const f = hostFixture(),
+      body = 'Alpha phrase.\n\nBeta phrase.',
+      article = await f.note('Reading/Inbox/Selection.md', body);
+    await f.view.onOpen();
+    await f.view.openArticle(article.path);
+    const surface = f.probe.surface as surfaceModule.ReadingSurface;
+    function select(paragraph: number, end = paragraph === 0 ? 5 : 4, notify = true) {
+      const node = surface.body.querySelectorAll('p')[paragraph].firstChild!;
+      const range = document.createRange();
+      range.setStart(node, 0);
+      range.setEnd(node, end);
+      const selection = document.getSelection()!;
+      selection.removeAllRanges();
+      selection.addRange(range);
+      if (notify) document.dispatchEvent(new Event('selectionchange'));
+    }
+    return { ...f, article, body, surface, select };
+  }
+  beforeEach(async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    f = await selectionFixture();
+  });
+  afterEach(() => {
+    f?.view.stopForUnload();
+    document.getSelection()?.removeAllRanges();
+    vi.clearAllTimers();
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+  it('mounts one aligned article column with exactly five persistent actions outside the scroller', () => {
+    const column = f.view.contentEl.querySelector('.reader-article')!;
+    const actions = column.querySelector('.reader-actions')!;
+    expect([...actions.querySelectorAll('button')].map(actionName)).toEqual([
+      'Previous',
+      'Next',
+      'Keep',
+      'Delete',
+      'List',
+    ]);
+    expect(actions.parentElement).toBe(f.surface.viewport.parentElement);
+    expect(f.surface.viewport.contains(actions)).toBe(false);
+    expect([...f.surface.flow.children]).toEqual([f.surface.title, f.surface.body]);
+    expect(f.view.contentEl.querySelector('.reader-toolbar,.reader-finish')).toBeNull();
+    expect(f.view.contentEl.textContent).not.toContain('End of article');
+  });
+
+  it('saves 250ms after the last pointer releases, shows one transient acknowledgement, then paints without clearing native selection', async () => {
+    vi.spyOn(f.surface.viewport, 'getBoundingClientRect').mockReturnValue(
+      new DOMRect(0, 0, 400, 300),
+    );
+    const descriptor = Object.getOwnPropertyDescriptor(Range.prototype, 'getClientRects');
+    Object.defineProperty(Range.prototype, 'getClientRects', {
+      configurable: true,
+      writable: true,
+      value: () => [new DOMRect(20, 20, 100, 20)],
+    });
+    const restoreGeometry = () => {
+      if (descriptor) Object.defineProperty(Range.prototype, 'getClientRects', descriptor);
+      else delete (Range.prototype as any).getClientRects;
+    };
+    try {
+      const pointer = (type: string, pointerId: number) => {
+        const event = new MouseEvent(type, { bubbles: true, button: 0 });
+        Object.defineProperty(event, 'pointerId', { value: pointerId });
+        f.surface.body.dispatchEvent(event);
       };
-      const acknowledge = vi.fn();
-      surface.highlightFeedback.mockReturnValue(acknowledge);
-      const entered = gate(),
-        release = gate();
-      const annotate = f.store.annotate.bind(f.store);
-      vi.spyOn(f.store, 'annotate').mockImplementation(async (...args) => {
-        entered.resolve();
-        await release.promise;
-        if (outcome === 'failure') throw new Error('Save failed');
-        return annotate(...args);
-      });
-      const saving = f.probe.saveSelection();
-      await entered.promise;
-      expect(acknowledge).not.toHaveBeenCalled();
-      if (outcome === 'stopping') f.probe.stopping = true;
-      if (outcome === 'surface replaced') f.probe.surface = undefined;
-      if (outcome === 'stale') f.probe.generation++;
-      release.resolve();
-      if (['failure', 'stale', 'surface replaced'].includes(outcome))
-        await expect(saving).rejects.toThrow();
-      else await saving;
-      expect(acknowledge).toHaveBeenCalledTimes(outcome === 'success' ? 1 : 0);
-      if (outcome === 'success') {
-        expect(surface.displayedBody).toBe('before words after');
-        expect(surface.selectionValue.quote).toBe('words');
-        await f.probe.saveSelection(); // identical selection is a no-op
-        expect(acknowledge).toHaveBeenCalledTimes(1);
+      pointer('pointerdown', 1);
+      pointer('pointerdown', 2);
+      f.select(0);
+      vi.advanceTimersByTime(1000);
+      await f.probe.operations;
+      expect((await f.store.read(f.article.path)).body).toBe(f.body);
+      pointer('pointerup', 1);
+      vi.advanceTimersByTime(1000);
+      await f.probe.operations;
+      expect((await f.store.read(f.article.path)).body).toBe(f.body);
+      pointer('pointerup', 2);
+      vi.advanceTimersByTime(249);
+      await f.probe.operations;
+      expect((await f.store.read(f.article.path)).body).toBe(f.body);
+      vi.advanceTimersByTime(1);
+      await f.probe.operations;
+      expect((await f.store.read(f.article.path)).body).toBe('==Alpha== phrase.\n\nBeta phrase.');
+      expect(document.getSelection()!.toString()).toBe('Alpha');
+      const feedback = f.view.contentEl.querySelector<HTMLElement>('.reader-highlight-feedback')!;
+      expect(feedback.hidden).toBe(false);
+      expect(feedback.textContent).toBe('Highlight saved');
+      expect(f.view.contentEl.querySelector('.reader-status')?.textContent).toBe('');
+      expect(
+        [...f.view.contentEl.querySelectorAll('[role="status"]')].filter(
+          (node) => node.textContent === 'Highlight saved',
+        ),
+      ).toHaveLength(1);
+      expect(f.surface.body.querySelector('mark')).toBeNull(); // Selection is still held, not forcibly repainted.
+      document.getSelection()!.removeAllRanges();
+      document.dispatchEvent(new Event('selectionchange'));
+      expect(f.surface.body.querySelector('mark')?.textContent).toBe('Alpha');
+      expect(f.surface.body.classList.contains('reader-highlight-fallback')).toBe(true);
+      expect(feedback.hidden).toBe(true);
+      expect(f.view.contentEl.querySelector('.reader-status')?.textContent).toBe('');
+      expect(mocks.notice).not.toHaveBeenCalled();
+    } finally {
+      restoreGeometry();
+    }
+  });
+
+  it.each(['code', 'ambiguous'] as const)(
+    'quietly skips expected %s passive mapping rejection but retains explicit mapping errors',
+    async (kind) => {
+      const context = 'x '.repeat(65),
+        unit = `${context}same words${context}`;
+      const body = kind === 'code' ? '`literal code`' : `${unit}\n\n${unit}`;
+      f.vault.bytes.set(f.article, createDocument({ type: 'article' }, body));
+      await f.view.changed({ path: f.article.path });
+      const range = document.createRange();
+      if (kind === 'code') range.selectNodeContents(f.surface.body.querySelector('code')!);
+      else {
+        const node = f.surface.body.querySelector('p')!.firstChild!;
+        range.setStart(node, context.length);
+        range.setEnd(node, context.length + 10);
       }
+      document.getSelection()!.addRange(range);
+      document.dispatchEvent(new Event('selectionchange'));
+      const before = await f.vault.read(f.article),
+        annotate = vi.spyOn(f.store, 'annotate');
+      vi.advanceTimersByTime(250);
+      await f.probe.operations;
+      expect(await f.vault.read(f.article)).toBe(before);
+      expect(annotate).not.toHaveBeenCalled();
+      expect(mocks.notice).not.toHaveBeenCalled();
+      await expect(f.probe.saveSelection()).rejects.toThrow('cannot be matched safely');
     },
   );
-  it('refreshes cloned native state without recursively opening or remounting the article', async () => {
-    const f = hostFixture(),
-      file = await f.note('Reading/Inbox/A.md');
-    f.leaf.setViewState.mockImplementation(async ({ state }: any) =>
-      f.view.setState(JSON.parse(JSON.stringify(state)), { history: false }),
-    );
-    await f.view.openArticle(file.path);
-    const surface = f.probe.surface;
-    surface.selectionValue = { quote: 'words', before: 'before ', after: ' after' };
-    const selection = surface.selectionValue;
-    expect(f.view.getDisplayText()).toBe('Reader: A');
-    const raw = await f.vault.read(file);
-    f.vault.bytes.set(file, patchProperties(raw, { title: 'External title' }));
-    await f.view.changed({ path: file.path });
-    expect(f.view.getDisplayText()).toBe('Reader: External title');
-    expect(f.view.contentEl.querySelector('h1')?.textContent).toBe('External title');
-    expect(f.probe.surface).toBe(surface);
-    expect(surface.dispose).not.toHaveBeenCalled();
-    expect(surface.selectionValue).toBe(selection);
-    expect(f.view.getState()).not.toHaveProperty('readerPresentationOnly');
-    surface.selectionValue = undefined;
-    await f.view.readingList();
-    expect(f.view.getDisplayText()).toBe('Reading list');
-    expect(f.leaf.setViewState).toHaveBeenCalledTimes(3);
+
+  it.each(['Keep', 'Delete', 'Next'])(
+    'uses the real bottom %s action to advance, retaining recoverable trash semantics',
+    async (label) => {
+      const next = await f.note('Reading/Inbox/Z next.md');
+      await f.view.openArticle(f.article.path, true);
+      const original = await f.vault.read(f.article),
+        originalPath = f.article.path;
+      const click = (name: string) =>
+        [...f.view.contentEl.querySelectorAll<HTMLButtonElement>('.reader-actions button')]
+          .find((button) => actionName(button) === name)!
+          .click();
+      click(label);
+      await f.probe.operations;
+      expect(f.view.file).toBe(next);
+      expect(f.vault.trashed).toEqual(label === 'Delete' ? [originalPath] : []);
+      if (label !== 'Delete') {
+        expect(await f.vault.read(f.article)).toBe(original);
+        expect(f.article.path).toBe(
+          label === 'Keep' ? 'Reading/Treasury/Selection.md' : originalPath,
+        );
+      }
+      click('Next');
+      await f.probe.operations;
+      expect(f.view.file).toBeUndefined(); // Last-article Next returns to the list.
+      expect(f.view.contentEl.querySelector('.reader-list')).not.toBeNull();
+    },
+  );
+
+  it('keeps the new Delete action behind the existing source guard', async () => {
+    const external = createDocument({ type: 'article' }, 'Externally edited words.');
+    f.vault.bytes.set(f.article, external);
+    [...f.view.contentEl.querySelectorAll<HTMLButtonElement>('.reader-actions button')]
+      .find((button) => actionName(button) === 'Delete')!
+      .click();
+    await expect(f.probe.operations).rejects.toThrow();
+    expect(f.view.file).toBe(f.article);
+    expect(f.vault.trashed).toEqual([]);
+    expect(await f.vault.read(f.article)).toBe(external);
+    expect(mocks.notice).toHaveBeenCalled();
   });
-  it('does not swallow concurrent navigation or replay an old article after delayed cloned refreshes', async () => {
-    const f = hostFixture(),
-      a = await f.note('Reading/Inbox/A.md'),
-      b = await f.note('Reading/Inbox/B.md');
-    const pending: { state: Record<string, unknown>; done: ReturnType<typeof gate> }[] = [];
-    f.leaf.setViewState.mockImplementation(({ state }: any) => {
-      const done = gate();
-      pending.push({ state: JSON.parse(JSON.stringify(state)), done });
-      return done.promise;
+
+  it('retains acquisition errors and Retry when an automatic highlight succeeds', async () => {
+    f.vault.bytes.set(
+      f.article,
+      patchProperties(await f.vault.read(f.article), { error: 'Fetch failed' }),
+    );
+    await f.view.changed({ path: f.article.path });
+    f.select(0);
+    vi.advanceTimersByTime(250);
+    await f.probe.operations;
+    expect((await f.store.read(f.article.path)).body).toContain('==Alpha==');
+    const status = f.view.contentEl.querySelector('.reader-status')!;
+    expect(status.textContent).toContain('Fetch failed');
+    status.querySelector<HTMLButtonElement>('button')!.click();
+    expect(f.host.ingestion.acquire).toHaveBeenLastCalledWith(f.article.path, true);
+  });
+
+  it('does not silence genuine passive write failures', async () => {
+    vi.spyOn(f.vault, 'process').mockRejectedValueOnce(new Error('Disk write failed'));
+    f.select(0);
+    vi.advanceTimersByTime(250);
+    await expect(f.probe.operations).rejects.toThrow('Disk write failed');
+    expect((await f.store.read(f.article.path)).body).toBe(f.body);
+    expect(mocks.notice).toHaveBeenCalledWith('Disk write failed');
+    expect(f.view.contentEl.querySelector('.reader-status')?.textContent).not.toBe(
+      'Highlight saved',
+    );
+  });
+
+  it.each(['operation', 'position', 'writing'] as const)(
+    'does not let an old A job save B after the %s wait',
+    async (wait) => {
+      const entered = gate(),
+        release = gate();
+      if (wait === 'operation') {
+        void f.probe.operation(async () => {
+          entered.resolve();
+          await release.promise;
+        });
+      } else if (wait === 'writing') {
+        f.probe.writing = release.promise.finally(() => {
+          f.probe.writing = undefined;
+        });
+        entered.resolve();
+      } else {
+        const position = f.store.position.bind(f.store);
+        vi.spyOn(f.store, 'position').mockImplementation(async (...args) => {
+          entered.resolve();
+          await release.promise;
+          return position(...args);
+        });
+        f.probe.persistPosition('position sentinel');
+      }
+      await entered.promise;
+      f.select(0);
+      vi.advanceTimersByTime(250);
+      const oldJob = f.probe.operations;
+      // Let the automatic action enter its position wait, if that is the blocked path.
+      await Promise.resolve();
+      await Promise.resolve();
+      f.select(1); // B has not satisfied its own 250ms debounce.
+      release.resolve();
+      await oldJob;
+      expect((await f.store.read(f.article.path)).body).toBe(f.body);
+      vi.advanceTimersByTime(250);
+      await f.probe.operations;
+      expect((await f.store.read(f.article.path)).body).toBe('Alpha phrase.\n\n==Beta== phrase.');
+      if (wait === 'position')
+        expect((await f.store.read(f.article.path)).properties.reading_position).toBe(
+          'position sentinel',
+        );
+    },
+  );
+
+  it.each(['repeat', 'pointer', 'unreported'] as const)(
+    'invalidates queued A on %s input even without a different delivered quote',
+    async (kind) => {
+      const entered = gate(),
+        release = gate();
+      void f.probe.operation(async () => {
+        entered.resolve();
+        await release.promise;
+      });
+      await entered.promise;
+      f.select(0);
+      vi.advanceTimersByTime(250);
+      const oldJob = f.probe.operations;
+      if (kind === 'repeat') f.select(0); // Same text/context, but a new selection revision.
+      if (kind === 'unreported') f.select(1, 4, false); // The native selectionchange task has not run yet.
+      if (kind === 'pointer') {
+        for (const type of ['pointerdown', 'pointerup']) {
+          const event = new Event(type, { bubbles: true });
+          Object.assign(event, { pointerId: 1, button: 0 });
+          f.surface.body.dispatchEvent(event);
+        }
+      }
+      release.resolve();
+      await oldJob;
+      expect((await f.store.read(f.article.path)).body).toBe(f.body);
+      if (kind === 'unreported') document.dispatchEvent(new Event('selectionchange'));
+      vi.advanceTimersByTime(250);
+      await f.probe.operations;
+      expect((await f.store.read(f.article.path)).body).toBe(
+        kind === 'unreported'
+          ? 'Alpha phrase.\n\n==Beta== phrase.'
+          : '==Alpha== phrase.\n\nBeta phrase.',
+      );
+    },
+  );
+
+  it('rechecks supersession inside the final write transform and leaves the new selection intact', async () => {
+    const entered = gate(),
+      release = gate(),
+      process = f.vault.process.bind(f.vault);
+    vi.spyOn(f.vault, 'process').mockImplementationOnce(async (file, update) => {
+      entered.resolve();
+      await release.promise;
+      return process(file, update);
     });
-    await f.view.openArticle(a.path);
-    const first = f.probe.surface;
-    // An ordinary state request must navigate even with a presentation refresh pending.
-    await f.view.setState({ file: b.path, queue: 'Inbox' }, { history: false });
-    const current = f.probe.surface;
-    expect(f.view.file).toBe(b);
-    expect(current).not.toBe(first);
-    current.selectionValue = { quote: 'words', before: 'before ', after: ' after' };
-    const selection = current.selectionValue;
-    expect(pending).toHaveLength(2);
-    for (const request of pending.reverse()) {
-      const result = { history: true };
-      await f.view.setState(request.state, result);
-      request.done.resolve();
-      expect(result.history).toBe(false);
-      expect(f.view.file).toBe(b);
-      expect(f.probe.surface).toBe(current);
-      expect(current.selectionValue).toBe(selection);
-    }
-    expect(current.dispose).not.toHaveBeenCalled();
-    expect(f.view.getDisplayText()).toBe('Reader: B');
-    expect(f.view.getState()).toEqual({ file: b.path, queue: 'Inbox' });
-    current.selectionValue = undefined;
-    await f.view.readingList();
-    const last = pending[pending.length - 1];
-    await f.view.setState(last.state, { history: false });
-    last.done.resolve();
-    expect(f.view.getDisplayText()).toBe('Reading list');
+    f.select(0);
+    vi.advanceTimersByTime(250);
+    const oldJob = f.probe.operations;
+    await entered.promise;
+    f.select(1);
+    release.resolve();
+    await oldJob;
+    expect((await f.store.read(f.article.path)).body).toBe(f.body);
+    expect(document.getSelection()!.toString()).toBe('Beta');
+    expect(mocks.notice).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(250);
+    await f.probe.operations;
+    expect((await f.store.read(f.article.path)).body).toBe('Alpha phrase.\n\n==Beta== phrase.');
+  });
+
+  it.each(['body', 'replacement'] as const)(
+    'binds the candidate to its original displayed source and file across a %s change',
+    async (kind) => {
+      f.select(0);
+      if (kind === 'body')
+        f.vault.bytes.set(
+          f.article,
+          createDocument({ type: 'article' }, 'Alpha phrase.\n\nExternal source.'),
+        );
+      else {
+        const replacement = Object.setPrototypeOf({ path: f.article.path }, TFile.prototype);
+        f.vault.files.set(f.article.path, replacement);
+        f.vault.bytes.set(replacement, f.vault.bytes.get(f.article)!);
+      }
+      await f.view.changed({ path: f.article.path });
+      const before = await f.vault.read(f.vault.file(f.article.path)!);
+      vi.advanceTimersByTime(250);
+      await f.probe.operations;
+      expect(await f.vault.read(f.vault.file(f.article.path)!)).toBe(before);
+    },
+  );
+
+  it('allows keyboard-style selection changes, own deferred rendering and overlapping adjustment', async () => {
+    f.select(0);
+    vi.advanceTimersByTime(250);
+    await f.probe.operations;
+    expect((await f.store.read(f.article.path)).body).toBe('==Alpha== phrase.\n\nBeta phrase.');
+    expect(f.surface.displayedBody).toBe(f.body);
+    expect(document.getSelection()!.toString()).toBe('Alpha');
+    f.select(0, 12);
+    vi.advanceTimersByTime(250);
+    await f.probe.operations;
+    expect((await f.store.read(f.article.path)).body).toBe('==Alpha phrase==.\n\nBeta phrase.');
+    document.getSelection()!.removeAllRanges();
+    document.dispatchEvent(new Event('selectionchange'));
+    expect(f.surface.displayedBody).toBe('==Alpha phrase==.\n\nBeta phrase.');
+    vi.advanceTimersByTime(250);
+    await f.probe.operations;
+    expect([...f.surface.body.querySelectorAll('mark')].map((mark) => mark.textContent)).toEqual([
+      'Alpha phrase',
+    ]);
+    expect(mocks.notice).not.toHaveBeenCalled();
+  });
+
+  it('preserves its own Stream promotion during an automatic highlight', async () => {
+    const moved = await f.store.move(await f.store.read(f.article.path), 'Stream');
+    await f.view.openArticle(moved.path);
+    // The surface changed through real navigation; drive its real DOM handler.
+    const node = f.probe.surface.body.querySelector('p').firstChild;
+    const range = document.createRange();
+    range.setStart(node, 0);
+    range.setEnd(node, 5);
+    document.getSelection()!.addRange(range);
+    document.dispatchEvent(new Event('selectionchange'));
+    vi.advanceTimersByTime(250);
+    await f.probe.operations;
+    expect(f.article.path).toBe('Reading/Inbox/Selection.md');
+    expect((await f.store.read(f.article.path)).body).toBe('==Alpha== phrase.\n\nBeta phrase.');
+    expect(mocks.notice).not.toHaveBeenCalled();
+  });
+
+  it('does not roll back an already-dispatched A write and gives B its own debounce', async () => {
+    const dispatched = gate(),
+      release = gate(),
+      process = f.vault.process.bind(f.vault);
+    vi.spyOn(f.vault, 'process').mockImplementationOnce(async (file, update) => {
+      const raw = await process(file, update);
+      dispatched.resolve();
+      await release.promise;
+      return raw;
+    });
+    f.select(0);
+    vi.advanceTimersByTime(250);
+    const oldJob = f.probe.operations;
+    await dispatched.promise;
+    f.select(1);
+    release.resolve();
+    await oldJob;
+    expect((await f.store.read(f.article.path)).body).toBe('==Alpha== phrase.\n\nBeta phrase.');
+    vi.advanceTimersByTime(250);
+    await f.probe.operations;
+    expect((await f.store.read(f.article.path)).body).toBe('==Alpha== phrase.\n\n==Beta== phrase.');
+    expect(mocks.notice).not.toHaveBeenCalled();
+  });
+
+  it('still saves the captured close-time selection after an old queued job is invalidated', async () => {
+    const entered = gate(),
+      release = gate();
+    void f.probe.operation(async () => {
+      entered.resolve();
+      await release.promise;
+    });
+    await entered.promise;
+    f.select(0);
+    vi.advanceTimersByTime(250);
+    f.select(1);
+    const closing = f.view.onClose();
+    document.getSelection()!.removeAllRanges();
+    release.resolve();
+    await closing;
+    expect((await f.store.read(f.article.path)).body).toBe('Alpha phrase.\n\n==Beta== phrase.');
+    expect(mocks.notice).not.toHaveBeenCalled();
   });
 });
 
@@ -698,7 +1077,1236 @@ describe('displayed source and deferred rendering', () => {
   });
 });
 
+describe('public article commands', () => {
+  it('checks active Reader context without side effects, preserves Move/Topics, and keeps Markdown escape on failure', async () => {
+    const f = await pluginFixture();
+    const command = (id: string, checking = true) =>
+      mocks.commands.get(id)!.checkCallback!(checking);
+    for (const id of ['move', 'topics', 'open-markdown']) expect(command(id)).toBe(false);
+    vi.mocked(f.app.workspace.getActiveViewOfType).mockReturnValue(f.view);
+    for (const id of ['move', 'topics', 'open-markdown']) expect(command(id, false)).toBe(false);
+    const article = await f.note('Reading/Inbox/Commands.md');
+    await f.view.openArticle(article.path);
+    const before = await f.vault.read(article);
+    for (const id of ['move', 'topics', 'open-markdown']) expect(command(id)).toBe(true);
+    expect(mocks.choose).not.toHaveBeenCalled();
+    expect(mocks.topics).not.toHaveBeenCalled();
+    expect(f.leaf.setViewState).not.toHaveBeenCalled();
+    mocks.choose.mockResolvedValue('Later');
+    command('move', false);
+    await f.probe.operations;
+    expect(article.path).toBe('Reading/Later/Commands.md');
+    expect(await f.vault.read(article)).toBe(before);
+    command('topics', false);
+    await f.probe.operations;
+    expect(mocks.topics).toHaveBeenCalledOnce();
+    f.vault.bytes.set(article, '---\ntype: other\n---\nUnchanged authored words.');
+    await f.view.changed({ path: article.path });
+    expect(command('move')).toBe(false);
+    expect(command('topics')).toBe(false);
+    expect(command('open-markdown')).toBe(true);
+    f.host.edit = (view: ReaderView, file: TFile) => f.plugin.edit(view, file);
+    command('open-markdown', false);
+    await f.probe.operations;
+    await vi.waitFor(
+      () =>
+        expect(f.leaf.setViewState).toHaveBeenCalledWith({
+          type: 'markdown',
+          state: { file: article.path, mode: 'source' },
+          active: true,
+        }),
+      { interval: 1 },
+    );
+    f.signal.abort();
+    for (const id of ['move', 'topics', 'open-markdown']) expect(command(id)).toBe(false);
+    f.view.stopForUnload();
+  });
+});
+
+describe('public reading-list command and URI', () => {
+  afterEach(() => vi.unstubAllGlobals());
+  const invoke = (route: string) =>
+    route === 'command'
+      ? mocks.commands.get('open-reader')!.callback!()
+      : mocks.protocols.get('obsidian-reader')!({ action: 'obsidian-reader', view: 'list' });
+
+  it.each(['command', 'uri'])(
+    'forces the library through the existing lifecycle, draining writes and cancelling navigation scopes (%s)',
+    async (route) => {
+      const f = await pluginFixture();
+      const article = await f.note('Reading/Inbox/Article.md');
+      await f.view.openArticle(article.path);
+      vi.mocked(f.app.workspace.getActiveViewOfType).mockReturnValue(f.view);
+      expect(mocks.commands.get('open-reader')!.name).toBe('Open reading list');
+      expect([...mocks.protocols.keys()]).toEqual(['obsidian-reader']);
+      const pending = gate(),
+        creation = new AbortController(),
+        chooser = new AbortController();
+      f.probe.positionWrite = pending.promise;
+      f.probe.nodeCreation = { controller: creation };
+      f.probe.passageChoice = chooser;
+      f.probe.surface.selectionValue = { quote: 'words', before: 'before ', after: ' after' };
+      f.probe.surface.marker = 'words';
+      invoke(route);
+      expect(creation.signal.aborted).toBe(true);
+      expect(chooser.signal.aborted).toBe(true);
+      expect(f.view.file).toBe(article);
+      pending.resolve();
+      await f.probe.operations;
+      expect(f.view.file).toBeUndefined();
+      expect(f.view.contentEl.querySelector('.reader-list')).not.toBeNull();
+      const saved = readDocument(await f.vault.read(article));
+      expect(saved.body).toBe('before ==words== after');
+      expect(saved.properties.reading_position).toBe('words');
+      expect(f.app.workspace.getLeaf).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(['command', 'uri'])(
+    'keeps a failed source save mounted and reports it through the public %s route',
+    async (route) => {
+      const f = await pluginFixture();
+      const article = await f.note('Reading/Inbox/Article.md');
+      await f.view.openArticle(article.path);
+      vi.mocked(f.app.workspace.getActiveViewOfType).mockReturnValue(f.view);
+      f.probe.surface.selectionValue = { quote: 'words', before: 'before ', after: ' after' };
+      const raw = createDocument({ type: 'article' }, 'New externally saved source');
+      f.vault.bytes.set(article, raw);
+      invoke(route);
+      await expect(f.probe.operations).rejects.toThrow();
+      await Promise.resolve();
+      expect(f.view.file).toBe(article);
+      expect(await f.vault.read(article)).toBe(raw);
+      expect(mocks.notice).toHaveBeenCalled();
+      expect(f.app.workspace.getLeaf).not.toHaveBeenCalled();
+    },
+  );
+
+  it('opens a new library without replacing a dirty native editor or clearing its Markdown exemption', async () => {
+    const f = await pluginFixture();
+    const article = await f.note('Reading/Inbox/Native.md');
+    const native = new MarkdownView(f.leaf),
+      raw = await f.vault.read(article);
+    const editor = { getValue: () => raw + '\nUnsaved native words' };
+    Object.assign(native, { file: article, editor });
+    f.leaf.view = native;
+    f.vault.dirty.add(article);
+    const exemption = { file: article, transitioning: false };
+    f.pluginProbe.sourceLeaves.set(f.leaf, exemption);
+    const leaf: any = { app: f.app, setViewState: vi.fn() };
+    const reader = new ReaderView(leaf, f.plugin);
+    leaf.view = reader;
+    f.leaves.push(leaf);
+    leaf.setViewState.mockImplementation(async (state: any) =>
+      reader.setState(state.state, { history: false }),
+    );
+    vi.mocked(f.app.workspace.getLeaf).mockReturnValue(leaf);
+    invoke('uri');
+    await (reader as any).operations;
+    expect(f.app.workspace.getLeaf).toHaveBeenCalledWith('tab');
+    expect(leaf.setViewState).toHaveBeenCalledWith({
+      type: 'obsidian-reader',
+      state: {},
+      active: true,
+    });
+    expect(reader.contentEl.querySelector('.reader-list')).not.toBeNull();
+    expect(f.leaf.setViewState).not.toHaveBeenCalled();
+    expect(f.leaf.view).toBe(native);
+    expect(editor.getValue()).toBe(raw + '\nUnsaved native words');
+    expect(await f.vault.read(article)).toBe(raw);
+    expect(f.pluginProbe.sourceLeaves.get(f.leaf)).toBe(exemption);
+  });
+
+  it.each([undefined, '', 'article', 'List', 'unknown'])(
+    'ignores unsupported URI view %s',
+    async (view) => {
+      const f = await pluginFixture();
+      const open = vi.spyOn(f.plugin, 'openList');
+      const params: Record<string, string> = { action: 'obsidian-reader' };
+      if (view !== undefined) params.view = view;
+      mocks.protocols.get('obsidian-reader')!(params);
+      expect(open).not.toHaveBeenCalled();
+      expect(f.app.workspace.getLeaf).not.toHaveBeenCalled();
+    },
+  );
+
+  it('copies only on explicit command, encoding the current local vault name every time without reading the clipboard', async () => {
+    const clipboard = { writeText: vi.fn(async (_text: string) => {}), readText: vi.fn() };
+    vi.stubGlobal('navigator', { clipboard, onLine: false });
+    const f = await pluginFixture();
+    expect(clipboard.writeText).not.toHaveBeenCalled();
+    expect(f.app.vault.getName).not.toHaveBeenCalled();
+    const command = mocks.commands.get('copy-reading-list-link')!;
+    expect(command.name).toBe('Copy reading-list link');
+    for (const name of ['iPhone Reading & références / # 日本語', 'Boox local – 阅读']) {
+      vi.mocked(f.app.vault.getName).mockReturnValue(name);
+      await command.callback!();
+      const link = clipboard.writeText.mock.calls.at(-1)![0];
+      expect(link).toBe(`obsidian://obsidian-reader?vault=${encodeURIComponent(name)}&view=list`);
+      const url = new URL(link);
+      expect(url.protocol).toBe('obsidian:');
+      expect(url.hostname).toBe('obsidian-reader');
+      expect([...url.searchParams]).toEqual([
+        ['vault', name],
+        ['view', 'list'],
+      ]);
+      expect(url.hash).toBe('');
+      expect(mocks.notice).toHaveBeenLastCalledWith('Reading-list link copied.');
+    }
+    expect(clipboard.readText).not.toHaveBeenCalled();
+    expect(f.app.workspace.getLeaf).not.toHaveBeenCalled();
+  });
+
+  it.each(['unsupported', 'denied'])(
+    'reports %s clipboard support without an unhandled error or navigation',
+    async (mode) => {
+      const writeText = vi.fn(async () => {
+        throw new Error('Permission denied');
+      });
+      vi.stubGlobal('navigator', {
+        clipboard: mode === 'unsupported' ? undefined : { writeText },
+        onLine: false,
+      });
+      const f = await pluginFixture();
+      await mocks.commands.get('copy-reading-list-link')!.callback!();
+      expect(mocks.notice).toHaveBeenCalledWith(
+        mode === 'unsupported'
+          ? 'Clipboard is unavailable on this device. Reading-list link was not copied.'
+          : 'Could not copy the reading-list link: Permission denied',
+      );
+      expect(f.app.workspace.getLeaf).not.toHaveBeenCalled();
+    },
+  );
+
+  it('ignores late commands and URI callbacks after unload', async () => {
+    const writeText = vi.fn();
+    vi.stubGlobal('navigator', { clipboard: { writeText }, onLine: false });
+    const f = await pluginFixture();
+    f.plugin.onunload();
+    invoke('command');
+    invoke('uri');
+    await mocks.commands.get('copy-reading-list-link')!.callback!();
+    expect(f.app.workspace.getLeaf).not.toHaveBeenCalled();
+    expect(writeText).not.toHaveBeenCalled();
+  });
+});
+
+describe('article keyboard boundaries', () => {
+  it.each(
+    ['list', 'Next', 'Previous', 'PageDown', 'PageUp'].flatMap((route) =>
+      [false, true].map((saved) => ({ route, saved })),
+    ),
+  )(
+    'resumes saved position without direction overrides via $route (saved=$saved)',
+    async ({ route, saved }) => {
+      const f = hostFixture();
+      const a = await f.note('Reading/Inbox/A.md'),
+        b = await f.note('Reading/Inbox/B.md');
+      for (const file of [a, b]) {
+        f.vault.bytes.set(
+          file,
+          patchProperties(f.vault.bytes.get(file)!, {
+            reading_position: saved ? `Saved text from ${file.path}` : undefined,
+          }),
+        );
+      }
+      const previous = route === 'Previous' || route === 'PageUp',
+        target = previous ? a : b;
+      f.host.paged = true;
+      await f.view.openArticle((previous ? b : a).path, true);
+      if (route === 'list') {
+        await f.view.readingList();
+        [...f.view.contentEl.querySelectorAll<HTMLButtonElement>('.reader-list-item')]
+          .find((row) => row.textContent === 'B')!
+          .click();
+      } else if (route === 'Next' || route === 'Previous') {
+        [...f.view.contentEl.querySelectorAll<HTMLButtonElement>('.reader-actions button')]
+          .find((button) => actionName(button) === route)!
+          .click();
+      } else {
+        f.probe.surface.atBoundary.mockReturnValue(true);
+        f.view.key(new KeyboardEvent('keydown', { key: route, cancelable: true }));
+      }
+      await f.probe.operations;
+      expect(f.view.file).toBe(target);
+      expect(f.probe.surface.restore).toHaveBeenLastCalledWith(
+        saved ? `Saved text from ${target.path}` : '',
+      );
+    },
+  );
+  async function fixture() {
+    const f = hostFixture();
+    const a = await f.note('Reading/Inbox/A.md'),
+      b = await f.note('Reading/Inbox/B.md'),
+      c = await f.note('Reading/Inbox/C.md');
+    await f.view.openArticle(b.path, true);
+    f.probe.surface.atBoundary.mockReturnValue(true);
+    return { ...f, a, b, c };
+  }
+  it.each(['ArrowDown', 'PageDown', 'ArrowUp', 'PageUp'])(
+    'uses the existing navigation pipeline once at %s boundary, and ignores repeats',
+    async (key) => {
+      const f = await fixture();
+      const forward = key.endsWith('Down');
+      const event = new KeyboardEvent('keydown', { key, cancelable: true });
+      f.view.key(event);
+      f.view.key(new KeyboardEvent('keydown', { key, repeat: true }));
+      f.view.key(new KeyboardEvent('keydown', { key })); // No overlapping boundary jobs.
+      expect(event.defaultPrevented).toBe(true);
+      await f.probe.operations;
+      expect(f.view.file).toBe(forward ? f.c : f.a);
+      expect(f.vault.trashed).toEqual([]);
+    },
+  );
+  it.each(['ArrowDown', 'PageDown', 'ArrowUp', 'PageUp'])(
+    'does not navigate before the %s boundary; paged keys still page',
+    async (key) => {
+      const f = await fixture();
+      const surface = f.probe.surface;
+      surface.atBoundary.mockReturnValue(false);
+      const event = new KeyboardEvent('keydown', { key, cancelable: true });
+      f.view.key(event);
+      expect(event.defaultPrevented).toBe(false);
+      f.host.paged = true;
+      f.view.key(new KeyboardEvent('keydown', { key, cancelable: true }));
+      if (key.startsWith('Page'))
+        expect(surface.page).toHaveBeenCalledWith(key.endsWith('Down') ? 1 : -1);
+      else expect(surface.page).not.toHaveBeenCalled();
+      await f.probe.operations;
+      expect(f.view.file).toBe(f.b);
+    },
+  );
+  it.each([
+    'repeat',
+    'ctrl',
+    'alt',
+    'meta',
+    'shift',
+    'input',
+    'textarea',
+    'select',
+    'contenteditable',
+    'modal',
+    'selection',
+    'library',
+  ])('does not intercept boundary keys in %s context', async (context) => {
+    const f = await fixture();
+    const options: KeyboardEventInit = { key: 'ArrowDown', cancelable: true, bubbles: true };
+    let target: HTMLElement = f.probe.surface.body;
+    if (context === 'repeat') options.repeat = true;
+    if (['ctrl', 'alt', 'meta', 'shift'].includes(context))
+      (options as any)[`${context}Key`] = true;
+    if (['input', 'textarea', 'select'].includes(context))
+      target = document.body.appendChild(document.createElement(context));
+    if (context === 'contenteditable') {
+      target = document.body.createDiv();
+      target.setAttribute('contenteditable', '');
+    }
+    if (context === 'modal') document.body.createDiv({ cls: 'modal-container' });
+    if (context === 'selection') {
+      const range = document.createRange();
+      range.selectNodeContents(target);
+      document.getSelection()!.addRange(range);
+    }
+    if (context === 'library') await f.view.readingList();
+    const event = new KeyboardEvent('keydown', options);
+    target.addEventListener('keydown', (event) => f.view.key(event), { once: true });
+    target.dispatchEvent(event);
+    expect(event.defaultPrevented).toBe(false);
+    await f.probe.operations;
+    expect(f.view.file).toBe(context === 'library' ? undefined : f.b);
+    document.getSelection()?.removeAllRanges();
+  });
+  it('uses existing queue boundaries: first Up stays, final Down returns to the list', async () => {
+    const f = await fixture();
+    await f.view.openArticle(f.a.path, true);
+    f.probe.surface.atBoundary.mockReturnValue(true);
+    f.view.key(new KeyboardEvent('keydown', { key: 'ArrowUp' }));
+    await f.probe.operations;
+    expect(f.view.file).toBe(f.a);
+    await f.view.openArticle(f.c.path, true);
+    f.probe.surface.atBoundary.mockReturnValue(true);
+    f.view.key(new KeyboardEvent('keydown', { key: 'ArrowDown' }));
+    await f.probe.operations;
+    expect(f.view.file).toBeUndefined();
+    expect(f.view.contentEl.querySelector('.reader-list')).not.toBeNull();
+  });
+  it('keeps boundary navigation behind the existing flush/source guard', async () => {
+    const f = await fixture();
+    f.probe.surface.selectionValue = { quote: 'words', before: 'before ', after: ' after' };
+    const raw = createDocument({ type: 'article' }, 'External changed body');
+    f.vault.bytes.set(f.b, raw);
+    f.view.key(new KeyboardEvent('keydown', { key: 'PageDown' }));
+    await expect(f.probe.operations).rejects.toThrow();
+    expect(f.view.file).toBe(f.b);
+    expect(await f.vault.read(f.b)).toBe(raw);
+    expect(mocks.notice).toHaveBeenCalled();
+  });
+});
+
+describe('safe default article routing', () => {
+  const settle = () => new Promise<void>((resolve) => setImmediate(resolve));
+  async function fixture(type = 'article', path = 'Outside/Article.md') {
+    const f = await pluginFixture();
+    const file = await f.note(path, 'Authored body', type);
+    const native = new MarkdownView(f.leaf);
+    const editor = { getValue: vi.fn(() => f.vault.bytes.get(file)!) };
+    Object.assign(native, { file, editor });
+    (file as any).stat = { mtime: 1, ctime: 1, size: f.vault.bytes.get(file)!.length };
+    f.leaf.view = native;
+    vi.mocked(f.app.workspace.getActiveViewOfType).mockImplementation((constructor: any) =>
+      f.leaf.view instanceof constructor ? f.leaf.view : null,
+    );
+    f.leaf.setViewState.mockImplementation(async (state: any) => {
+      if (state.type === 'obsidian-reader') f.leaf.view = f.view;
+    });
+    return { ...f, file, native, editor };
+  }
+  it.each(['article', 'Project', 'PhoneTask', 'note', 'Article'])(
+    'routes only exact real type: article, including outside queues (%s)',
+    async (type) => {
+      const f = await fixture(type);
+      const raw = await f.vault.read(f.file);
+      f.workspace('file-open', f.file);
+      await settle();
+      if (type === 'article')
+        expect(f.leaf.setViewState).toHaveBeenCalledExactlyOnceWith({
+          type: 'obsidian-reader',
+          state: { file: f.file.path },
+        });
+      else expect(f.leaf.setViewState).not.toHaveBeenCalled();
+      expect(await f.vault.read(f.file)).toBe(raw);
+    },
+  );
+  it('does not classify a folder name or stale cached article type as article', async () => {
+    const f = await fixture('Project', 'Reading/Inbox/Project.md');
+    f.cache.get(f.file).frontmatter.type = 'article';
+    f.workspace('file-open', f.file);
+    f.metadata('changed', f.file);
+    await settle();
+    expect(f.leaf.setViewState).not.toHaveBeenCalled();
+  });
+  it('can route from fresh bytes despite missing metadata; deferred editor/metadata readiness retries safely', async () => {
+    const f = await fixture();
+    f.cache.delete(f.file);
+    f.editor.getValue.mockReturnValue('');
+    f.workspace('file-open', f.file);
+    await settle();
+    expect(f.leaf.setViewState).not.toHaveBeenCalled();
+    f.editor.getValue.mockReturnValue(f.vault.bytes.get(f.file)!);
+    f.metadata('changed', f.file);
+    await settle();
+    expect(f.leaf.setViewState).toHaveBeenCalledOnce();
+    f.metadata('changed', f.file);
+    f.workspace('active-leaf-change', f.leaf);
+    await settle();
+    expect(f.leaf.setViewState).toHaveBeenCalledOnce();
+  });
+  it.each([
+    'dirty',
+    'missing-editor',
+    'throwing-editor',
+    'modal',
+    'property-field',
+    'property-title',
+    'selection',
+  ])('never replaces an uncertain native editor (%s)', async (condition) => {
+    const f = await fixture();
+    if (condition === 'dirty') f.editor.getValue.mockReturnValue('Unsaved native changes');
+    if (condition === 'missing-editor') (f.native as any).editor = undefined;
+    if (condition === 'throwing-editor')
+      f.editor.getValue.mockImplementation(() => {
+        throw new Error('not ready');
+      });
+    if (condition === 'modal') document.body.createDiv({ cls: 'modal-container' });
+    if (condition === 'property-field') document.body.createEl('input').focus();
+    if (condition === 'property-title') {
+      const title = document.body.createDiv({ attr: { contenteditable: 'true', tabindex: '0' } });
+      title.focus();
+    }
+    if (condition === 'selection') {
+      const text = document.body.createEl('p', { text: 'Native selected words' });
+      const range = document.createRange();
+      range.selectNodeContents(text);
+      document.getSelection()!.removeAllRanges();
+      document.getSelection()!.addRange(range);
+      expect(document.getSelection()!.isCollapsed).toBe(false);
+    }
+    f.workspace('file-open', f.file);
+    await settle();
+    expect(f.leaf.setViewState).not.toHaveBeenCalled();
+    expect(f.leaf.view).toBe(f.native);
+  });
+  it('can route a focused native source editor once its public bytes are proven clean', async () => {
+    const f = await fixture();
+    const editor = document.body.createDiv({ attr: { contenteditable: 'true', tabindex: '0' } });
+    editor.focus();
+    Object.assign(f.editor, { hasFocus: () => true });
+    f.workspace('file-open', f.file);
+    await settle();
+    expect(f.leaf.setViewState).toHaveBeenCalledOnce();
+  });
+  it.each([
+    'dirty',
+    'file-change',
+    'replace',
+    'rename',
+    'revision',
+    'background',
+    'round-trip',
+    'unload',
+  ])('rejects a deferred routing result after %s', async (condition) => {
+    const f = await fixture();
+    const raw = f.vault.bytes.get(f.file)!;
+    const started = gate(),
+      release = gate();
+    vi.spyOn(f.vault, 'read').mockImplementationOnce(async () => {
+      started.resolve();
+      await release.promise;
+      return raw;
+    });
+    f.workspace('file-open', f.file);
+    await started.promise;
+    if (condition === 'dirty') f.editor.getValue.mockReturnValue(raw + '\nUnsaved');
+    if (condition === 'file-change')
+      (f.native as any).file = await f.note('Notes/Other.md', '', 'Project');
+    if (condition === 'replace') f.vault.files.set(f.file.path, {} as any);
+    if (condition === 'rename') f.file.path = 'Outside/Renamed.md';
+    if (condition === 'revision') f.file.stat.mtime++;
+    if (condition === 'background' || condition === 'round-trip') {
+      vi.mocked(f.app.workspace.getActiveViewOfType).mockReturnValue(null);
+      f.workspace('active-leaf-change', null);
+      if (condition === 'round-trip')
+        vi.mocked(f.app.workspace.getActiveViewOfType).mockReturnValue(f.native);
+    }
+    if (condition === 'unload') f.plugin.onunload();
+    release.resolve();
+    await settle();
+    expect(f.leaf.setViewState).not.toHaveBeenCalled();
+  });
+  it('preserves explicit Markdown intent across metadata and active-leaf events without persisting view state', async () => {
+    const f = await fixture();
+    f.leaf.view = f.view;
+    await f.view.openArticle(f.file.path);
+    f.leaf.setViewState.mockImplementation(async () => {
+      f.leaf.view = f.native;
+      f.workspace('file-open', f.file);
+    });
+    await f.plugin.edit(f.view, f.file);
+    f.metadata('changed', f.file);
+    f.metadata('resolve', f.file);
+    f.workspace('active-leaf-change', f.leaf);
+    await settle();
+    expect(f.leaf.setViewState).toHaveBeenCalledExactlyOnceWith({
+      type: 'markdown',
+      state: { file: f.file.path, mode: 'source' },
+      active: true,
+    });
+    expect(f.view.getState()).toEqual({ file: f.file.path, queue: 'Inbox' });
+  });
+});
+
+describe('bounded Reader UI', () => {
+  it('keeps library titles as text, with four bottom actions and no search/subtitles/Treasury/Feeds buttons', async () => {
+    const f = hostFixture();
+    await f.note('Reading/Inbox/Visible title.md');
+    f.view.showList();
+    const buttons = [
+      ...f.view.contentEl.querySelectorAll<HTMLButtonElement>('.reader-toolbar button'),
+    ];
+    expect(buttons.map(actionName)).toEqual(['Inbox', 'Later', 'Stream', 'Add URL']);
+    expect(buttons.map((button) => button.querySelector('svg')?.getAttribute('data-icon'))).toEqual(
+      ['inbox', 'clock', 'waves', 'plus'],
+    );
+    for (const button of buttons) {
+      expect(button.textContent).toBe('');
+      expect(button.querySelector('svg')?.getAttribute('aria-hidden')).toBe('true');
+      expect(setTooltip).toHaveBeenCalledWith(button, actionName(button));
+      expect(setIcon).toHaveBeenCalledWith(button, expect.any(String));
+    }
+    expect(f.view.contentEl.querySelector('.reader-list-item')?.textContent).toContain(
+      'Visible title',
+    );
+    expect(
+      f.view.contentEl.querySelector('input[type="search"],.reader-list-item small'),
+    ).toBeNull();
+    expect(f.view.contentEl.lastElementChild?.classList.contains('reader-bottom-controls')).toBe(
+      true,
+    );
+    expect(f.view.contentEl.firstElementChild?.classList.contains('reader-list')).toBe(true);
+    const capture = vi.spyOn(f.host, 'capture');
+    buttons[3].click();
+    expect(capture).toHaveBeenCalledOnce();
+    buttons[1].click();
+    expect(f.view.getState().queue).toBe('Later');
+  });
+
+  it('keeps named pagination icon actions without hiding article row titles', async () => {
+    const f = hostFixture();
+    for (let i = 0; i < 51; i++) await f.note(`Reading/Inbox/Title ${i}.md`);
+    f.view.showList();
+    const more = f.view.contentEl.querySelector<HTMLButtonElement>('[aria-label="Show more"]')!;
+    expect(more.textContent).toBe('');
+    expect(more.querySelector('svg')?.getAttribute('data-icon')).toBe('chevrons-down');
+    more.click();
+    expect(f.view.contentEl.querySelectorAll('.reader-list-item')).toHaveLength(51);
+    expect(f.view.contentEl.querySelector('[aria-label="Show more"]')).toBeNull();
+  });
+
+  it('opens Treasury through the palette, resets old search, and preserves Treasury/feed bytes and feeds access', async () => {
+    const f = await pluginFixture();
+    const saved = await f.note('Reading/Treasury/Saved title.md', 'Authored Treasury body');
+    const feed = await f.note('Reading/Wires/Feed.md', 'Authored subscription notes', 'feed');
+    const before = [await f.vault.read(saved), await f.vault.read(feed)];
+    vi.mocked(f.app.workspace.getActiveViewOfType).mockReturnValue(f.view);
+    f.probe.search = 'Unrelated old search';
+    f.probe.listLimit = 150;
+    const command = mocks.commands.get('open-treasury')!;
+    expect(command.name).toBe('Open Treasury');
+    command.callback!();
+    await f.probe.operations;
+    expect(f.view.getState().queue).toBe('Treasury');
+    expect(f.probe.search).toBe('');
+    expect(f.probe.listLimit).toBe(50);
+    expect(f.view.contentEl.querySelector('.reader-list-item')?.textContent).toContain(
+      'Saved title',
+    );
+    expect(mocks.commands.get('manage-feeds')!.name).toBe('Manage feeds');
+    mocks.commands.get('manage-feeds')!.callback!();
+    expect(showFeeds).toHaveBeenCalledWith(f.app, f.store, f.plugin.ingestion, f.plugin.signal);
+    expect([await f.vault.read(saved), await f.vault.read(feed)]).toEqual(before);
+    expect(f.vault.trashed).toEqual([]);
+  });
+
+  it('opens a new Treasury view through the same public workspace route when no Reader is active', async () => {
+    const f = await pluginFixture();
+    vi.mocked(f.app.workspace.getLeaf).mockReturnValue(f.leaf);
+    f.leaf.setViewState.mockImplementation(async (state: any) =>
+      f.view.setState(state.state, { history: false }),
+    );
+    await f.plugin.openList('Treasury');
+    expect(f.app.workspace.getLeaf).toHaveBeenCalledWith('tab');
+    expect(f.leaf.setViewState).toHaveBeenCalledWith({
+      type: 'obsidian-reader',
+      state: { queue: 'Treasury' },
+      active: true,
+    });
+    expect(f.view.getState().queue).toBe('Treasury');
+  });
+
+  it.each([false, true])(
+    'scopes mobile navigation to the active Reader, restores on exit/unload (mobile=%s)',
+    async (mobile) => {
+      const f = await pluginFixture();
+      Platform.isMobile = mobile;
+      vi.mocked(f.app.workspace.getActiveViewOfType).mockImplementation((type: any) =>
+        type === ReaderView ? f.view : (null as any),
+      );
+      f.workspace('active-leaf-change', f.leaf);
+      expect(document.body.classList.contains('reader-mobile-active')).toBe(mobile);
+      vi.mocked(f.app.workspace.getActiveViewOfType).mockReturnValue(null);
+      // The Reader leaf still exists, but is not active.
+      f.workspace('active-leaf-change', { view: {} });
+      expect(document.body.classList.contains('reader-mobile-active')).toBe(false);
+      vi.mocked(f.app.workspace.getActiveViewOfType).mockReturnValue(f.view);
+      f.workspace('layout-change');
+      expect(document.body.classList.contains('reader-mobile-active')).toBe(mobile);
+      f.plugin.onunload();
+      expect(document.body.classList.contains('reader-mobile-active')).toBe(false);
+      f.workspace('active-leaf-change', f.leaf); // A late public event cannot reapply it.
+      expect(document.body.classList.contains('reader-mobile-active')).toBe(false);
+    },
+  );
+
+  it('shares the library action treatment with five uniform article icons, without hiding authored hr or modal controls', async () => {
+    const f = hostFixture();
+    const style = document.head.appendChild(document.createElement('style'));
+    style.textContent = readFileSync(new URL('../src/reader/styles.css', import.meta.url), 'utf8');
+    try {
+      f.view.showList();
+      const library = f.view.contentEl.querySelector<HTMLButtonElement>(
+        '.reader-icon-button:not(.mod-cta)',
+      )!;
+      const libraryStyle = window.getComputedStyle(library);
+      const treatment = [
+        libraryStyle.padding,
+        libraryStyle.borderRadius,
+        libraryStyle.backgroundColor,
+        libraryStyle.border,
+      ];
+      const article = await f.note('Reading/Inbox/Article.md');
+      await f.view.openArticle(article.path, true);
+      const buttons = [
+        ...f.view.contentEl.querySelectorAll<HTMLButtonElement>('.reader-actions button'),
+      ];
+      expect(
+        buttons.map((button) => button.querySelector('svg')?.getAttribute('data-icon')),
+      ).toEqual(['chevron-left', 'chevron-right', 'bookmark', 'trash-2', 'list']);
+      expect(buttons.map((button) => button.getAttribute('aria-label'))).toEqual([
+        'Previous article',
+        'Next article',
+        'Keep article and advance',
+        'Trash article and advance',
+        'List',
+      ]);
+      expect(buttons[0].disabled).toBe(true);
+      for (const button of buttons) {
+        const css = window.getComputedStyle(button);
+        expect(button.textContent).toBe('');
+        expect(css.minWidth).toBe('44px');
+        expect(css.minHeight).toBe('44px');
+        expect([css.padding, css.borderRadius, css.backgroundColor, css.border]).toEqual(treatment);
+      }
+      expect(style.textContent.match(/\.reader-actions \{[^}]+\}/)?.[0]).not.toContain('border');
+      const hr = f.probe.surface.body.appendChild(document.createElement('hr'));
+      const navbar = document.body.createDiv({ cls: 'mobile-navbar' });
+      const formatting = document.body.createDiv({ cls: 'mobile-toolbar' });
+      const modal = document.body.createDiv({ cls: 'modal-container' });
+      const field = modal.createEl('input', { attr: { 'aria-label': 'Required @ field' } });
+      document.body.classList.add('reader-mobile-active');
+      expect(window.getComputedStyle(navbar).display).not.toBe('none');
+      document.body.classList.add('is-mobile');
+      expect(window.getComputedStyle(navbar).display).toBe('none');
+      for (const element of [hr, formatting, field, ...buttons])
+        expect(window.getComputedStyle(element).display).not.toBe('none');
+      document.body.classList.remove('reader-mobile-active');
+      expect(window.getComputedStyle(navbar).display).not.toBe('none');
+    } finally {
+      style.remove();
+    }
+  });
+});
+
+describe('Reader mobile control styling', () => {
+  it('declares scoped important shape overrides and an explicit keyboard focus ring', () => {
+    const style = document.head.appendChild(document.createElement('style'));
+    style.textContent = readFileSync(new URL('../src/reader/styles.css', import.meta.url), 'utf8');
+    try {
+      const rules = [...style.sheet!.cssRules] as CSSStyleRule[];
+      const rule = (selector: string) =>
+        rules.find((entry) => entry.selectorText === selector)!.style;
+      // JSDOM does not honor !important across later stylesheets. Check priority
+      // directly; main's real-browser preview owns the final cascade/layout proof.
+      for (const selector of [
+        '.reader-view button.reader-icon-button',
+        '.reader-view > .reader-list > button.reader-list-item',
+      ]) {
+        const declarations = rule(selector);
+        for (const property of [
+          'border-radius',
+          'border',
+          'background',
+          'box-shadow',
+          'height',
+          'min-height',
+        ])
+          expect(declarations.getPropertyPriority(property)).toBe('important');
+        expect(declarations.getPropertyValue('box-shadow')).toBe('none');
+      }
+      const focus = rules.find((entry) => entry.selectorText?.includes(':focus-visible'))!.style;
+      expect(focus.getPropertyValue('outline')).toBe('2px solid var(--text-normal)');
+      expect(focus.getPropertyPriority('outline')).toBe('important');
+      expect(
+        rule('.reader-view button.reader-icon-button.mod-cta').getPropertyValue('border-color'),
+      ).toBe('var(--text-normal)');
+      const row = rule('.reader-view > .reader-list > button.reader-list-item');
+      expect(row.getPropertyValue('font-size')).toBe('var(--font-ui-medium)');
+      expect(rule('.reader-list-title').getPropertyValue('min-width')).toBe('0');
+      expect(rule('.reader-row-indicator').getPropertyValue('flex')).toBe('0 0 auto');
+    } finally {
+      style.remove();
+    }
+  });
+  it('overrides aggressive mobile pills without changing native/authored controls', async () => {
+    const f = hostFixture();
+    const title =
+      'A fully wrapping article title with a verylongunbrokentitlecomponentthatmustnotbeellipsized';
+    const article = await f.note(
+      `Reading/Inbox/${title}.md`,
+      'Authored body and --- remain unchanged.',
+    );
+    const raw = await f.vault.read(article);
+    const host = document.createElement('style'),
+      reader = document.createElement('style');
+    host.textContent = `body.is-mobile .view-content button,
+      body.is-mobile .view-content input[type='search'] {
+        border-radius: 999px; background: purple; color: white;
+        box-shadow: 0 8px 20px black; border: 8px solid red;
+        width: 100px; height: 100px; min-height: 20px; padding: 30px;
+        white-space: nowrap;
+      }`;
+    reader.textContent = readFileSync(new URL('../src/reader/styles.css', import.meta.url), 'utf8');
+    document.head.append(host, reader);
+    document.body.classList.add('is-mobile');
+    f.view.contentEl.classList.add('view-content');
+    try {
+      f.view.showList();
+      const row = f.view.contentEl.querySelector<HTMLButtonElement>('.reader-list-item')!;
+      const rowStyle = window.getComputedStyle(row);
+      expect(row.firstChild?.textContent).toBe(title);
+      expect(row.querySelector('small')).toBeNull();
+      expect(rowStyle.borderRadius).toBe('0');
+      expect(rowStyle.backgroundColor).toBe('rgba(0, 0, 0, 0)');
+      expect(rowStyle.boxShadow).toBe('none');
+      expect(rowStyle.height).toBe('auto');
+      expect(rowStyle.maxHeight).toBe('none');
+      expect(rowStyle.minHeight).toBe('44px');
+      expect(rowStyle.whiteSpace).toBe('normal');
+      expect(rowStyle.overflowWrap).toBe('anywhere');
+      expect(rowStyle.overflow).toBe('visible');
+      expect(rowStyle.textAlign).toBe('start');
+      expect(rowStyle.flexDirection).toBe('row');
+      expect(f.view.contentEl.querySelector('input[type="search"]')).toBeNull();
+      const checkIcon = (button: HTMLButtonElement, width: string) => {
+        const css = window.getComputedStyle(button);
+        expect(css.borderRadius).toBe('4px');
+        expect(css.boxShadow).toBe('none');
+        expect(css.minWidth).toBe('44px');
+        expect(css.minHeight).toBe('44px');
+        expect(css.height).toBe('44px');
+        expect(css.width).toBe(width);
+        expect(button.textContent).toBe('');
+        expect(button.getAttribute('aria-label')).toBeTruthy();
+        expect(window.getComputedStyle(button.querySelector('svg')!).width).toBe('18px');
+      };
+      for (const button of f.view.contentEl.querySelectorAll<HTMLButtonElement>(
+        '.reader-toolbar button',
+      ))
+        checkIcon(button, '44px');
+      await f.view.openArticle(article.path, true);
+      const actions =
+        f.view.contentEl.querySelectorAll<HTMLButtonElement>('.reader-actions button');
+      expect(actions).toHaveLength(5);
+      for (const button of actions) checkIcon(button, '100%');
+      expect(actions[0].disabled).toBe(true);
+      expect(window.getComputedStyle(actions[0]).opacity).toBe('0.45');
+      actions[1].focus();
+      expect(document.activeElement).toBe(actions[1]);
+      // JSDOM does not resolve theme-variable focus outlines; check their CSSOM
+      // declaration separately rather than claiming native focus rendering here.
+      const authoredButton = f.probe.surface.body.createEl('button', { text: 'Authored button' });
+      const authoredSearch = f.probe.surface.body.createEl('input', { type: 'search' });
+      const native = document.body.createDiv({ cls: 'view-content modal-container' });
+      const nativeButton = native.createEl('button', { text: 'Native capture action' });
+      const nativeSearch = native.createEl('input', { type: 'search' });
+      for (const element of [authoredButton, authoredSearch, nativeButton, nativeSearch]) {
+        const css = window.getComputedStyle(element);
+        expect(css.borderRadius).toBe('999px');
+        expect(css.height).toBe('100px');
+        expect(css.boxShadow).not.toBe('none');
+      }
+      expect(await f.vault.read(article)).toBe(raw);
+    } finally {
+      host.remove();
+      reader.remove();
+    }
+  });
+});
+
+describe('leaf-scoped floating Reader layout', () => {
+  it.each([390, 1280].flatMap((width) => [false, true].map((paged) => ({ width, paged }))))(
+    'uses full-pane CSS with compact 4/5-action overlays (width=$width, paged=$paged)',
+    async ({ width, paged }) => {
+      const f = hostFixture();
+      const file = await f.note('Reading/Inbox/Title.md');
+      const raw = patchProperties(await f.vault.read(file), {
+        url: 'https://example.test/article',
+        title: 'Full authored title',
+      });
+      f.vault.bytes.set(file, raw);
+      f.store.catalog.update(file.path, readDocument(raw).properties);
+      const style = document.head.appendChild(document.createElement('style'));
+      style.textContent = readFileSync(
+        new URL('../src/reader/styles.css', import.meta.url),
+        'utf8',
+      );
+      f.view.contentEl.style.width = `${width}px`;
+      f.host.paged = paged;
+      try {
+        f.view.showList();
+        const list = f.view.contentEl.querySelector('.reader-list')!;
+        const library = f.view.contentEl.querySelector('.reader-bottom-controls')!;
+        expect(f.view.contentEl.firstElementChild).toBe(list);
+        expect(f.view.contentEl.lastElementChild).toBe(library);
+        expect(library.querySelectorAll('button')).toHaveLength(4);
+        expect(window.getComputedStyle(library).position).toBe('absolute');
+        expect(window.getComputedStyle(f.view.contentEl).position).toBe('relative');
+        expect(window.getComputedStyle(list).flex).toBe('1 1 auto');
+        expect(f.view.contentEl.querySelector('input[type="search"],small')).toBeNull();
+        expect(list.textContent).toBe('Full authored title');
+        await f.view.openArticle(file.path, true);
+        const column = f.view.contentEl.querySelector('.reader-article')!;
+        const actions = column.querySelector('.reader-bottom-controls')!;
+        expect(actions.querySelectorAll('button')).toHaveLength(5);
+        expect(actions.parentElement).toBe(column);
+        expect(column.firstElementChild).toBe(f.probe.status);
+        expect(window.getComputedStyle(column).position).toBe('relative');
+        expect(window.getComputedStyle(column).maxWidth).toBe('none');
+        expect(window.getComputedStyle(column).width).toBe('100%');
+        expect(window.getComputedStyle(actions).position).toBe('absolute');
+        for (const button of actions.querySelectorAll('button')) {
+          expect(window.getComputedStyle(button).minHeight).toBe('44px');
+          expect(window.getComputedStyle(button).minWidth).toBe('44px');
+        }
+        // CSSOM establishes the layout contract, not browser/device pixel geometry.
+        const rules = [...style.sheet!.cssRules] as CSSStyleRule[];
+        const rule = (selector: string) =>
+          rules.find((entry) => entry.selectorText === selector)!.style;
+        const root = rules.find((entry) =>
+          entry.style?.getPropertyValue('--reader-controls-clearance'),
+        )!.style;
+        expect(root.getPropertyValue('--reader-controls-clearance')).toContain(
+          'safe-area-inset-bottom',
+        );
+        expect(root.getPropertyValue('--reader-scrollbar-clearance')).toBe('16px');
+        expect(rule('.reader-list').getPropertyValue('padding-block-end')).toBe(
+          'var(--reader-controls-clearance)',
+        );
+        expect(rule('.reader-list').getPropertyValue('padding-inline-end')).toBe(
+          'var(--reader-scrollbar-clearance)',
+        );
+        expect(
+          rule('.reader-viewport:not(.reader-paged) .reader-flow').getPropertyValue(
+            'padding-block-end',
+          ),
+        ).toBe('var(--reader-controls-clearance)');
+        expect(rule('.reader-paged').getPropertyValue('margin-block-end')).toBe(
+          'var(--reader-controls-clearance)',
+        );
+        expect(rule('.reader-paged .reader-flow').getPropertyValue('height')).toBe('');
+        expect(rule('.reader-viewport').getPropertyValue('padding-inline-end')).toBe('');
+        expect(rule('.reader-viewport').getPropertyValue('scrollbar-gutter')).toBe('stable');
+        expect(
+          rule('.reader-view .reader-document.markdown-rendered').getPropertyValue(
+            'padding-inline-end',
+          ),
+        ).toBe('var(--reader-scrollbar-clearance)');
+        expect(rule('.reader-article-title').getPropertyValue('padding-inline-end')).toBe(
+          'var(--reader-scrollbar-clearance)',
+        );
+        expect(
+          rule('.reader-view .reader-bottom-controls').getPropertyValue('backdrop-filter'),
+        ).toBe('');
+        expect(await f.vault.read(file)).toBe(raw);
+      } finally {
+        style.remove();
+      }
+    },
+  );
+});
+
+describe('visible-row evidence indicators', () => {
+  const settle = () => new Promise<void>((resolve) => setImmediate(resolve));
+  let observers: FakeObserver[], views: ReaderView[];
+  let original: PropertyDescriptor | undefined;
+  class FakeObserver {
+    observed = new Set<Element>();
+    disconnect = vi.fn(() => this.observed.clear());
+    constructor(
+      private callback: (entries: IntersectionObserverEntry[]) => void,
+      readonly options: IntersectionObserverInit,
+    ) {
+      observers.push(this);
+    }
+    observe(row: Element) {
+      this.observed.add(row);
+    }
+    unobserve(row: Element) {
+      this.observed.delete(row);
+    }
+    intersect(rows: Element[], isIntersecting = true) {
+      this.callback(
+        rows.map((target) => ({ target, isIntersecting }) as IntersectionObserverEntry),
+      );
+    }
+  }
+  beforeEach(() => {
+    observers = [];
+    views = [];
+    original = Object.getOwnPropertyDescriptor(window, 'IntersectionObserver');
+    Object.defineProperty(window, 'IntersectionObserver', {
+      configurable: true,
+      value: FakeObserver,
+    });
+  });
+  afterEach(() => {
+    for (const view of views) view.stopForUnload();
+    if (original) Object.defineProperty(window, 'IntersectionObserver', original);
+    else Reflect.deleteProperty(window, 'IntersectionObserver');
+  });
+  async function fixture(body = '==Highlighted words==', count = 1) {
+    const f = hostFixture(),
+      files: TFile[] = [];
+    views.push(f.view);
+    for (let i = 0; i < count; i++) {
+      const file = await f.note(`Reading/Stream/${i} Visible.md`, body);
+      (file as any).stat = { mtime: 1, size: f.vault.bytes.get(file)!.length };
+      files.push(file);
+    }
+    return { ...f, files };
+  }
+  it.each([
+    ['==words==', true],
+    ['==[[Notes/Target|words]]==', true],
+    ['> ==first\n> second==', true],
+    ['`==code==`', false],
+    ['```\n==fenced==\n```', false],
+    ['%% ==hidden== %%', false],
+    ['[[Notes/Target]]', false],
+    ['ordinary words', false],
+  ] as const)(
+    'uses renderer grammar only after intersection, without promotion/writes: %s',
+    async (body, highlighted) => {
+      const f = await fixture(body);
+      const raw = f.vault.bytes.get(f.files[0]);
+      const reads = vi.spyOn(f.vault, 'read'),
+        writes = vi.spyOn(f.vault, 'process'),
+        moves = vi.spyOn(f.vault, 'move');
+      f.view.showList('Stream');
+      const row = f.view.contentEl.querySelector('.reader-list-item')!;
+      expect(reads).not.toHaveBeenCalled();
+      expect(observers[0].options.root).toBe(f.view.contentEl.querySelector('.reader-list'));
+      observers[0].intersect([row]);
+      await settle();
+      expect(reads).toHaveBeenCalledExactlyOnceWith(f.files[0]);
+      const indicator = row.querySelector('.reader-highlight-indicator');
+      expect(!!indicator).toBe(highlighted);
+      if (indicator) {
+        expect(indicator.getAttribute('role')).toBe('img');
+        expect(indicator.getAttribute('aria-label')).toBe('Has highlights');
+        expect(indicator.querySelector('svg')?.getAttribute('data-icon')).toBe('highlighter');
+      }
+      expect(row.textContent).toBe('0 Visible');
+      expect(writes).not.toHaveBeenCalled();
+      expect(moves).not.toHaveBeenCalled();
+      expect(f.host.ingestion.acquire).not.toHaveBeenCalled();
+      expect(f.files[0].path).toBe('Reading/Stream/0 Visible.md');
+      expect(f.vault.bytes.get(f.files[0])).toBe(raw);
+      expect(f.vault.trashed).toEqual([]);
+    },
+  );
+  it.each([
+    { position: undefined, opened: false },
+    { position: '', opened: false },
+    { position: '   ', opened: false },
+    { position: false, opened: false },
+    { position: 0, opened: false },
+    { position: { quote: 'words' }, opened: false },
+    { position: ['words'], opened: false },
+    { position: 'x'.repeat(257), opened: false },
+    { position: 'words', opened: true },
+    { position: 'Text no longer in this article', opened: true },
+  ])(
+    'derives opened-before from existing usable position evidence only: $position',
+    async ({ position, opened }) => {
+      const f = await fixture('==words=='),
+        file = f.files[0];
+      const raw = patchProperties(f.vault.bytes.get(file)!, {
+        reading_position: position,
+        unknown_evidence: 'Keep',
+        explicit_false: false,
+        explicit_zero: 0,
+      });
+      f.vault.bytes.set(file, raw);
+      file.stat.size = raw.length;
+      const reads = vi.spyOn(f.vault, 'read'),
+        writes = vi.spyOn(f.vault, 'process'),
+        positions = vi.spyOn(f.store, 'position'),
+        moves = vi.spyOn(f.vault, 'move');
+      f.view.showList('Stream');
+      const row = f.view.contentEl.querySelector('.reader-list-item')!;
+      expect(reads).not.toHaveBeenCalled();
+      observers[0].intersect([row]);
+      await settle();
+      const indicator = row.querySelector('.reader-opened-indicator');
+      expect(!!indicator).toBe(opened);
+      if (indicator) {
+        expect(indicator.getAttribute('aria-label')).toBe('Opened before');
+        expect(indicator.querySelector('svg')?.getAttribute('data-icon')).toBe('eye');
+      }
+      expect(row.querySelectorAll('.reader-row-indicator')).toHaveLength(1 + Number(opened));
+      expect(row.querySelector('.reader-highlight-indicator')).not.toBeNull();
+      expect(reads).toHaveBeenCalledExactlyOnceWith(file);
+      expect(writes).not.toHaveBeenCalled();
+      expect(positions).not.toHaveBeenCalled();
+      expect(moves).not.toHaveBeenCalled();
+      expect(f.vault.bytes.get(file)).toBe(raw);
+      expect(file.path).toBe('Reading/Stream/0 Visible.md');
+      expect(row.textContent).toBe('0 Visible');
+    },
+  );
+  it('caps reads at two even across rerenders, drops old pending rows and never reads offscreen rows', async () => {
+    const f = await fixture('==words==', 5),
+      release = gate();
+    const read = f.vault.read.bind(f.vault);
+    let live = 0,
+      peak = 0;
+    const reads = vi.spyOn(f.vault, 'read').mockImplementation(async (file) => {
+      live++;
+      peak = Math.max(peak, live);
+      try {
+        await release.promise;
+        return await read(file);
+      } finally {
+        live--;
+      }
+    });
+    f.view.showList('Stream');
+    const oldRows = [...f.view.contentEl.querySelectorAll('.reader-list-item')];
+    observers[0].intersect(oldRows.slice(0, 3));
+    expect(reads).toHaveBeenCalledTimes(2);
+    f.view.showList('Stream');
+    expect(observers[0].disconnect).toHaveBeenCalledOnce();
+    const rows = [...f.view.contentEl.querySelectorAll('.reader-list-item')];
+    observers[1].intersect(rows.slice(0, 3));
+    expect(reads).toHaveBeenCalledTimes(2);
+    release.resolve();
+    await settle();
+    expect(peak).toBe(2);
+    expect(reads).toHaveBeenCalledTimes(5); // Two old dispatched reads, three current visible rows.
+    expect(reads.mock.calls.every(([file]) => f.files.slice(0, 3).includes(file as TFile))).toBe(
+      true,
+    );
+    expect(oldRows.every((row) => !row.querySelector('.reader-highlight-indicator'))).toBe(true);
+    expect(
+      rows.slice(0, 3).every((row) => !!row.querySelector('.reader-highlight-indicator')),
+    ).toBe(true);
+    expect(rows.slice(3).every((row) => !row.querySelector('.reader-highlight-indicator'))).toBe(
+      true,
+    );
+  });
+  it.each(['offscreen', 'rename', 'replacement', 'revision', 'queue', 'unload', 'host-stop'])(
+    'discards a read completed after %s',
+    async (change) => {
+      const f = await fixture(),
+        release = gate(),
+        raw = patchProperties(f.vault.bytes.get(f.files[0])!, { reading_position: 'words' });
+      f.vault.bytes.set(f.files[0], raw);
+      f.files[0].stat.size = raw.length;
+      vi.spyOn(f.vault, 'read').mockImplementationOnce(async () => {
+        await release.promise;
+        return raw;
+      });
+      f.view.showList('Stream');
+      const row = f.view.contentEl.querySelector('.reader-list-item')!;
+      observers[0].intersect([row]);
+      if (change === 'offscreen') observers[0].intersect([row], false);
+      if (change === 'rename') f.files[0].path = 'Reading/Stream/Renamed.md';
+      if (change === 'replacement') f.vault.files.set(f.files[0].path, {} as any);
+      if (change === 'revision') f.files[0].stat.mtime++;
+      if (change === 'queue') f.view.showList('Inbox');
+      if (change === 'unload') f.view.stopForUnload();
+      if (change === 'host-stop') f.signal.abort();
+      release.resolve();
+      await settle();
+      expect(row.querySelector('.reader-row-indicator')).toBeNull();
+      expect(f.view.contentEl.querySelector('.reader-row-indicator')).toBeNull();
+      expect(mocks.notice).not.toHaveBeenCalled();
+    },
+  );
+  it('degrades without observers or on unreadable source without making a negative/read-state claim', async () => {
+    const f = await fixture();
+    const reads = vi.spyOn(f.vault, 'read').mockRejectedValue(new Error('Unavailable'));
+    f.view.showList('Stream');
+    const row = f.view.contentEl.querySelector('.reader-list-item')!;
+    observers[0].intersect([row]);
+    await settle();
+    expect(row.textContent).toBe('0 Visible');
+    expect(row.querySelector('.reader-highlight-indicator')).toBeNull();
+    expect(mocks.notice).not.toHaveBeenCalled();
+    Object.defineProperty(window, 'IntersectionObserver', { configurable: true, value: undefined });
+    reads.mockClear();
+    f.view.showList('Stream');
+    expect(reads).not.toHaveBeenCalled();
+    expect(f.view.contentEl.querySelector('.reader-list-item')?.textContent).toBe('0 Visible');
+  });
+});
+
+describe('native title-only presentation', () => {
+  it('refreshes cloned state without history, remounting, or prefixing the article heading', async () => {
+    const f = hostFixture(),
+      file = await f.note('Reading/Inbox/A.md');
+    f.host.refreshPresentation = () =>
+      f.leaf.setViewState({ type: READER_VIEW, state: { readerPresentationOnly: true } });
+    f.leaf.setViewState.mockImplementation(async ({ state }: any) => {
+      const result = { history: true };
+      await f.view.setState(JSON.parse(JSON.stringify(state)), result);
+      expect(result.history).toBe(false);
+    });
+    await f.view.openArticle(file.path);
+    const surface = f.probe.surface;
+    surface.selectionValue = { quote: 'words', before: 'before ', after: ' after' };
+    const selection = surface.selectionValue;
+    expect(f.view.getDisplayText()).toBe('Reader: A');
+    f.vault.bytes.set(file, patchProperties(await f.vault.read(file), { title: 'External title' }));
+    await f.view.changed({ path: file.path });
+    expect(f.view.getDisplayText()).toBe('Reader: External title');
+    expect(surface.title.textContent).toBe('External title');
+    expect(f.probe.surface).toBe(surface);
+    expect(surface.dispose).not.toHaveBeenCalled();
+    expect(surface.selectionValue).toBe(selection);
+    expect(f.view.getState()).not.toHaveProperty('readerPresentationOnly');
+    surface.selectionValue = undefined;
+    await f.view.readingList();
+    expect(f.view.getDisplayText()).toBe('Reading list');
+  });
+  it('never replays an old article or swallows navigation when delayed title requests arrive', async () => {
+    const f = hostFixture(),
+      a = await f.note('Reading/Inbox/A.md'),
+      b = await f.note('Reading/Inbox/B.md');
+    const requests: { state: Record<string, unknown>; done: ReturnType<typeof gate> }[] = [];
+    f.host.refreshPresentation = () =>
+      f.leaf.setViewState({ type: READER_VIEW, state: { readerPresentationOnly: true } });
+    f.leaf.setViewState.mockImplementation(({ state }: any) => {
+      const done = gate();
+      requests.push({ state: JSON.parse(JSON.stringify(state)), done });
+      return done.promise;
+    });
+    await f.view.openArticle(a.path);
+    await f.view.setState({ file: b.path, queue: 'Inbox' }, { history: false });
+    const surface = f.probe.surface;
+    expect(requests).toHaveLength(2);
+    for (const request of requests.reverse()) {
+      const result = { history: true };
+      await f.view.setState(request.state, result);
+      request.done.resolve();
+      expect(result.history).toBe(false);
+      expect(f.view.file).toBe(b);
+      expect(f.probe.surface).toBe(surface);
+    }
+    expect(surface.dispose).not.toHaveBeenCalled();
+    expect(f.view.getDisplayText()).toBe('Reader: B');
+    expect(f.view.getState()).toEqual({ file: b.path, queue: 'Inbox' });
+  });
+});
+
 describe('browsing context and presentation', () => {
+  it('uses independent folder context for Stream promotion, browsing and explicit Keep', async () => {
+    const folders: ReaderFolders = {
+      inbox: 'Queues/Inbox',
+      stream: 'Cache/Stream',
+      later: 'Queues/Later',
+      treasury: 'Archive/Books',
+      feeds: 'Subscriptions',
+    };
+    const f = hostFixture(folders);
+    const a = await f.note(`${folders.stream}/A.md`, '==Preserve this=='),
+      b = await f.note(`${folders.stream}/B.md`, 'Next article');
+    const rawA = f.vault.bytes.get(a),
+      rawB = f.vault.bytes.get(b);
+    f.view.showList('Stream');
+    expect(f.view.contentEl.querySelectorAll('.reader-list-item')).toHaveLength(2);
+    expect(a.path).toBe('Cache/Stream/A.md');
+    await f.view.openArticle(a.path, true);
+    expect(a.path).toBe('Queues/Inbox/A.md');
+    expect(f.view.getDisplayText()).toBe('Reader: A');
+    await f.probe.finish('next');
+    expect(f.view.file).toBe(b);
+    await f.probe.finish('keep');
+    expect(b.path).toBe('Archive/Books/B.md');
+    expect(f.vault.bytes.get(a)).toBe(rawA);
+    expect(f.vault.bytes.get(b)).toBe(rawB);
+  });
   it('snapshots every matching search result, excluding unrelated and later-arriving articles', async () => {
     const f = hostFixture();
     for (let index = 0; index < 62; index++)
@@ -737,11 +2345,9 @@ describe('browsing context and presentation', () => {
     await f.vault.move(b, 'Reading/Inbox/Renamed.md');
     await f.view.changed({ path: b.path, previousPath: old });
     expect(f.view.contentEl.querySelector('h1')?.textContent).toBe('Renamed');
-    expect(f.view.getDisplayText()).toBe('Reader: Renamed');
     expect(f.view.getState().file).toBe(b.path);
     await f.view.readingList();
     expect(f.view.getState().file).toBeUndefined();
-    expect(f.view.getDisplayText()).toBe('Reading list');
     expect(f.app.workspace.requestSaveLayout).toHaveBeenCalledTimes(4);
   });
 
@@ -749,6 +2355,10 @@ describe('browsing context and presentation', () => {
     'before ==words== after',
     'before [[Notes/Target]] after',
     'before [words](/Notes/Target.md) after',
+    '> ==first\n> second==',
+    '- ==first\n  second==',
+    '> ==first\r\n> second==',
+    '- ==first\r\n  second==',
   ])(
     'promotes a fresh Stream article on open from its already-read annotations: %s',
     async (body) => {
@@ -875,7 +2485,8 @@ describe('commit-time annotation targets', () => {
         else f.vault.files.set(target.path, { path: target.path });
         return original(file, transform);
       });
-      await expect(menu(f.view, 'Link to node…')).rejects.toThrow(/selected (node|note)/);
+      mocks.choose.mockResolvedValueOnce('By class');
+      await expect(menu(f.view, 'Link to note…')).rejects.toThrow(/selected (node|note)/);
       expect((await f.store.read(article.path)).body).toBe('==words==');
     },
   );
@@ -956,15 +2567,15 @@ describe('commit-time annotation targets', () => {
         '==[**formatted words**](/Notes/URI%20Path.md)==',
       );
     await f.view.openArticle(article.path);
-    await menu(f.view, 'Unlink (keep highlight)');
+    await menu(f.view, 'Remove link (keeps highlight)');
     expect((await f.store.read(article.path)).body).toBe('==**formatted words**==');
   });
 });
 
 describe('Nodes v2 linked creation', () => {
-  async function fixture() {
+  async function fixture(body = '==words==') {
     const f = hostFixture(),
-      article = await f.note('Reading/Inbox/A.md', '==words=='),
+      article = await f.note('Reading/Inbox/A.md', body),
       target = await f.note('Nodes/One.md', 'Keep this created note', 'topic');
     const node: NodeResult = {
       path: target.path,
@@ -986,6 +2597,228 @@ describe('Nodes v2 linked creation', () => {
     return { ...f, article, target, node, api };
   }
   const linkedBody = '==[[Nodes/One.md|words]]==';
+  const originalLinkedBody = '==[[Notes/Existing.md|words]]==';
+  async function uiFixture() {
+    const f = await fixture(originalLinkedBody);
+    await f.note('Reading/Inbox/0.md');
+    await f.note('Reading/Inbox/B.md');
+    await f.note('Notes/Existing.md', 'Keep existing note', 'topic');
+    f.host.paged = true;
+    await f.view.onOpen(); // Install Reader's actual DOM handlers, not calls to private navigation.
+    await f.view.openArticle(f.article.path, true);
+    const plugin = new ReaderPlugin(f.app, {} as any);
+    (plugin as any).app = f.app;
+    await plugin.onload();
+    plugin.store = f.store;
+    vi.mocked(f.app.workspace.getActiveViewOfType).mockReturnValue(f.view);
+    f.host.edit = vi.fn((view: ReaderView, file: TFile) => plugin.edit(view, file));
+    const web = vi.spyOn(window, 'open').mockReturnValue(null);
+    async function click(route: string, label: string) {
+      if (route === 'command') {
+        const id = { 'Move…': 'move', 'Topics…': 'topics', 'Open Markdown': 'open-markdown' }[
+          label
+        ];
+        const command = mocks.commands.get(id!);
+        expect(command?.checkCallback?.(true)).toBe(true);
+        expect(command?.checkCallback?.(false)).toBe(true);
+      } else if (route === 'menu' || route === 'menu-class') {
+        f.probe.surface.body.innerHTML = '<mark>words</mark>';
+        f.probe.surface.body
+          .querySelector('mark')
+          .dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+        const action = mocks.menus.at(-1)!.get(label);
+        expect(action).toBeTypeOf('function');
+        action!();
+      } else if (route === 'link') {
+        const anchor = document.createElement('a');
+        anchor.setAttribute(
+          'href',
+          label === 'external'
+            ? 'https://example.test/article'
+            : label === 'heading'
+              ? '#section'
+              : label === 'unsafe'
+                ? 'javascript%3Aalert(1)'
+                : f.target.path,
+        );
+        if (label !== 'external' && label !== 'heading') anchor.classList.add('internal-link');
+        f.probe.surface.body.append(anchor);
+        anchor.dispatchEvent(
+          new MouseEvent('click', {
+            bubbles: true,
+            cancelable: true,
+            ctrlKey: label === 'new-leaf',
+          }),
+        );
+      } else {
+        const parent: HTMLElement = route === 'fallback' ? f.view.contentEl : f.probe.actions;
+        const button = [...parent.querySelectorAll('button')].find(
+          (button) => actionName(button) === label,
+        );
+        expect(button).toBeDefined();
+        expect(button!.disabled).toBe(false);
+        button!.click();
+      }
+      // Only drain the resulting work after the synchronous event handler has run.
+      await Promise.resolve();
+    }
+    return { ...f, click, web };
+  }
+
+  it.each(
+    [true, false].flatMap((linked) => [true, false].map((integrated) => ({ linked, integrated }))),
+  )(
+    'shows the approved note-only menu order (linked=$linked, Nodes=$integrated)',
+    async ({ linked, integrated }) => {
+      const f = await fixture(linked ? linkedBody : '==words==');
+      if (!integrated) (f.app as any).plugins = undefined;
+      await f.view.onOpen();
+      try {
+        await f.view.openArticle(f.article.path, true);
+        f.probe.surface.body.innerHTML = '<mark>words</mark>';
+        f.probe.surface.body
+          .querySelector('mark')
+          .dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+        expect([...mocks.menus.at(-1)!.keys()]).toEqual([
+          ...(linked ? ['Open note', 'Change link…'] : ['Link to note…']),
+          ...(integrated ? ['Create note…'] : []),
+          '---',
+          ...(linked ? ['Remove link (keeps highlight)'] : []),
+          'Remove highlight',
+        ]);
+      } finally {
+        f.view.stopForUnload();
+      }
+    },
+  );
+
+  it('keeps all-note linking available inside the integrated linking flow', async () => {
+    const f = await fixture(),
+      target = await f.note('Notes/Ordinary.md', 'Keep ordinary note', 'note');
+    mocks.choose.mockResolvedValueOnce('All notes').mockResolvedValueOnce(target);
+    await menu(f.view, 'Link to note…');
+    expect(mocks.choose.mock.calls[0].slice(1, 3)).toEqual([
+      'Find a note',
+      ['All notes', 'By class'],
+    ]);
+    expect(mocks.choose.mock.calls[1][1]).toBe('Link passage to note');
+    expect(mocks.choose.mock.calls[1][2]).toContain(target);
+    expect(mocks.choose.mock.calls[1][4]).toBe(mocks.choose.mock.calls[0][4]);
+    expect(mocks.pickNode).not.toHaveBeenCalled();
+    expect(f.api.getNode).not.toHaveBeenCalled();
+    expect((await f.store.read(f.article.path)).body).toBe('==[[Notes/Ordinary.md|words]]==');
+    expect(await f.vault.read(target)).toContain('Keep ordinary note');
+  });
+
+  it.each([null, 'All notes', 'By class'])(
+    'cancels either linking chooser without a write: %j',
+    async (route) => {
+      const f = await fixture(),
+        before = await f.vault.read(f.article);
+      mocks.choose.mockResolvedValueOnce(route).mockResolvedValueOnce(null);
+      await menu(f.view, 'Link to note…');
+      expect(mocks.choose).toHaveBeenCalledTimes(route === 'All notes' ? 2 : 1);
+      expect(mocks.pickNode).toHaveBeenCalledTimes(route === 'By class' ? 1 : 0);
+      expect(await f.vault.read(f.article)).toBe(before);
+      expect(f.vault.trashed).toEqual([]);
+      expect(f.probe.dialog).toBe(false);
+    },
+  );
+
+  it('does not enter class search after the API changes in the chooser', async () => {
+    const f = await fixture();
+    mocks.choose.mockImplementation(async () => {
+      (f.app as any).plugins = { getPlugin: () => ({ api: { ...f.api } }) };
+      return 'By class';
+    });
+    await expect(menu(f.view, 'Link to note…')).rejects.toThrow('Nodes API changed');
+    expect(mocks.pickNode).not.toHaveBeenCalled();
+    expect((await f.store.read(f.article.path)).body).toBe('==words==');
+  });
+
+  it.each(['mode', 'all', 'class'] as const)(
+    'navigation aborts the active %s chooser before entering another picker',
+    async (stage) => {
+      const f = await fixture(),
+        entered = gate();
+      let choiceSignal!: AbortSignal;
+      const waitForAbort = (...args: any[]) => {
+        choiceSignal = args.at(-1);
+        entered.resolve();
+        return new Promise<null>((resolve) =>
+          choiceSignal.addEventListener('abort', () => resolve(null), { once: true }),
+        );
+      };
+      if (stage === 'mode') mocks.choose.mockImplementationOnce(waitForAbort);
+      else if (stage === 'all')
+        mocks.choose.mockResolvedValueOnce('All notes').mockImplementationOnce(waitForAbort);
+      else {
+        mocks.choose.mockResolvedValueOnce('By class');
+        mocks.pickNode.mockImplementationOnce(waitForAbort);
+      }
+      const linking = menu(f.view, 'Link to note…');
+      await entered.promise;
+      const leaving = f.view.readingList();
+      expect(choiceSignal.aborted).toBe(true);
+      await linking;
+      await leaving;
+      expect(mocks.choose).toHaveBeenCalledTimes(stage === 'all' ? 2 : 1);
+      expect(mocks.pickNode).toHaveBeenCalledTimes(stage === 'class' ? 1 : 0);
+      expect((await f.store.read(f.article.path)).body).toBe('==words==');
+      expect(f.view.file).toBeUndefined();
+      expect(f.vault.trashed).toEqual([]);
+    },
+  );
+
+  it('rejects a late mode choice after close without entering a picker', async () => {
+    const f = await fixture(),
+      entered = gate(),
+      released = gate();
+    let choiceSignal!: AbortSignal;
+    mocks.choose.mockImplementationOnce(async (...args: any[]) => {
+      choiceSignal = args.at(-1);
+      entered.resolve();
+      await released.promise;
+      return 'By class';
+    });
+    const linking = menu(f.view, 'Link to note…');
+    await entered.promise;
+    const close = f.view.onClose();
+    expect(choiceSignal.aborted).toBe(true);
+    released.resolve();
+    await linking;
+    await close;
+    expect(mocks.pickNode).not.toHaveBeenCalled();
+    expect((await f.store.read(f.article.path)).body).toBe('==words==');
+  });
+
+  it('preserves stale-source checks across the new chooser', async () => {
+    const f = await fixture(),
+      changed = createDocument({ type: 'article' }, '==new words==');
+    mocks.choose.mockImplementationOnce(async () => {
+      f.vault.bytes.set(f.article, changed);
+      return 'By class';
+    });
+    mocks.pickNode.mockResolvedValueOnce(f.node);
+    await expect(menu(f.view, 'Link to note…')).rejects.toThrow();
+    expect(await f.vault.read(f.article)).toBe(changed);
+    expect(f.vault.trashed).toEqual([]);
+  });
+
+  it.each(['Remove link (keeps highlight)', 'Remove highlight'])(
+    'never removes or rewrites the linked file through %s',
+    async (label) => {
+      const f = await fixture(linkedBody),
+        targetBefore = await f.vault.read(f.target);
+      await menu(f.view, label);
+      expect((await f.store.read(f.article.path)).body).toBe(
+        label === 'Remove highlight' ? 'words' : '==words==',
+      );
+      expect(f.vault.file(f.target.path)).toBe(f.target);
+      expect(await f.vault.read(f.target)).toBe(targetBefore);
+      expect(f.vault.trashed).toEqual([]);
+    },
+  );
 
   it.each([
     ['topic', 'Other'],
@@ -997,7 +2830,8 @@ describe('Nodes v2 linked creation', () => {
       const f = await fixture();
       f.api.getNode = () => ({ ...f.node, type: 'Other', classes });
       mocks.pickNode.mockResolvedValue(f.node);
-      await menu(f.view, 'Link to node…');
+      mocks.choose.mockResolvedValueOnce('By class');
+      await menu(f.view, 'Link to note…');
       expect((await f.store.read(f.article.path)).body).toBe(linkedBody);
     },
   );
@@ -1039,7 +2873,7 @@ describe('Nodes v2 linked creation', () => {
         order.push('required completion');
         return f.node;
       });
-      const creation = menu(f.view, 'Create node…');
+      const creation = menu(f.view, 'Create note…');
       await entered.promise;
       expect((await f.store.read(f.article.path)).body).toBe(linkedBody);
       expect(order).toEqual(['created', 'linked']);
@@ -1076,7 +2910,7 @@ describe('Nodes v2 linked creation', () => {
         await stopped.promise;
         return null;
       };
-      const creation = menu(f.view, 'Create node…');
+      const creation = menu(f.view, 'Create note…');
       await linked.promise;
       expect(requestSignal.aborted).toBe(false);
       const oldPath = f.article.path;
@@ -1116,7 +2950,7 @@ describe('Nodes v2 linked creation', () => {
       await stopped.promise;
       return null;
     };
-    const creation = menu(f.view, 'Create node…');
+    const creation = menu(f.view, 'Create note…');
     await entered.promise;
     f.vault.bytes.set(f.article, createDocument({ type: 'article' }, 'External edit'));
     await f.view.changed({ path: f.article.path });
@@ -1127,9 +2961,16 @@ describe('Nodes v2 linked creation', () => {
     expect(f.vault.trashed).toEqual([]);
   }, 1500);
 
-  it.each(['open', 'navigate', 'list', 'markdown', 'close', 'unload'] as const)(
-    'aborts required completion before waiting on queued %s work',
-    async (action) => {
+  it.each(
+    ['before', 'after'].flatMap((phase) =>
+      ['open', 'navigate', 'list', 'markdown', 'close', 'unload'].map((action) => ({
+        phase,
+        action,
+      })),
+    ),
+  )(
+    'aborts Nodes $phase callback commit before waiting on public $action work',
+    async ({ phase, action }) => {
       const f = await fixture(),
         next = await f.note('Reading/Inbox/B.md'),
         linked = gate(),
@@ -1139,12 +2980,12 @@ describe('Nodes v2 linked creation', () => {
       f.api.createNodeForLink = async (options, link) => {
         requestSignal = options.signal!;
         requestSignal.addEventListener('abort', () => stopped.resolve(), { once: true });
-        await link(f.node);
+        if (phase === 'after') await link(f.node);
         linked.resolve();
         await stopped.promise;
         return null;
       };
-      const creation = menu(f.view, 'Create node…');
+      const creation = menu(f.view, 'Create note…');
       await linked.promise;
       let transition: Promise<void> | undefined;
       if (action === 'open') transition = f.view.openArticle(next.path);
@@ -1156,11 +2997,387 @@ describe('Nodes v2 linked creation', () => {
       expect(requestSignal.aborted).toBe(true);
       await creation;
       await transition;
+      expect((await f.store.read(f.article.path)).body).toBe(
+        phase === 'after' ? linkedBody : '==words==',
+      );
       expect(f.vault.file(f.target.path)).toBe(f.target);
       expect(f.vault.trashed).toEqual([]);
     },
     1500,
   );
+
+  it.each(
+    ['before', 'after'].flatMap((phase) =>
+      ['open', 'navigate', 'list'].map((action) => ({ phase, action })),
+    ),
+  )(
+    'unblocks public $action $phase commit even if the provider ignores abort; rejects its late callback',
+    async ({ phase, action }) => {
+      const f = await fixture(),
+        next = await f.note('Reading/Inbox/B.md'),
+        entered = gate(),
+        providerRelease = gate();
+      f.probe.readingQueue.open([f.article.path, next.path], f.article.path);
+      const annotate = vi.spyOn(f.store, 'annotate');
+      let requestSignal!: AbortSignal;
+      f.api.createNodeForLink = vi.fn(async (options, link) => {
+        requestSignal = options.signal!;
+        if (phase === 'after') await link(f.node);
+        entered.resolve();
+        await providerRelease.promise; // Deliberately ignores the signal.
+        await expect(link(f.node)).rejects.toThrow('request has finished');
+        return f.node;
+      });
+      const creation = menu(f.view, 'Create note…');
+      await entered.promise;
+      const transition =
+        action === 'open'
+          ? f.view.openArticle(next.path)
+          : action === 'navigate'
+            ? f.view.navigate(1)
+            : f.view.readingList();
+      expect(requestSignal.aborted).toBe(true);
+      await creation;
+      await transition; // Must finish while the provider remains suspended.
+      providerRelease.resolve();
+      await vi.mocked(f.api.createNodeForLink).mock.results[0].value;
+      expect(annotate).toHaveBeenCalledTimes(phase === 'after' ? 1 : 0);
+      expect((await f.store.read(f.article.path)).body).toBe(
+        phase === 'after' ? linkedBody : '==words==',
+      );
+      expect(f.vault.file(f.target.path)).toBe(f.target);
+      expect(f.vault.trashed).toEqual([]);
+    },
+    1500,
+  );
+
+  it.each(
+    ['before', 'after'].flatMap((phase) =>
+      [
+        ['footer', 'Next'],
+        ['footer', 'Keep'],
+        ['footer', 'Delete'],
+        ['footer', 'List'],
+        ['footer', 'Previous'],
+        ['command', 'Move…'],
+        ['command', 'Topics…'],
+        ['command', 'Open Markdown'],
+        ['link', 'internal'],
+        ['link', 'new-leaf'],
+        ['link', 'external'],
+        ['menu', 'Open note'],
+        ['menu', 'Change link…'],
+        ['menu-class', 'Change link…'],
+        ['menu', 'Create note…'],
+        ['menu', 'Remove link (keeps highlight)'],
+        ['menu', 'Remove highlight'],
+      ].map(([route, label]) => ({ phase, route, label })),
+    ),
+  )(
+    'cancels via actual $route / $label UI $phase commit, without waiting for the provider',
+    async ({ phase, route, label }) => {
+      const f = await uiFixture(),
+        entered = gate(),
+        providerRelease = gate();
+      const annotate = vi.spyOn(f.store, 'annotate'),
+        targetBytes = await f.vault.read(f.target);
+      const sourcePath = f.article.path;
+      const neighbour = f.probe.readingQueue.neighbour(label === 'Previous' ? -1 : 1, () => true);
+      mocks.pickNode.mockResolvedValue(null);
+      if (label === 'Change link…')
+        mocks.choose.mockResolvedValueOnce(route === 'menu-class' ? 'By class' : 'All notes');
+      let requestSignal!: AbortSignal,
+        calls = 0;
+      f.api.createNodeForLink = vi.fn(async (options, link) => {
+        if (++calls > 1) return null; // A second explicit Create node action is cancelled at its picker.
+        requestSignal = options.signal!;
+        if (phase === 'after') await link(f.node);
+        entered.resolve();
+        await providerRelease.promise; // Ignores cancellation deliberately.
+        await expect(link(f.node)).rejects.toThrow('request has finished');
+        return f.node;
+      });
+      try {
+        const creation = menu(f.view, 'Create note…');
+        await entered.promise;
+        const intent = f.click(route, label);
+        expect(requestSignal.aborted).toBe(true); // Even before the next microtask.
+        await intent;
+        await creation;
+        await f.probe.operations;
+        // Reach the destination before releasing the uncooperative provider.
+        if (['Next', 'Previous', 'Keep', 'Delete'].includes(label))
+          expect(f.view.file?.path).toBe(neighbour);
+        if (label === 'List') expect(f.view.file).toBeUndefined();
+        if (label === 'Move…') expect(mocks.choose).toHaveBeenCalled();
+        if (label === 'Topics…') expect(mocks.topics).toHaveBeenCalled();
+        if (label === 'Change link…') expect(mocks.choose).toHaveBeenCalled();
+        if (route === 'menu-class') expect(mocks.pickNode).toHaveBeenCalled();
+        if (label === 'Create note…') expect(calls).toBe(2);
+        if (label === 'Keep') expect(f.article.path).toBe('Reading/Treasury/A.md');
+        if (label === 'Open Markdown')
+          await vi.waitFor(
+            () =>
+              expect(f.leaf.setViewState).toHaveBeenCalledWith({
+                type: 'markdown',
+                state: { file: sourcePath, mode: 'source' },
+                active: true,
+              }),
+            { interval: 1 },
+          );
+        if (['internal', 'new-leaf', 'Open note'].includes(label)) {
+          const path =
+            label === 'Open note' && phase === 'before' ? 'Notes/Existing.md' : f.target.path;
+          await vi.waitFor(
+            () =>
+              expect(f.opened.openFile).toHaveBeenCalledWith(f.vault.file(path), { active: true }),
+            { interval: 1 },
+          );
+          expect(f.app.workspace.getLeaf).toHaveBeenCalledWith(label === 'new-leaf');
+        }
+        if (label === 'external') {
+          expect(mocks.confirmWebLink).toHaveBeenCalledWith(
+            f.app,
+            'https://example.test/article',
+            expect.any(Function),
+            expect.any(Array),
+          );
+          expect(f.web).not.toHaveBeenCalled();
+        }
+        providerRelease.resolve();
+        await vi.mocked(f.api.createNodeForLink).mock.results[0].value;
+        const changesPassage = ['Remove link (keeps highlight)', 'Remove highlight'].includes(
+          label,
+        );
+        expect(annotate).toHaveBeenCalledTimes(
+          (phase === 'after' ? 1 : 0) + (changesPassage ? 1 : 0),
+        );
+        if (label !== 'Delete')
+          expect((await f.store.read(f.article.path)).body).toBe(
+            label === 'Remove highlight'
+              ? 'words'
+              : label === 'Remove link (keeps highlight)'
+                ? '==words=='
+                : phase === 'after'
+                  ? linkedBody
+                  : originalLinkedBody,
+          );
+        expect(f.vault.trashed).toEqual(label === 'Delete' ? [sourcePath] : []);
+        expect(f.vault.file(f.target.path)).toBe(f.target);
+        expect(await f.vault.read(f.target)).toBe(targetBytes);
+        expect(f.api.createNode).not.toHaveBeenCalled();
+      } finally {
+        providerRelease.resolve();
+        f.view.stopForUnload();
+      }
+    },
+    1500,
+  );
+
+  it.each([
+    ['footer', 'Next'],
+    ['link', 'internal'],
+  ])(
+    'drains an already-dispatched callback write before the %s / %s UI leaves, without rollback',
+    async (route, label) => {
+      const f = await uiFixture(),
+        dispatched = gate(),
+        release = gate(),
+        process = f.vault.process.bind(f.vault);
+      let requestSignal!: AbortSignal;
+      vi.spyOn(f.vault, 'process').mockImplementation(async (file, update) => {
+        const raw = await process(file, update);
+        dispatched.resolve();
+        await release.promise;
+        return raw;
+      });
+      f.api.createNodeForLink = async (options, link) => {
+        requestSignal = options.signal!;
+        await link(f.node);
+        return f.node;
+      };
+      try {
+        const creation = menu(f.view, 'Create note…');
+        const rejected = expect(creation).rejects.toThrow(/request.*(finished|cancelled)/);
+        await dispatched.promise;
+        const intent = f.click(route, label);
+        expect(requestSignal.aborted).toBe(true);
+        await intent;
+        expect(f.view.file).toBe(f.article);
+        expect(f.opened.openFile).not.toHaveBeenCalled();
+        release.resolve();
+        await rejected;
+        await f.probe.operations;
+        if (route === 'footer') expect(f.view.file).not.toBe(f.article);
+        else
+          await vi.waitFor(
+            () => expect(f.opened.openFile).toHaveBeenCalledWith(f.target, { active: true }),
+            {
+              interval: 1,
+            },
+          );
+        expect((await f.store.read(f.article.path)).body).toBe(linkedBody);
+        expect(f.vault.file(f.target.path)).toBe(f.target);
+        expect(f.vault.trashed).toEqual([]);
+      } finally {
+        release.resolve();
+        f.view.stopForUnload();
+      }
+    },
+    1500,
+  );
+
+  it.each(['before', 'after'])(
+    'keeps the actual fallback Open Markdown escape usable after source failure %s commit',
+    async (phase) => {
+      const f = await uiFixture(),
+        entered = gate(),
+        providerRelease = gate();
+      let requestSignal!: AbortSignal;
+      f.api.createNodeForLink = vi.fn(async (options, link) => {
+        requestSignal = options.signal!;
+        if (phase === 'after') await link(f.node);
+        entered.resolve();
+        await providerRelease.promise;
+        await expect(link(f.node)).rejects.toThrow('request has finished');
+        return f.node;
+      });
+      try {
+        const creation = menu(f.view, 'Create note…');
+        await entered.promise;
+        const external = createDocument({ type: 'note', custom: 'keep' }, 'External source');
+        f.vault.bytes.set(f.article, external);
+        await f.view.changed({ path: f.article.path });
+        expect(requestSignal.aborted).toBe(true);
+        await creation;
+        await vi.waitFor(
+          () => expect(f.view.contentEl.textContent).toContain('Cannot display this article'),
+          { interval: 1 },
+        );
+        await f.click('fallback', 'Open Markdown');
+        await f.probe.operations;
+        await vi.waitFor(
+          () =>
+            expect(f.leaf.setViewState).toHaveBeenCalledWith({
+              type: 'markdown',
+              state: { file: f.article.path, mode: 'source' },
+              active: true,
+            }),
+          { interval: 1 },
+        );
+        providerRelease.resolve();
+        await vi.mocked(f.api.createNodeForLink).mock.results[0].value;
+        expect(await f.vault.read(f.article)).toBe(external);
+        expect(f.vault.file(f.target.path)).toBe(f.target);
+        expect(f.vault.trashed).toEqual([]);
+      } finally {
+        providerRelease.resolve();
+        f.view.stopForUnload();
+      }
+    },
+  );
+
+  it.each([
+    ['footer', 'Next'],
+    ['link', 'internal'],
+    ['command', 'Open Markdown'],
+    ['menu', 'Remove highlight'],
+  ])(
+    'invalidates queued Nodes creation at the actual %s / %s UI intent',
+    async (route, label) => {
+      const f = await uiFixture(),
+        entered = gate(),
+        release = gate();
+      f.api.createNodeForLink = vi.fn(async () => f.node);
+      try {
+        const busy = f.probe.operation(async () => {
+          entered.resolve();
+          await release.promise;
+        });
+        await entered.promise;
+        const creation = menu(f.view, 'Create note…');
+        await f.click(route, label);
+        release.resolve();
+        await busy;
+        await creation;
+        await f.probe.operations;
+        expect(f.api.createNodeForLink).not.toHaveBeenCalled();
+        expect(f.api.createNode).not.toHaveBeenCalled();
+        expect(f.vault.file(f.target.path)).toBe(f.target);
+        expect(f.vault.trashed).toEqual([]);
+      } finally {
+        release.resolve();
+        f.view.stopForUnload();
+      }
+    },
+    1500,
+  );
+
+  it('keeps required completion live for paging, heading jumps, invalid links, blocked keyboard shortcuts and background flush', async () => {
+    const f = await uiFixture(),
+      entered = gate(),
+      complete = gate();
+    let requestSignal!: AbortSignal;
+    f.api.createNodeForLink = async (options, link) => {
+      requestSignal = options.signal!;
+      await link(f.node);
+      entered.resolve();
+      await complete.promise;
+      return f.node;
+    };
+    try {
+      const creation = menu(f.view, 'Create note…');
+      await entered.promise;
+      // Palette checks and in-article paging do not cancel required completion.
+      for (const id of ['move', 'topics', 'open-markdown'])
+        expect(mocks.commands.get(id)?.checkCallback?.(true)).toBe(true);
+      f.probe.surface.canPage.mockReturnValue(true);
+      await f.click('footer', 'Next');
+      await f.click('footer', 'Previous');
+      const heading = document.createElement('h2');
+      heading.id = 'section';
+      f.probe.surface.body.append(heading);
+      await f.click('link', 'heading');
+      await f.click('link', 'unsafe');
+      f.view.key(new KeyboardEvent('keydown', { key: 'j' }));
+      expect(f.probe.surface.page.mock.calls).toEqual([[1], [-1]]);
+      expect(f.probe.surface.reveal).toHaveBeenCalledWith(heading);
+      expect(f.opened.openFile).not.toHaveBeenCalled();
+      expect(f.view.file).toBe(f.article);
+      const flushing = f.view.flush();
+      await Promise.resolve();
+      expect(requestSignal.aborted).toBe(false);
+      complete.resolve();
+      await creation;
+      await flushing;
+      expect(requestSignal.aborted).toBe(false);
+    } finally {
+      complete.resolve();
+      f.view.stopForUnload();
+    }
+  });
+
+  it('does not start a queued Nodes creation after a newer navigation intent', async () => {
+    const f = await fixture(),
+      entered = gate(),
+      release = gate();
+    f.api.createNodeForLink = vi.fn(async () => f.node);
+    const busy = f.probe.operation(async () => {
+      entered.resolve();
+      await release.promise;
+    });
+    await entered.promise;
+    const creation = menu(f.view, 'Create note…'),
+      navigation = f.view.readingList();
+    release.resolve();
+    await busy;
+    await creation;
+    await navigation;
+    expect(f.api.createNodeForLink).not.toHaveBeenCalled();
+    expect(f.api.createNode).not.toHaveBeenCalled();
+    expect((await f.store.read(f.article.path)).body).toBe('==words==');
+    expect(f.vault.trashed).toEqual([]);
+  });
 
   it.each(['null', 'cancel', 'reject'] as const)(
     'retains both committed link and target after completion %s',
@@ -1175,7 +3392,7 @@ describe('Nodes v2 linked creation', () => {
         if (kind === 'reject') throw rejection;
         return null;
       };
-      const creation = menu(f.view, 'Create node…');
+      const creation = menu(f.view, 'Create note…');
       if (kind === 'reject') await expect(creation).rejects.toBe(rejection);
       else await creation;
       expect((await f.store.read(f.article.path)).body).toBe(linkedBody);
@@ -1196,7 +3413,7 @@ describe('Nodes v2 linked creation', () => {
         late = link;
         return result === 'null' ? null : f.node;
       };
-      await menu(f.view, 'Create node…');
+      await menu(f.view, 'Create note…');
       await expect(late(f.node)).rejects.toThrow('request has finished');
       expect((await f.store.read(f.article.path)).body).toBe('==words==');
       expect(annotate).not.toHaveBeenCalled();
@@ -1223,10 +3440,16 @@ describe('Nodes v2 linked creation', () => {
       await entered.promise;
       return null;
     };
-    await menu(f.view, 'Create node…');
+    const creation = menu(f.view, 'Create note…');
+    const rejectedCreation = expect(creation).rejects.toThrow('request has finished');
+    await entered.promise;
+    // Reader observes the premature return but drains its dispatched write before
+    // releasing the operation queue; close the callback scope before releasing I/O.
+    await vi.waitFor(() => expect(f.probe.nodeCreation).toBeUndefined(), { interval: 1 });
     const rejected = expect(pending).rejects.toThrow('request has finished');
     release.resolve();
     await rejected;
+    await rejectedCreation;
     expect((await f.store.read(f.article.path)).body).toBe('==words==');
     expect(f.vault.file(f.target.path)).toBe(f.target);
     expect(f.vault.trashed).toEqual([]);
@@ -1240,7 +3463,7 @@ describe('Nodes v2 linked creation', () => {
       await link(f.node);
       return f.node;
     };
-    await expect(menu(f.view, 'Create node…')).rejects.toThrow('callback already ran');
+    await expect(menu(f.view, 'Create note…')).rejects.toThrow('callback already ran');
     expect(annotate).toHaveBeenCalledOnce();
     expect((await f.store.read(f.article.path)).body).toBe(linkedBody);
     expect(f.vault.file(f.target.path)).toBe(f.target);
@@ -1287,7 +3510,7 @@ describe('Nodes v2 linked creation', () => {
         completion();
         return f.node;
       };
-      await expect(menu(f.view, 'Create node…')).rejects.toThrow();
+      await expect(menu(f.view, 'Create note…')).rejects.toThrow();
       expect(completion).not.toHaveBeenCalled();
       expect(f.api.createNode).not.toHaveBeenCalled();
       expect((await f.store.read(f.article.path)).body).toBe(
@@ -1313,7 +3536,7 @@ describe('Nodes v2 linked creation', () => {
       completion();
       return f.node;
     };
-    await expect(menu(f.view, 'Create node…')).rejects.toThrow('Check the saved Markdown');
+    await expect(menu(f.view, 'Create note…')).rejects.toThrow('Check the saved Markdown');
     expect(completion).not.toHaveBeenCalled();
     expect((await f.store.read(f.article.path)).body).toBe(linkedBody);
     expect(f.vault.file(f.target.path)).toBe(f.target);
@@ -1330,7 +3553,7 @@ describe('Nodes v2 linked creation', () => {
       await link(f.node);
       return f.node;
     };
-    const creation = menu(f.view, 'Create node…');
+    const creation = menu(f.view, 'Create note…');
     await entered.promise;
     f.probe.persistPosition('words');
     await f.probe.positionWrite;
@@ -1351,7 +3574,7 @@ describe('Nodes v2 linked creation', () => {
       await complete.promise;
       return f.node;
     });
-    const creation = menu(f.view, 'Create node…');
+    const creation = menu(f.view, 'Create note…');
     await entered.promise;
     expect(annotate).not.toHaveBeenCalled();
     complete.resolve();
@@ -1364,13 +3587,13 @@ describe('Nodes v2 linked creation', () => {
   it('does not prune a standalone partial result or link a late standalone result after cancellation', async () => {
     const f = await fixture();
     f.api.createNode = vi.fn(async () => null);
-    await menu(f.view, 'Create node…');
+    await menu(f.view, 'Create note…');
     expect(f.vault.file(f.target.path)).toBe(f.target);
     f.api.createNode = vi.fn(async () => {
       f.probe.articleLifetime.abort();
       return f.node;
     });
-    await expect(menu(f.view, 'Create node…')).rejects.toThrow('cancelled');
+    await expect(menu(f.view, 'Create note…')).rejects.toThrow('cancelled');
     expect((await f.store.read(f.article.path)).body).toBe('==words==');
     expect(f.vault.trashed).toEqual([]);
   });
@@ -1440,9 +3663,9 @@ describe('safe links and drawing', () => {
 });
 
 describe('Reader web-link capture', () => {
-  async function fixture(href = 'https://publisher.test/story') {
-    const f = hostFixture();
-    const article = await f.note('Reading/Inbox/Current.md');
+  async function fixture(href = 'https://publisher.test/story', folders = defaultFolders) {
+    const f = hostFixture(folders);
+    const article = await f.note(`${folders.inbox}/Current.md`);
     await f.view.openArticle(article.path);
     f.probe.surface.body.innerHTML = `<a href="${href}">publisher</a>`;
     const event = { target: f.probe.surface.body.querySelector('a'), preventDefault: vi.fn() };
@@ -1454,7 +3677,6 @@ describe('Reader web-link capture', () => {
       save: mocks.confirmWebLink.mock.lastCall![2] as (signal: AbortSignal) => Promise<void>,
     };
   }
-
   it('asks before saving and acquires in Inbox without changing the current article', async () => {
     const f = await fixture('HTTPS://publisher.test/story');
     expect(mocks.confirmWebLink).toHaveBeenCalledOnce();
@@ -1468,7 +3690,26 @@ describe('Reader web-link capture', () => {
     expect(f.probe.surface).toBe(surface);
     expect(f.opened.openFile).not.toHaveBeenCalled();
   });
-
+  it('uses independent queue folders when retaining a duplicate from Stream', async () => {
+    const folders = {
+      inbox: 'Capture',
+      stream: 'Disposable',
+      later: 'Plans',
+      treasury: 'Kept',
+      feeds: 'Subscriptions',
+    };
+    const f = await fixture('https://publisher.test/story', folders);
+    const existing = await f.store.capture({
+      url: 'https://publisher.test/story',
+      queue: 'Stream',
+      body: 'authored ==words==',
+    });
+    await f.save(new AbortController().signal);
+    expect(f.vault.files.size).toBe(2);
+    expect(existing.path.startsWith('Capture/')).toBe(true);
+    expect((await f.store.read(existing.path)).body).toContain('authored ==words==');
+    expect(f.view.file).toBe(f.article);
+  });
   it('keeps web links inside highlights on the annotation-menu path', async () => {
     const f = hostFixture();
     const article = await f.note(
@@ -1482,29 +3723,46 @@ describe('Reader web-link capture', () => {
     expect(mocks.confirmWebLink).not.toHaveBeenCalled();
     expect(mocks.menus).toHaveLength(1);
   });
-
-  it('deduplicates and retains an existing Stream article in Inbox', async () => {
-    const f = await fixture();
+  it.each(['modal', 'navigation', 'unload', 'source edit', 'source delete'] as const)(
+    'rejects a stale %s confirmation',
+    async (kind) => {
+      const f = await fixture(),
+        modal = new AbortController();
+      if (kind === 'modal') modal.abort();
+      if (kind === 'navigation') await f.view.readingList();
+      if (kind === 'unload') f.signal.abort();
+      if (kind === 'source edit') {
+        f.vault.bytes.set(f.article, createDocument({ type: 'article' }, 'New source body'));
+        await f.view.changed({ path: f.article.path });
+      }
+      if (kind === 'source delete') f.vault.files.delete(f.article.path);
+      const count = f.vault.files.size;
+      await expect(f.save(modal.signal)).rejects.toThrow('cancelled');
+      expect(f.vault.files.size).toBe(count);
+    },
+  );
+  it('does not move a duplicate when navigation cancels a pending move', async () => {
+    const f = await fixture(),
+      entered = gate(),
+      release = gate();
     const existing = await f.store.capture({
       url: 'https://publisher.test/story',
       queue: 'Stream',
-      body: 'authored ==words==',
+      body: 'Keep authored text',
     });
-    await f.save(new AbortController().signal);
-    expect(f.vault.files.size).toBe(2);
-    expect(existing.path).toMatch(/^Reading\/Inbox\//);
-    expect((await f.store.read(existing.path)).body).toContain('authored ==words==');
-    expect(f.view.file).toBe(f.article);
-  });
-
-  it.each(['modal', 'navigation', 'unload'])('rejects a stale %s confirmation', async (kind) => {
-    const f = await fixture();
-    const modal = new AbortController();
-    if (kind === 'modal') modal.abort();
-    if (kind === 'navigation') await f.view.readingList();
-    if (kind === 'unload') f.signal.abort();
-    await expect(f.save(modal.signal)).rejects.toThrow('cancelled');
-    expect(f.vault.files.size).toBe(1);
+    const path = existing.path,
+      raw = await f.vault.read(existing);
+    f.vault.beforeMove = async () => {
+      entered.resolve();
+      await release.promise;
+    };
+    const save = f.save(new AbortController().signal).catch((error) => error);
+    await entered.promise;
+    await f.view.readingList();
+    release.resolve();
+    expect(await save).toMatchObject({ message: 'Reader capture was cancelled.' });
+    expect(existing.path).toBe(path);
+    expect(await f.vault.read(existing)).toBe(raw);
   });
 });
 
@@ -1927,14 +4185,22 @@ describe('plugin routing and conservative expiry', () => {
       article = await f.note('Reading/Inbox/A.md'),
       ordinary = await f.note('Notes/Ordinary.md', '', 'topic');
     // Use the plugin as the real view host for this transition.
+    (article as any).stat = { mtime: 1, size: f.vault.bytes.get(article)!.length };
+    vi.mocked(f.app.workspace.getActiveViewOfType).mockImplementation((constructor: any) =>
+      f.leaf.view instanceof constructor ? f.leaf.view : null,
+    );
     const view = new ReaderView(f.leaf, f.plugin);
     f.leaf.view = view;
     await view.openArticle(article.path);
-    f.leaf.setViewState.mockClear(); // Ignore the presentation-only refresh on open.
+    await f.pluginProbe.presentations.get(f.leaf);
+    f.leaf.setViewState.mockClear(); // The initial title refresh is not a Markdown escape.
     f.leaf.setViewState.mockImplementation(async (state: any) => {
       if (state.type === 'markdown') {
         const native = new MarkdownView(f.leaf);
-        (native as any).file = article;
+        Object.assign(native, {
+          file: article,
+          editor: { getValue: () => f.vault.bytes.get(native.file!) },
+        });
         f.leaf.view = native;
         f.workspace('file-open', article);
       }
@@ -1945,11 +4211,14 @@ describe('plugin routing and conservative expiry', () => {
     f.workspace('file-open', ordinary);
     f.leaf.view.file = article;
     f.workspace('file-open', article);
-    expect(f.leaf.setViewState).toHaveBeenLastCalledWith({
-      type: 'obsidian-reader',
-      state: { file: article.path },
-      active: true,
-    });
+    await vi.waitFor(
+      () =>
+        expect(f.leaf.setViewState).toHaveBeenLastCalledWith({
+          type: 'obsidian-reader',
+          state: { file: article.path },
+        }),
+      { interval: 1 },
+    );
   });
 
   it('flushes proactively when hidden, but unload synchronously closes the write barrier', async () => {

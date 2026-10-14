@@ -45,6 +45,45 @@ function fixture(paged = true, renderError?: (error: unknown) => void): ReadingS
   );
   return surface;
 }
+it('reports only settled, actually reached paged article boundaries, not a rounded near-final column', () => {
+  fixture(true);
+  expect(surface.atBoundary(-1)).toBe(false);
+  surface.setBody(markdown, '');
+  frame();
+  expect(surface.atBoundary(-1)).toBe(true);
+  expect(surface.atBoundary(1)).toBe(false);
+  surface.viewport.scrollLeft = 500;
+  expect(surface.canPage(1)).toBe(false); // Existing paging rounds; boundary evidence must not.
+  expect(surface.atBoundary(1)).toBe(false);
+  expect(surface.atBoundary(-1)).toBe(false);
+  surface.viewport.scrollLeft = 664;
+  expect(surface.atBoundary(1)).toBe(true);
+  width = 0;
+  expect(surface.atBoundary(1)).toBe(false);
+  width = 300;
+  surface.dispose();
+  expect(surface.atBoundary(1)).toBe(false);
+});
+
+it('reports scroll boundaries only with measured content and no pending restoration', () => {
+  fixture(false);
+  Object.defineProperty(surface.viewport, 'scrollHeight', { get: () => 1000 });
+  surface.setBody(markdown, '');
+  frame();
+  expect(surface.atBoundary(-1)).toBe(true);
+  expect(surface.atBoundary(1)).toBe(false);
+  surface.viewport.scrollTop = 400;
+  expect(surface.atBoundary(-1)).toBe(false);
+  expect(surface.atBoundary(1)).toBe(false);
+  surface.viewport.scrollTop = 800;
+  expect(surface.atBoundary(1)).toBe(true);
+  height = 0;
+  expect(surface.atBoundary(1)).toBe(false);
+  height = 200;
+  surface.restore(secondMarker);
+  expect(surface.atBoundary(1)).toBe(false);
+});
+
 function frame(): void {
   const pending = [...frames.values()];
   frames.clear();
@@ -228,9 +267,65 @@ it('caches one text index until the body or URL base changes', () => {
   expect(disposers[1]).toHaveBeenCalledOnce();
 });
 
-it('clamps page turns and retains the last text bookmark on a finish-only page', () => {
+it.each([
+  ['# Same **title**\n\nBody.', 'Same title', true],
+  ['## Same title\n\nBody.', 'Same title', true],
+  ['# Different heading\n\nBody.', 'Display title', false],
+  ['Intro.\n\n# Same title', 'Same title', false],
+  ['# same title\n\nBody.', 'Same title', false],
+] as const)('deduplicates only the synthetic title for %s', (body, title, hidden) => {
+  fixture(false).setBody(body, '');
+  const authored = surface.body.innerHTML;
+  surface.setTitle(title);
+  expect(surface.title.hidden).toBe(hidden);
+  expect(surface.title.textContent).toBe(title);
+  expect(surface.body.innerHTML).toBe(authored);
+  expect(surface.displayedBody).toBe(body);
+  const heading = surface.body.querySelector<HTMLElement>('h1,h2')!;
+  expect(heading.hidden).toBe(false);
+  expect(heading.id).toBeTruthy();
+  expect(render.bookmarkRange(surface.body, heading.textContent!)?.toString()).toBe(
+    heading.textContent,
+  );
+  expect([...surface.flow.children]).toEqual([surface.title, surface.body]);
+  expect(surface.viewport.querySelector('button,.reader-finish')).toBeNull();
+});
+
+it('updates title deduplication with deferred rendering without replacing selected authored nodes', () => {
+  fixture(false).setBody('# Title\n\nAlpha words.', '');
+  surface.setTitle('Title');
+  expect(surface.title.hidden).toBe(true);
+  const range = select(),
+    node = range.startContainer;
+  surface.setTitle('New title');
+  surface.setBody('# New title\n\nAlpha words.', '');
+  expect(surface.title.textContent).toBe('Title');
+  expect(range.startContainer).toBe(node);
+  expect(document.getSelection()!.toString()).toBe('Alpha');
+  deselect();
+  expect(surface.title.textContent).toBe('New title');
+  expect(surface.title.hidden).toBe(true);
+  expect(surface.body.querySelector('h1')!.textContent).toBe('New title');
+  surface.setTitle('Different display title');
+  expect(surface.title.hidden).toBe(false);
+});
+
+it('pages only authored content and the optional title, with no reserved footer column', () => {
+  columns = 2;
   fixture().setBody(markdown, '');
-  surface.finish.textContent = 'End of article: Next';
+  expect(surface.canPage(-1)).toBe(false);
+  expect(surface.canPage(1)).toBe(true);
+  surface.page(1);
+  expect(surface.canPage(1)).toBe(false);
+  expect(surface.canPage(-1)).toBe(true);
+  surface.page(1);
+  expect(surface.viewport.scrollLeft).toBe(332);
+  expect(surface.flow.textContent).not.toContain('End of article');
+  expect(surface.flow.children).toHaveLength(2);
+});
+
+it('clamps page turns and retains the last text bookmark on an image-only page', () => {
+  fixture().setBody(`${markdown}\n\n![figure](https://example.com/image.png)`, '');
   surface.page(-1);
   expect(surface.viewport.scrollLeft).toBe(0);
   surface.page(1);
@@ -242,9 +337,7 @@ it('clamps page turns and retains the last text bookmark on a finish-only page',
   surface.flush();
   expect(surface.viewport.scrollLeft).toBe(664);
   expect(position).toHaveBeenCalledTimes(calls);
-  expect(
-    position.mock.calls.every(([marker]) => !!marker && !marker.includes('End of article')),
-  ).toBe(true);
+  expect(position.mock.calls.every(([marker]) => !!marker)).toBe(true);
   notifyResize();
   expect(render.bookmarkRange).not.toHaveBeenCalled();
   expect(surface.viewport.scrollLeft).toBe(664);
@@ -254,18 +347,10 @@ it('clamps page turns and retains the last text bookmark on a finish-only page',
   expect(position).toHaveBeenCalledTimes(calls);
 });
 
-it.each([
-  [true, 'image'],
-  [true, 'finish'],
-  [false, 'image'],
-  [false, 'finish'],
-] as const)(
-  'keeps the current paged=%s %s-only viewport through late loads and resize',
-  (paged, area) => {
-    fixture(paged).setBody(
-      area === 'image' ? `${markdown}\n\n![figure](https://example.com/image.png)` : markdown,
-      '',
-    );
+it.each([true, false])(
+  'keeps the current paged=%s image-only viewport through late loads and resize',
+  (paged) => {
+    fixture(paged).setBody(`${markdown}\n\n![figure](https://example.com/image.png)`, '');
     if (paged) surface.page(1);
     else {
       surface.viewport.scrollTop = 260;
@@ -508,11 +593,13 @@ it('discards a queued edit when the latest snapshot reverts to the current body'
   expect(surface.body.textContent).toContain('Alpha');
 });
 
-it('protects native selections crossing into finish controls, even though they are not saveable quotes', () => {
+it('protects native selections crossing into the external action row, even though they are not saveable quotes', () => {
   fixture().setBody(markdown, '');
-  surface.finish.textContent = 'Next';
+  const action = document.createElement('button');
+  action.textContent = 'Next';
+  document.body.append(action);
   const range = select();
-  range.setEnd(surface.finish.firstChild!, 2);
+  range.setEnd(action.firstChild!, 2);
   expect(surface.selection()).toBeUndefined();
   surface.setBody('Deferred.', '');
   width = 400;
@@ -542,7 +629,7 @@ it.each([true, false])(
     expect(surface.viewport.scrollTop).toBe(paged ? 0 : 260);
     frame();
     vi.mocked(render.bookmarkRange).mockClear();
-    surface.reveal(surface.finish);
+    surface.reveal(surface.title);
     surface.reveal(document.createElement('h2'));
     const empty = document.createElement('span');
     surface.body.append(empty);

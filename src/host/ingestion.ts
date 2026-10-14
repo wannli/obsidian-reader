@@ -29,7 +29,8 @@ interface FeedGuard {
 }
 
 export class Ingestion {
-  private network = new Network();
+  private network: Network;
+  private ownsNetwork: boolean;
   private work = new WorkQueue(2);
   private feedCreates = new SerialWrites<string>();
   private active = true;
@@ -41,14 +42,18 @@ export class Ingestion {
   constructor(
     private store: ArticleStore<TFile>,
     private notify: (message: string) => void,
-  ) {}
+    network?: Network,
+  ) {
+    this.network = network ?? new Network();
+    this.ownsNetwork = network === undefined;
+  }
   private assert(): void {
     if (!this.active) throw new Error('Reader has stopped.');
   }
   stop(): void {
     this.active = false;
     this.work.stop();
-    this.network.stop();
+    if (this.ownsNetwork) this.network.stop();
     this.feedCache.clear();
   }
   private cancelFeed(file: TFile): void {
@@ -140,7 +145,7 @@ export class Ingestion {
         const base = filename(data.title, new Date()).replace(/^\d{6} /, '');
         for (let suffix = 1; suffix <= 1000; suffix++) {
           const name = suffix === 1 ? base : base.replace(/\.md$/, ` ${suffix}.md`);
-          const path = `${this.store.root}/Wires/${name}`;
+          const path = `${this.store.folders.feeds}/${name}`;
           if (this.store.vault.exists?.(path) ?? this.store.vault.file(path)) continue;
           const properties = {
             type: 'feed',
@@ -317,7 +322,14 @@ export class Ingestion {
             if (proof !== snapshot.body) return; // No ownership guess, even after restart.
           }
           this.assert();
-          const result = await extract(url, this.network.get);
+          const result = await extract(url, async (source, accept) => {
+            this.assert();
+            // Shared native slots can outlive this generation. Guard both queued
+            // dispatch and delivery before the extractor parses a response.
+            const response = await this.network.get(source, accept, () => this.assert());
+            this.assert();
+            return response;
+          });
           this.assert();
           assertSafeExternalText(result.title);
           assertSafeExternalText(result.markdown);

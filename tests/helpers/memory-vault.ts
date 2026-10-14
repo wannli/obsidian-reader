@@ -30,8 +30,9 @@ export class MemoryVault implements VaultPort<NoteFile> {
     this.bytes.set(file, next);
     return next;
   }
-  async move(file: NoteFile, path: string): Promise<void> {
+  async move(file: NoteFile, path: string, guard: () => void = () => {}): Promise<void> {
     await this.beforeMove?.();
+    guard();
     if (this.failMove) throw new Error('Move failed');
     if (this.files.has(path)) throw new Error('File exists');
     this.files.delete(file.path);

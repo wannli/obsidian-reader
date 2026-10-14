@@ -48,7 +48,7 @@ export function pickNode(
       return;
     }
     signal.addEventListener('abort', abort, { once: true });
-    picker.setPlaceholder('Link passage to node');
+    picker.setPlaceholder('Link passage to note by class');
     picker.open();
     picker.inputEl.value = query;
     picker.inputEl.dispatchEvent(new Event('input', { bubbles: true }));

@@ -1,3 +1,5 @@
+import { defaultFolders, isWithinFolder, type ReaderFolders } from './folders';
+
 export const queues = ['Inbox', 'Later', 'Stream', 'Treasury'] as const;
 export type Queue = (typeof queues)[number];
 export type Properties = Record<string, unknown>;
@@ -29,20 +31,12 @@ export function webUrl(input: string, base?: string): string {
   url.hash = '';
   return url.href;
 }
-export function rootPath(input: string): string {
-  const path = input.trim().replace(/\/+$/, '');
-  if (
-    !path ||
-    /[\\\r\n\x00-\x1f]/.test(path) ||
-    path.startsWith('/') ||
-    path.split('/').some((part) => !part || part === '.' || part === '..')
-  ) {
-    throw new Error('Choose a vault-relative folder, without empty or parent segments.');
-  }
-  return path;
+export function queueFolder(queue: Queue, folders: ReaderFolders = defaultFolders): string {
+  const keys = { Inbox: 'inbox', Stream: 'stream', Later: 'later', Treasury: 'treasury' } as const;
+  return folders[keys[queue]];
 }
-export function queueAt(path: string, root = 'Reading'): Queue | undefined {
-  return queues.find((queue) => path.startsWith(`${root}/${queue}/`));
+export function queueAt(path: string, folders: ReaderFolders = defaultFolders): Queue | undefined {
+  return queues.find((queue) => isWithinFolder(path, queueFolder(queue, folders)));
 }
 export function timestamp(input: unknown): number | undefined {
   if (typeof input !== 'string' || !/^\d{4}-\d{2}-\d{2}(?:T.*)?$/.test(input)) return;
@@ -80,7 +74,7 @@ export function monthCutoff(now: Date): number {
 export function articleInfo(
   path: string,
   properties: Properties,
-  root = 'Reading',
+  folders: ReaderFolders = defaultFolders,
 ): ArticleInfo | undefined {
   if (properties.type !== 'article') return;
   const name = path.split('/').pop()!.replace(/\.md$/i, '');
@@ -96,7 +90,7 @@ export function articleInfo(
     path,
     title: text(properties.title).trim() || name.replace(/^\d{6} /, ''),
     url,
-    queue: queueAt(path, root),
+    queue: queueAt(path, folders),
     published,
     feed: text(properties.feed) || undefined,
     topics: Array.isArray(properties.topics)

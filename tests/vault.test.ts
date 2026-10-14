@@ -200,8 +200,9 @@ function libraryFixture() {
     return {};
   };
   const getFileCache = vi.fn((file: TFile) => caches.get(file));
-  Object.assign(f.vault, { on });
-  Object.assign(f.app, { metadataCache: { on, getFileCache } });
+  const offref = vi.fn();
+  Object.assign(f.vault, { on, offref });
+  Object.assign(f.app, { metadataCache: { on, offref, getFileCache } });
   Object.assign(f.app.workspace, { onLayoutReady() {} });
   const stop = watchLibrary(
     { app: f.app, registerEvent() {} } as unknown as Plugin,
@@ -247,6 +248,7 @@ function libraryFixture() {
     caches,
     events,
     changes,
+    offref,
     getFileCache,
     add,
     renameFolder,
@@ -267,6 +269,49 @@ function operate(
       ? f.adapter.move(file, TARGET)
       : f.adapter.trash(file, () => {});
 }
+
+describe('generation write draining', () => {
+  it.each(['create', 'folder', 'process', 'move', 'trash'] as const)(
+    'waits for already-dispatched native %s even after the generation is stopped',
+    async (operation) => {
+      const f = fixture(),
+        file = f.note(),
+        entered = gate(),
+        release = gate();
+      const native =
+        operation === 'move'
+          ? f.fileManager.renameFile
+          : operation === 'folder'
+            ? f.vault.createFolder
+            : f.vault[operation];
+      const original = native.getMockImplementation()!;
+      (native as any).mockImplementation(async (...args: any[]) => {
+        entered.resolve();
+        await release.promise;
+        return (original as any)(...args);
+      });
+      const pending = (
+        operation === 'create'
+          ? f.adapter.create('Reading/Inbox/New.md', 'New')
+          : operation === 'folder'
+            ? f.adapter.folder('New')
+            : operate(f, file, operation)
+      ).catch((error) => error);
+      await entered.promise;
+      f.stop();
+      let drained = false;
+      const drain = f.adapter.drain().then(() => {
+        drained = true;
+      });
+      await Promise.resolve();
+      expect(drained).toBe(false);
+      release.resolve();
+      await Promise.all([pending, drain]);
+      expect(drained).toBe(true);
+      await expect(f.adapter.create('After/Stopped.md', 'No')).rejects.toThrow(/stopped/);
+    },
+  );
+});
 
 describe('final native trash validation', () => {
   it('retains an expired article annotated during the final native read', async () => {
@@ -359,7 +404,7 @@ describe('final native trash validation', () => {
         store = new ArticleStore(f.adapter),
         ingestion = new Ingestion(store, () => {});
       const properties = { type: 'feed', url: 'https://example.com/feed' };
-      const file = f.note('Reading/Feeds/Example.md', createDocument(properties, 'My notes.'));
+      const file = f.note('Reading/Wires/Example.md', createDocument(properties, 'My notes.'));
       store.catalog.update(file.path, properties);
       const feed = store.catalog.feed(file.path)!;
       let reads = 0;
@@ -388,7 +433,7 @@ describe('final native trash validation', () => {
       store = new ArticleStore(f.adapter),
       ingestion = new Ingestion(store, () => {});
     const properties = { type: 'feed', url: 'https://example.com/feed' };
-    const file = f.note('Reading/Feeds/Example.md', createDocument(properties, ''));
+    const file = f.note('Reading/Wires/Example.md', createDocument(properties, ''));
     store.catalog.update(file.path, properties);
     await ingestion.unsubscribe(store.catalog.feed(file.path)!);
     expect(f.vault.trash).toHaveBeenCalledWith(file, false);
@@ -515,6 +560,34 @@ describe('native editor and write boundaries', () => {
 });
 
 describe('create and move folder awaits', () => {
+  it.each(['read', 'folder'] as const)(
+    'rechecks operation cancellation after native %s awaits before rename',
+    async (waiting) => {
+      const f = fixture(),
+        file = f.note(),
+        entered = gate(),
+        release = gate();
+      let cancelled = false;
+      const hold = async () => {
+        entered.resolve();
+        await release.promise;
+      };
+      if (waiting === 'read') f.hooks.read = hold;
+      else f.hooks.folder = hold;
+      const moving = f.adapter
+        .move(file, TARGET, () => {
+          if (cancelled) throw new Error('Capture cancelled');
+        })
+        .catch((error) => error);
+      await entered.promise;
+      cancelled = true;
+      release.resolve();
+      expect(await moving).toMatchObject({ message: 'Capture cancelled' });
+      expect(f.fileManager.renameFile).not.toHaveBeenCalled();
+      expect(file.path).toBe(SOURCE);
+      expect(f.bytes.get(file)).toBe(RAW);
+    },
+  );
   it('checks an invalid create guard before creating any folders', async () => {
     const f = fixture();
     await expect(
@@ -700,29 +773,51 @@ describe('native YAML-link annotation events', () => {
 });
 
 describe('folder-only library events', () => {
+  it('reclassifies queue articles while excluding feeds moved outside their configured folder', () => {
+    const f = libraryFixture();
+    const article = f.add('Reading/Inbox/Group/Article.md', { type: 'article' });
+    f.renameFolder(f.folder('Reading/Inbox/Group'), 'Reading/Later/Group');
+    expect(f.store.catalog.article(article.path)?.queue).toBe('Later');
+    const feed = f.add('Reading/Wires/Group/Feed.md', {
+      type: 'feed',
+      url: 'https://example.com/feed',
+    });
+    expect(f.store.catalog.feed(feed.path)).toBeDefined();
+    f.renameFolder(f.folder('Reading/Wires/Group'), 'Elsewhere/Group');
+    expect(f.store.catalog.feed(feed.path)).toBeUndefined();
+    expect(f.store.catalog.feeds()).toEqual([]);
+    f.renameFolder(f.folder('Elsewhere/Group'), 'Reading/Wires/Group');
+    expect(f.store.catalog.feed(feed.path)).toBeDefined();
+  });
   it.each([false, true])(
     'reindexes article/feed descendants after a folder-only rename (omitted children: %s)',
     (omitChildren) => {
       const f = libraryFixture();
-      const article = f.add('Reading/Inbox/Group/Story.md', {
+      const article = f.add('Reading/Wires/Group/Story.md', {
         type: 'article',
         url: 'https://example.com/story',
       });
-      const nested = f.add('Reading/Inbox/Group/Nested/Other.md', { type: 'article' });
-      const feed = f.add('Reading/Inbox/Group/Nested/Feed.md', {
+      const nested = f.add('Reading/Wires/Group/Nested/Other.md', { type: 'article' });
+      const feed = f.add('Reading/Wires/Group/Nested/Feed.md', {
         type: 'feed',
         url: 'https://example.com/feed',
       });
       const sibling = f.add('Reading/Inbox/Grouped/Untouched.md', { type: 'article' });
       const old = [article.path, nested.path, feed.path],
         revoked = vi.spyOn(f.store, 'noteRenamed');
-      f.renameFolder(f.folder('Reading/Inbox/Group'), 'Reading/Later/Group', omitChildren);
+      f.renameFolder(f.folder('Reading/Wires/Group'), 'Reading/Wires/Renamed', omitChildren);
       for (const path of old) {
         expect(f.store.catalog.article(path)).toBeUndefined();
         expect(f.store.catalog.feed(path)).toBeUndefined();
       }
-      expect(f.store.catalog.article(article.path)?.queue).toBe('Later');
-      expect(f.store.catalog.article(nested.path)?.queue).toBe('Later');
+      expect(f.store.catalog.article(article.path)).toMatchObject({
+        path: article.path,
+        queue: undefined,
+      });
+      expect(f.store.catalog.article(nested.path)).toMatchObject({
+        path: nested.path,
+        queue: undefined,
+      });
       expect(f.store.catalog.feed(feed.path)).toBeDefined();
       expect(f.store.catalog.findUrl('https://example.com/story')?.path).toBe(article.path);
       expect(f.store.catalog.article(sibling.path)?.queue).toBe('Inbox');
@@ -765,17 +860,17 @@ describe('folder-only library events', () => {
     'removes article/feed index descendants on folder deletion (omitted children: %s)',
     (omitChildren) => {
       const f = libraryFixture();
-      const article = f.add('Reading/Inbox/Group/Story.md', {
+      const article = f.add('Reading/Wires/Group/Story.md', {
         type: 'article',
         url: 'https://example.com/story',
       });
-      const feed = f.add('Reading/Inbox/Group/Nested/Feed.md', {
+      const feed = f.add('Reading/Wires/Group/Nested/Feed.md', {
         type: 'feed',
         url: 'https://example.com/feed',
       });
       const sibling = f.add('Reading/Inbox/Grouped/Untouched.md', { type: 'article' });
       const revoked = vi.spyOn(f.store, 'noteRenamed');
-      f.deleteFolder(f.folder('Reading/Inbox/Group'), omitChildren);
+      f.deleteFolder(f.folder('Reading/Wires/Group'), omitChildren);
       expect(f.store.catalog.article(article.path)).toBeUndefined();
       expect(f.store.catalog.feed(feed.path)).toBeUndefined();
       expect(f.store.catalog.findUrl('https://example.com/story')).toBeUndefined();
@@ -806,6 +901,9 @@ describe('folder-only library events', () => {
     const folder = f.folder('Reading/Inbox/Group'),
       revoke = vi.spyOn(f.store, 'noteRenamed');
     f.stop();
+    expect(f.offref).toHaveBeenCalledTimes(3);
+    f.stop();
+    expect(f.offref).toHaveBeenCalledTimes(3);
     f.renameFolder(folder, 'Reading/Later/Group');
     f.deleteFolder(folder);
     expect(f.changes).toEqual([]);

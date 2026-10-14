@@ -1,9 +1,31 @@
-import { MarkdownView, TFile, TFolder, type App, type Plugin, type TAbstractFile } from 'obsidian';
+import {
+  MarkdownView,
+  TFile,
+  TFolder,
+  type App,
+  type Plugin,
+  type TAbstractFile,
+  type Events,
+  type EventRef,
+} from 'obsidian';
 import { ChangedNote } from '../core/document';
 import { hasPropertyAnnotations } from '../core/annotations';
 import type { ArticleStore, VaultPort } from '../core/store';
 
 export class ObsidianVault implements VaultPort<TFile> {
+  private pending = new Set<Promise<unknown>>();
+  /** A stopped generation cannot cancel host I/O already dispatched. Drain it before replacement. */
+  async drain(): Promise<void> {
+    while (this.pending.size) await Promise.allSettled([...this.pending]);
+  }
+  private dispatch<T>(operation: () => Promise<T>): Promise<T> {
+    if (!this.active()) return Promise.reject(new Error('Reader has stopped.'));
+    const result = operation();
+    this.pending.add(result);
+    const clear = () => this.pending.delete(result);
+    void result.then(clear, clear);
+    return result;
+  }
   constructor(
     private app: App,
     private active: () => boolean = () => true,
@@ -44,7 +66,7 @@ export class ObsidianVault implements VaultPort<TFile> {
         throw new Error(`Folder path is occupied or differently spelled: ${part}`);
       if (!existing) {
         try {
-          await this.app.vault.createFolder(part);
+          await this.dispatch(() => this.app.vault.createFolder(part));
         } catch (error) {
           if (!(this.app.vault.getAbstractFileByPath(part) instanceof TFolder)) throw error;
         }
@@ -61,7 +83,7 @@ export class ObsidianVault implements VaultPort<TFile> {
     await guard();
     if (!this.active()) throw new Error('Reader has stopped.');
     if (this.exists(path)) throw new Error(`Destination already exists: ${path}`);
-    return this.app.vault.create(path, content);
+    return this.dispatch(() => this.app.vault.create(path, content));
   }
   assertWritable(file: TFile, current?: string): void {
     if (!this.active()) throw new Error('Reader has stopped.');
@@ -98,25 +120,30 @@ export class ObsidianVault implements VaultPort<TFile> {
   async process(file: TFile, update: (current: string) => string): Promise<string> {
     const path = file.path;
     this.assertWritable(file);
-    return this.app.vault.process(file, (current) => {
-      this.assertCurrent(file, path, current);
-      return update(current);
-    });
+    return this.dispatch(() =>
+      this.app.vault.process(file, (current) => {
+        this.assertCurrent(file, path, current);
+        return update(current);
+      }),
+    );
   }
-  async move(file: TFile, path: string): Promise<void> {
+  async move(file: TFile, path: string, guard: () => void = () => {}): Promise<void> {
+    guard();
     const from = file.path;
     this.assertWritable(file);
     if (from === path) return;
     const before = await this.read(file);
     this.assertCurrent(file, from, before);
     if (this.exists(path)) throw new Error(`Destination already exists: ${path}`);
+    guard();
     await this.folder(path.slice(0, path.lastIndexOf('/')));
     const current = await this.read(file);
     this.assertCurrent(file, from, current);
     if (current !== before) throw new ChangedNote();
     if (this.exists(path)) throw new Error(`Destination already exists: ${path}`);
-    // Use the host's link-aware move, not a second implementation of Obsidian backlinks.
-    await this.app.fileManager.renameFile(file, path);
+    // No await between operation cancellation and link-aware native dispatch.
+    guard();
+    await this.dispatch(() => this.app.fileManager.renameFile(file, path));
   }
   async trash(file: TFile, validate: (current: string) => void): Promise<void> {
     const path = file.path;
@@ -128,7 +155,7 @@ export class ObsidianVault implements VaultPort<TFile> {
     // No await between caller validation and native dispatch. Once native I/O starts,
     // this cannot provide a cross-device transaction or cancel the host operation.
     validate(current);
-    await this.app.vault.trash(file, false);
+    await this.dispatch(() => this.app.vault.trash(file, false));
   }
 }
 
@@ -139,14 +166,18 @@ export interface LibraryChange {
   metadataChanged?: boolean;
   annotations?: boolean;
 }
-/** The host owns the vault-wide metadata cache. Reader indexes it, not every article body. */
+/** Metadata-only index. The caller owns disposal; never retain generation refs on the plugin. */
 export function watchLibrary(
-  plugin: Plugin,
+  plugin: Pick<Plugin, 'app'>,
   store: ArticleStore<TFile>,
   changed: (event: LibraryChange) => void,
 ): () => void {
   const { app } = plugin;
   let active = true;
+  const disposers: (() => void)[] = [];
+  const observe = (host: Events, reference: EventRef) => {
+    disposers.push(() => host.offref(reference));
+  };
   const index = (file: TFile) => {
     if (!active || file.extension !== 'md') return;
     const cache = app.metadataCache.getFileCache(file);
@@ -167,7 +198,8 @@ export function watchLibrary(
     }
     return files;
   };
-  plugin.registerEvent(
+  observe(
+    app.metadataCache,
     app.metadataCache.on('changed', (file, raw, cache) => {
       if (!active) return;
       const wasKnown = !!store.catalog.article(file.path) || !!store.catalog.feed(file.path);
@@ -184,7 +216,8 @@ export function watchLibrary(
       changed({ path: file.path, metadataChanged, annotations });
     }),
   );
-  plugin.registerEvent(
+  observe(
+    app.vault,
     app.vault.on('rename', (file, old) => {
       if (!active) return;
       if (file instanceof TFile) {
@@ -223,7 +256,8 @@ export function watchLibrary(
       }
     }),
   );
-  plugin.registerEvent(
+  observe(
+    app.vault,
     app.vault.on('delete', (file) => {
       if (!active) return;
       const paths = new Set(
@@ -247,6 +281,8 @@ export function watchLibrary(
   // Enumerate once; later updates use event files, folder children and indexed paths.
   app.workspace.onLayoutReady(seed);
   return () => {
+    if (!active) return;
     active = false;
+    for (const dispose of disposers.splice(0)) dispose();
   };
 }

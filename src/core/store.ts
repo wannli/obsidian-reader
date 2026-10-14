@@ -14,13 +14,14 @@ import {
   filenameDay,
   monthCutoff,
   queueAt,
-  rootPath,
+  queueFolder,
   timestamp,
   webUrl,
   type Properties,
   type Queue,
 } from './model';
 import { SerialWrites } from './work';
+import { defaultFolders, type ReaderFolders } from './folders';
 
 export interface NoteFile {
   path: string;
@@ -32,7 +33,7 @@ export interface VaultPort<File extends NoteFile> {
   read(file: File): Promise<string>;
   create(path: string, content: string, guard?: () => void | Promise<void>): Promise<File>;
   process(file: File, update: (current: string) => string): Promise<string>;
-  move(file: File, path: string): Promise<void>;
+  move(file: File, path: string, guard?: () => void): Promise<void>;
   /** Validate fresh bytes synchronously after the final read, immediately before native trash. */
   trash(file: File, validate: (current: string) => void): Promise<void>;
   assertWritable(file: File): void;
@@ -54,11 +55,13 @@ export class ArticleStore<File extends NoteFile> {
   // After restart an unfinished capture keeps its original filename, even on success.
   private captures = new WeakMap<File, { path: string; date: Date }>();
   private active = true;
+  readonly folders: ReaderFolders;
   constructor(
     readonly vault: VaultPort<File>,
-    readonly root = 'Reading',
+    folders: ReaderFolders = defaultFolders,
   ) {
-    this.catalog = new Catalog(rootPath(root));
+    this.catalog = new Catalog(folders);
+    this.folders = this.catalog.folders;
   }
   dispose(): void {
     this.active = false;
@@ -136,7 +139,7 @@ export class ArticleStore<File extends NoteFile> {
       const published = timestamp(input.published) === undefined ? undefined : input.published;
       const date = published ? new Date(published) : now;
       const name = filename(input.title || new URL(url).hostname, date, input.prefix, !!published);
-      const path = await this.unique(`${this.root}/${input.queue ?? 'Inbox'}`, name);
+      const path = await this.unique(queueFolder(input.queue ?? 'Inbox', this.folders), name);
       const properties: Properties = { type: 'article', url };
       if (input.title?.trim()) properties.title = input.title.trim();
       if (published) properties.published = published;
@@ -204,14 +207,17 @@ export class ArticleStore<File extends NoteFile> {
     this.captures.delete(snapshot.file);
     this.assert(snapshot.file, snapshot.path);
     if ((await this.vault.read(snapshot.file)) !== snapshot.raw) throw new ChangedNote();
-    if (queueAt(snapshot.path, this.root) === queue) return snapshot;
+    if (queueAt(snapshot.path, this.folders) === queue) return snapshot;
     return this.creates.run('articles', async () => {
-      const target = await this.unique(`${this.root}/${queue}`, snapshot.path.split('/').pop()!);
+      const target = await this.unique(
+        queueFolder(queue, this.folders),
+        snapshot.path.split('/').pop()!,
+      );
       this.assert(snapshot.file, snapshot.path);
       if ((await this.vault.read(snapshot.file)) !== snapshot.raw) throw new ChangedNote();
       this.assert(snapshot.file, snapshot.path);
       guard();
-      await this.vault.move(snapshot.file, target);
+      await this.vault.move(snapshot.file, target, guard);
       this.catalog.rename(
         snapshot.path,
         target,
@@ -227,7 +233,7 @@ export class ArticleStore<File extends NoteFile> {
       const proposed = transform(snapshot.raw);
       if (proposed === snapshot.raw) return snapshot;
       let current = snapshot;
-      if (queueAt(current.path, this.root) === 'Stream')
+      if (queueAt(current.path, this.folders) === 'Stream')
         current = await this.moveNow(current, 'Inbox');
       if (current.body !== snapshot.body)
         throw new ChangedNote(

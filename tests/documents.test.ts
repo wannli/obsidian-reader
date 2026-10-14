@@ -9,13 +9,13 @@ import {
   replaceBody,
   savePosition,
 } from '../src/core/document';
+import { folderPath } from '../src/core/folders';
 import {
   articleInfo,
   filename,
   filenameDay,
   monthCutoff,
   queueAt,
-  rootPath,
   timestamp,
   webUrl,
 } from '../src/core/model';
@@ -139,8 +139,8 @@ describe('explicit identity, paths, dates and URLs', () => {
     ).toBeUndefined();
     expect(queueAt('Other/Reading/Inbox/file.md')).toBeUndefined();
   });
-  it.each(['../private', '/absolute', 'A/../B', 'A//B', 'A\\B'])('rejects unsafe roots', (path) =>
-    expect(() => rootPath(path)).toThrow(),
+  it.each(['../private', '/absolute', 'A/../B', 'A//B', 'A\\B'])('rejects unsafe folders', (path) =>
+    expect(() => folderPath(path)).toThrow(),
   );
   it('retains query semantics but removes fragments and normalizes hosts', () => {
     expect(webUrl('HTTPS://EXAMPLE.COM:443/a?q=1#fragment')).toBe('https://example.com/a?q=1');

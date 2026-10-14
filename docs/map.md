@@ -2,7 +2,7 @@
 
 One runtime, one Markdown store. Start with the [approved scope](rebuild-spec.md) and [storage contract](storage-contract.md); neither a cache nor UI state is write authority.
 
-Current installed Reader is `f4bf22574068b7605753cced90af11dc018602804b238c6dad71f53b2041224d`, Reader-only reloaded 2026-10-14T14:46:50.332Z. Bounded Mac acceptance and the final audit are complete; actual iPhone/Boox tests remain pending. The native lane is **returned to Wannes / hold true**: he can use the window now; agents must not access native Obsidian without fresh clearance.
+The last native build verified by this rebuild is `f4bf22574068b7605753cced90af11dc018602804b238c6dad71f53b2041224d`, Reader-only reloaded 2026-10-14T14:46:50.332Z. Bounded Mac acceptance and the final audit are complete; actual iPhone/Boox tests remain pending. The native lane is **returned to Wannes / hold true**: he can use the window now; agents must not access native Obsidian without fresh clearance.
 
 ## Entry and flow
 
@@ -13,7 +13,7 @@ src/main.ts                         Obsidian lifecycle, commands, routing
   └─ reader/view.ts → core/store.ts      guarded user operations → vault files
 ```
 
-`main.ts` owns plugin lifetime, active/online refresh, safe native routing, and unload cleanup. It wires the library, ingestion and Reader view; there is no parallel legacy entry point.
+`main.ts` owns plugin lifetime, active/online refresh, safe native routing, tracked generation-aware presentation transitions and unload cleanup. It wires the library, ingestion and Reader view; there is no parallel legacy entry point.
 
 ## Core: data and guarded writes
 
@@ -53,6 +53,8 @@ Runtime libraries: `yaml`, `marked`, `entities`, `dompurify`, `defuddle`. No UI 
 
 - `reader/view.ts`: flat library/article UI, original browsing context, selection operations, guarded async lifetimes, native menus and Markdown escape. Opened-before (not finished) and highlight indicators use existing `reading_position` + Markdown highlights only; no new metadata/YAML/history.
 - `reader/render.ts`: sanitized Markdown rendering and lazy remote images with failure cooldown.
+- `reader/images.ts`: disposable click/tap/keyboard image enlargement; inline image height remains bounded by the reading viewport.
+- `reader/highlight-feedback.ts`: transient save acknowledgement, distinct from the immutable text/revision write snapshot and cleared with its surface lifetime.
 - `reader/surface.ts`: scroll/pagination layout, selection/pointer deferral, position save/restore.
 - `reader/text.ts`: visible-text indexing across inline nodes.
 - `reader/styles.css`: the **only source stylesheet**, with leaf-owned floating controls and scroll clearance. Only Obsidian’s floating mobile navigation bar is hidden while Reader is active; native editing/capture controls remain.
@@ -78,11 +80,13 @@ Use `mise exec -- npm run check`; see [README](../README.md) for focused command
 
 ## Recorded Mac acceptance and remaining device gates
 
-Current native Mac checks passed: full 927px list pane; article 903px with no cap, 16px text padding plus 15px native scrollbar, five 44px controls, one H1, visible highlight and final-line clearance. Trusted ArrowDown advanced exactly one despite held repeat and resumed the destination marker at scrollTop 675. Open Markdown → Welcome native Markdown → the same article Reader passed in the same leaf after completed escape; OS URI with vault ID forced the list.
+The recorded `f4bf…` native Mac checks passed: full 927px list pane; article 903px with no cap, 16px text padding plus 15px native scrollbar, five 44px controls, one H1, visible highlight and final-line clearance. Trusted ArrowDown advanced exactly one despite held repeat and resumed the destination marker at scrollTop 675. Open Markdown → Welcome native Markdown → the same article Reader passed in the same leaf after completed escape; OS URI with vault ID forced the list.
 
 Final overall backup audit: 43 → 43, no additions/deletions; only `reading_position` changed in two articles. Welcome, companion/core/community enablement and data hashes stayed unchanged. Sync reports synced; restored settings were untouched. No duplicate-title notes existed in current Mac metadata; the earlier phone cause remains undiagnosed, with no deduplication/deletion.
 
-See [recorded evidence and phone checklist](mobile-smoke.md) (`reader-redesign-audit.json`, `native-folder-apply.json`, `native-resume.json`, `routing.json`, `uri.json`) and the [historical/current report](rebuild-report.html). Current recorded validation: 1042 unit + 72 tooling = 1114; test-only 8.258s, full check 12.361s. Automated geometry and the four-width production Surface browser checks are not physical-device evidence.
+See [recorded evidence and phone checklist](mobile-smoke.md) (`reader-redesign-audit.json`, `native-folder-apply.json`, `native-resume.json`, `routing.json`, `uri.json`) and the [historical/current report](rebuild-report.html). That installed build's recorded validation: 1042 unit + 72 tooling = 1114; test-only 8.258s, full check 12.361s. Automated geometry and the four-width production Surface browser checks are not physical-device evidence.
+
+The merged source additionally preserves image enlargement, web-link capture, transient highlight acknowledgement and tracked native-title refresh. Its regression checks do not extend the earlier native acceptance; this Git-only merge does not install or reload it.
 
 Remaining checks require a future authorized window; the current native hold remains true:
 

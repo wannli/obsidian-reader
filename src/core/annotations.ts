@@ -1,7 +1,26 @@
 import { Lexer } from 'marked';
+import { blockSpans, markdownSource, renderedHighlight, type Span } from './markdown';
 import { ChangedNote } from './document';
 import { vaultLink, type Properties } from './model';
 import { inlineProjection } from './projection';
+
+/** Expected selection rejection, distinct from source/write failures and parser defects. */
+export class UnmappableSelection extends Error {}
+
+/** Multiline highlights stay within one parsed paragraph, never across blocks/hard breaks. */
+function paragraphGuard(
+  body: string,
+  blocks = () => blockSpans(body).paragraphs,
+): (from: number, to: number) => boolean {
+  let paragraphs: Span[] | undefined;
+  return (from, to) => {
+    const raw = body.slice(from, to).replace(/\r\n?/g, '\n');
+    if (!raw.includes('\n')) return true;
+    if (/\n\s*\n|(?: {2,}|\\)\n/.test(raw)) return false;
+    paragraphs ??= blocks();
+    return paragraphs.some((span) => from >= span.from && to <= span.to);
+  };
+}
 
 export interface Passage {
   from: number;
@@ -16,7 +35,11 @@ const normalized = (text: string): string =>
     .trim();
 
 /** Keep source offsets, but exclude literal code, comments, HTML and escaped delimiters. */
-function eligibleSource(body: string, maskEscapes = true): string {
+function eligibleSource(
+  body: string,
+  maskEscapes = true,
+  parsed?: ReturnType<typeof blockSpans>,
+): string {
   const chars = body.split('');
   const hide = (from: number, to: number) => {
     for (let i = from; i < to; i++) chars[i] = '\0';
@@ -39,11 +62,18 @@ function eligibleSource(body: string, maskEscapes = true): string {
     } else if (/^(?: {4}|\t)/.test(line)) hide(offset, offset + line.length);
     offset += line.length;
   }
-  let masked = chars.join('');
-  for (const match of masked.matchAll(/<!--[^]*?(?:-->|$)|%%[^]*?(?:%%|$)|<[^>\n]+>/g))
-    hide(match.index!, match.index! + match[0].length);
-  masked = chars.join('');
-  for (const match of masked.matchAll(/(`+)([^]*?)\1(?!`)/g))
+  if (parsed) {
+    // Indentation can continue any parsed paragraph or heading, not just containers.
+    // Restore proven prose before applying inline masks (including cross-line comments).
+    for (const span of parsed.paragraphs.concat(parsed.headings))
+      for (let i = span.from; i < span.to; i++) chars[i] = body[i];
+    for (const span of parsed.protected) hide(span.from, span.to);
+  }
+  const protectedSource = markdownSource(body, parsed);
+  for (const span of protectedSource.code.concat(protectedSource.comments))
+    hide(span.from, span.to);
+  const masked = chars.join('');
+  for (const match of masked.matchAll(/<!--[^]*?(?:-->|$)|<[^>\n]+>/g))
     hide(match.index!, match.index! + match[0].length);
   if (maskEscapes)
     for (const match of body.matchAll(/\\[\\`*_[\]~=]/g))
@@ -67,18 +97,43 @@ export function importedMarkdown(body: string): string {
   return body;
 }
 export function passages(body: string): Passage[] {
-  const source = eligibleSource(body, false),
+  return scanHighlights(body, false);
+}
+
+function scanHighlights(body: string, retentionOnly: boolean): Passage[] {
+  if (!body.includes('==')) return [];
+  const blocks = blockSpans(body),
+    source = eligibleSource(body, false, blocks),
     result: Passage[] = [];
   const escaped = (at: number) => {
     let count = 0;
     while (at > 0 && body[--at] === '\\') count++;
     return count % 2 === 1;
   };
-  for (const match of source.matchAll(/==([^\0\n]*?)==/g)) {
+  // Authored setext headings are also one inline block. Automatic creation remains
+  // paragraph-only; recognizing an existing heading mark must not permit expiry.
+  const withinParagraph = paragraphGuard(body, () => blocks.paragraphs.concat(blocks.headings)),
+    matches = retentionOnly ? /==([\s\S]*?)==/g : /==([^\0]*?)==/g;
+  let match: RegExpExecArray | null;
+  while ((match = matches.exec(source))) {
     const from = match.index!,
       raw = body.slice(from + 2, from + match[0].length - 2);
-    if (!raw.trim() || raw.includes('==') || escaped(from) || escaped(from + match[0].length - 2))
+    if (
+      !raw.trim() ||
+      (!retentionOnly && raw.includes('==')) ||
+      escaped(from) ||
+      escaped(from + match[0].length - 2)
+    )
       continue;
+    if (!withinParagraph(from, from + match[0].length)) {
+      // An unmatched opener in an earlier block must not consume a later valid highlight.
+      matches.lastIndex = from + 2;
+      continue;
+    }
+    // Protected interiors stay non-editable, but outside delimiters can still render
+    // a mark around them. Retain that annotation rather than failing open on expiry.
+    // Delimiters inside code/HTML remain masked, so literals do not count.
+    if (retentionOnly) return [{ from, to: from + match[0].length, text: raw }];
     const link = /^\[\[([^\]|#^\r\n]+)\|([^\[\]\r\n]+)\]\]$/.exec(raw);
     if (link) {
       result.push({ from, to: from + match[0].length, text: link[2], target: link[1] });
@@ -163,7 +218,8 @@ export function hasPropertyAnnotations(properties: Properties = {}): boolean {
 export function hasAnnotations(body: string, properties: Properties): boolean {
   return (
     hasPropertyAnnotations(properties) ||
-    passages(body).length > 0 ||
+    scanHighlights(body, true).length > 0 ||
+    renderedHighlight(body) ||
     /\[\[[^\]\n]+\]\]/.test(eligibleSource(body)) ||
     inlineProjection(eligibleSource(body, false)).links.some(
       (link) => !/^[a-z][\w+.-]*:|^\/\/|^#/i.test(link.target),
@@ -177,7 +233,8 @@ export function locateSelection(
   after = '',
 ): { from: number; to: number } {
   const wanted = normalized(quote);
-  if (!wanted || wanted.length > 12_000) throw new Error('Select a short passage of article text.');
+  if (!wanted || wanted.length > 12_000)
+    throw new UnmappableSelection('Select a short passage of article text.');
   const source = eligibleSource(body, false),
     projection = inlineProjection(source),
     plain = projection.text;
@@ -189,6 +246,7 @@ export function locateSelection(
     ),
   ];
   const candidates: { from: number; to: number; score: number }[] = [];
+  const withinParagraph = paragraphGuard(body);
   const prefix = normalized(before).slice(-40),
     suffix = normalized(after).slice(0, 40);
   const maximumScore = Number(!!prefix) + Number(!!suffix);
@@ -208,6 +266,7 @@ export function locateSelection(
         const raw = body.slice(from, to);
         if (
           /\n\s*\n|[\[\]`<>]|==/.test(raw) ||
+          !withinParagraph(from, to) ||
           blocked.some((span) => from < span.to && to > span.from)
         )
           continue;
@@ -229,7 +288,7 @@ export function locateSelection(
     !candidates.length ||
     (candidates.length > 1 && candidates[0].score === candidates[1].score)
   ) {
-    throw new Error(
+    throw new UnmappableSelection(
       'This selection cannot be matched safely. Select a distinct passage within one text block.',
     );
   }
