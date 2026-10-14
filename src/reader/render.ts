@@ -1,6 +1,7 @@
 import { Marked, type Token } from 'marked';
 import { fragment } from '../content/html';
 import { VisibleText } from './text';
+import { imageViewer } from './images';
 
 const escape = (value: string): string =>
   value.replace(
@@ -110,6 +111,7 @@ export function renderBody(body: string, root: HTMLElement, base: string): () =>
     if (observer) observer.observe(image);
     else load(image); // Hosts without IntersectionObserver retain native loading="lazy".
   }
+  const disposeViewer = imageViewer(root);
   const visible = () => {
     if (active && root.ownerDocument.visibilityState === 'visible')
       for (const image of images)
@@ -123,6 +125,7 @@ export function renderBody(body: string, root: HTMLElement, base: string): () =>
   root.ownerDocument.addEventListener('visibilitychange', visible);
   return () => {
     active = false;
+    disposeViewer();
     observer?.disconnect();
     root.ownerDocument.removeEventListener('visibilitychange', visible);
     for (const image of images) image.removeAttribute('src');

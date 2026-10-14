@@ -76,8 +76,12 @@
 .reader-document img {
   display: block;
   max-width: 100%;
+  max-height: var(--reader-image-height, 30vh);
+  width: auto;
   height: auto;
+  margin-inline: auto;
   object-fit: contain;
+  cursor: zoom-in;
 }
 .reader-document pre {
   max-width: 100%;
@@ -136,11 +140,47 @@
   margin-block: 0;
 }
 .reader-paged img {
-  max-height: calc(var(--reader-page-height, 100vh) - 48px);
   break-inside: avoid;
 }
 .reader-paged pre,
 .reader-paged table {
   max-height: calc(var(--reader-page-height, 100vh) - 48px);
   overflow: auto;
+}
+
+dialog.reader-image-viewer {
+  position: fixed;
+  inset: 0;
+  margin: auto;
+  display: block;
+  height: fit-content;
+  box-sizing: border-box;
+  width: fit-content;
+  max-width: 95vw;
+  max-height: 95vh;
+  padding: 16px;
+  background: var(--background-primary, white);
+  color: var(--text-normal, black);
+  overflow: auto;
+}
+.reader-image-viewer::backdrop {
+  background: rgb(0 0 0 / 70%);
+}
+.reader-image-viewer button {
+  display: block;
+  min-height: 44px;
+  margin-inline-start: auto;
+}
+.reader-image-viewer img {
+  display: block;
+  width: auto;
+  height: auto;
+  max-width: 85vw;
+  max-height: calc(85vh - 60px);
+  object-fit: contain;
+  margin-inline: auto;
+}
+.reader-document img:focus-visible {
+  outline: 2px solid var(--interactive-accent, Highlight);
+  outline-offset: 2px;
 }

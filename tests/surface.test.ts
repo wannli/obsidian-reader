@@ -295,6 +295,7 @@ it.each([
     expect(render.bookmarkRange).not.toHaveBeenCalled();
     expect(position).toHaveBeenCalledTimes(calls);
     expect(surface.flow.style.getPropertyValue('--reader-page-height')).toBe(paged ? '180px' : '');
+    expect(surface.flow.style.getPropertyValue('--reader-image-height')).toBe('54px');
     // Returning to text makes the textual anchor usable for reflow again.
     if (paged) surface.page(-1);
     else {

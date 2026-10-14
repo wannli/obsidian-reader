@@ -178,6 +178,7 @@ export class ReadingSurface {
   }
 
   private layout(): void {
+    this.flow.style.setProperty('--reader-image-height', `${this.viewport.clientHeight * 0.3}px`);
     if (!this.paged) return;
     const height = `${Math.max(100, this.viewport.clientHeight)}px`;
     this.flow.style.height = height;
