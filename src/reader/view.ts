@@ -802,7 +802,7 @@ export class ReaderView extends ItemView {
           live.after === pending.selection.after
         );
       };
-      // Coalesce keyboard/handle adjustments briefly after a gesture ends; never
+      // Require 900ms of quiet after the last adjustment/release; never
       // write while a pointer is held. Tokens still guard every asynchronous boundary.
       this.selectionTimer = setTimeout(() => {
         void this.operation(async () => {
@@ -812,7 +812,7 @@ export class ReaderView extends ItemView {
             if (!(error instanceof UnmappableSelection)) throw error;
           }
         }).catch((error) => this.error(error));
-      }, 250);
+      }, 900);
     }
   }
   private async saveSelection(

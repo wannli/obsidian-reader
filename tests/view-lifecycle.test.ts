@@ -603,7 +603,24 @@ describe('automatic selection event ownership', () => {
     expect(f.view.contentEl.textContent).not.toContain('End of article');
   });
 
-  it('saves 250ms after the last pointer releases, shows one transient acknowledgement, then paints without clearing native selection', async () => {
+  it('restarts the full 900ms quiet period for every adjustment, including repeated text', async () => {
+    const annotate = vi.spyOn(f.store, 'annotate');
+    f.select(0);
+    vi.advanceTimersByTime(899);
+    f.select(1);
+    vi.advanceTimersByTime(899);
+    f.select(1);
+    vi.advanceTimersByTime(899);
+    await f.probe.operations;
+    expect(annotate).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1);
+    await f.probe.operations;
+    expect(annotate).toHaveBeenCalledOnce();
+    expect((await f.store.read(f.article.path)).body).toBe('Alpha phrase.\n\n==Beta== phrase.');
+    expect(document.getSelection()!.toString()).toBe('Beta');
+  });
+
+  it('saves 900ms after the last pointer releases, shows one transient acknowledgement, then paints without clearing native selection', async () => {
     vi.spyOn(f.surface.viewport, 'getBoundingClientRect').mockReturnValue(
       new DOMRect(0, 0, 400, 300),
     );
@@ -634,7 +651,7 @@ describe('automatic selection event ownership', () => {
       await f.probe.operations;
       expect((await f.store.read(f.article.path)).body).toBe(f.body);
       pointer('pointerup', 2);
-      vi.advanceTimersByTime(249);
+      vi.advanceTimersByTime(899);
       await f.probe.operations;
       expect((await f.store.read(f.article.path)).body).toBe(f.body);
       vi.advanceTimersByTime(1);
@@ -682,7 +699,7 @@ describe('automatic selection event ownership', () => {
       document.dispatchEvent(new Event('selectionchange'));
       const before = await f.vault.read(f.article),
         annotate = vi.spyOn(f.store, 'annotate');
-      vi.advanceTimersByTime(250);
+      vi.advanceTimersByTime(900);
       await f.probe.operations;
       expect(await f.vault.read(f.article)).toBe(before);
       expect(annotate).not.toHaveBeenCalled();
@@ -739,7 +756,7 @@ describe('automatic selection event ownership', () => {
     );
     await f.view.changed({ path: f.article.path });
     f.select(0);
-    vi.advanceTimersByTime(250);
+    vi.advanceTimersByTime(900);
     await f.probe.operations;
     expect((await f.store.read(f.article.path)).body).toContain('==Alpha==');
     const status = f.view.contentEl.querySelector('.reader-status')!;
@@ -751,7 +768,7 @@ describe('automatic selection event ownership', () => {
   it('does not silence genuine passive write failures', async () => {
     vi.spyOn(f.vault, 'process').mockRejectedValueOnce(new Error('Disk write failed'));
     f.select(0);
-    vi.advanceTimersByTime(250);
+    vi.advanceTimersByTime(900);
     await expect(f.probe.operations).rejects.toThrow('Disk write failed');
     expect((await f.store.read(f.article.path)).body).toBe(f.body);
     expect(mocks.notice).toHaveBeenCalledWith('Disk write failed');
@@ -786,16 +803,16 @@ describe('automatic selection event ownership', () => {
       }
       await entered.promise;
       f.select(0);
-      vi.advanceTimersByTime(250);
+      vi.advanceTimersByTime(900);
       const oldJob = f.probe.operations;
       // Let the automatic action enter its position wait, if that is the blocked path.
       await Promise.resolve();
       await Promise.resolve();
-      f.select(1); // B has not satisfied its own 250ms debounce.
+      f.select(1); // B has not satisfied its own 900ms debounce.
       release.resolve();
       await oldJob;
       expect((await f.store.read(f.article.path)).body).toBe(f.body);
-      vi.advanceTimersByTime(250);
+      vi.advanceTimersByTime(900);
       await f.probe.operations;
       expect((await f.store.read(f.article.path)).body).toBe('Alpha phrase.\n\n==Beta== phrase.');
       if (wait === 'position')
@@ -816,7 +833,7 @@ describe('automatic selection event ownership', () => {
       });
       await entered.promise;
       f.select(0);
-      vi.advanceTimersByTime(250);
+      vi.advanceTimersByTime(900);
       const oldJob = f.probe.operations;
       if (kind === 'repeat') f.select(0); // Same text/context, but a new selection revision.
       if (kind === 'unreported') f.select(1, 4, false); // The native selectionchange task has not run yet.
@@ -831,7 +848,7 @@ describe('automatic selection event ownership', () => {
       await oldJob;
       expect((await f.store.read(f.article.path)).body).toBe(f.body);
       if (kind === 'unreported') document.dispatchEvent(new Event('selectionchange'));
-      vi.advanceTimersByTime(250);
+      vi.advanceTimersByTime(900);
       await f.probe.operations;
       expect((await f.store.read(f.article.path)).body).toBe(
         kind === 'unreported'
@@ -851,7 +868,7 @@ describe('automatic selection event ownership', () => {
       return process(file, update);
     });
     f.select(0);
-    vi.advanceTimersByTime(250);
+    vi.advanceTimersByTime(900);
     const oldJob = f.probe.operations;
     await entered.promise;
     f.select(1);
@@ -860,7 +877,7 @@ describe('automatic selection event ownership', () => {
     expect((await f.store.read(f.article.path)).body).toBe(f.body);
     expect(document.getSelection()!.toString()).toBe('Beta');
     expect(mocks.notice).not.toHaveBeenCalled();
-    vi.advanceTimersByTime(250);
+    vi.advanceTimersByTime(900);
     await f.probe.operations;
     expect((await f.store.read(f.article.path)).body).toBe('Alpha phrase.\n\n==Beta== phrase.');
   });
@@ -881,7 +898,7 @@ describe('automatic selection event ownership', () => {
       }
       await f.view.changed({ path: f.article.path });
       const before = await f.vault.read(f.vault.file(f.article.path)!);
-      vi.advanceTimersByTime(250);
+      vi.advanceTimersByTime(900);
       await f.probe.operations;
       expect(await f.vault.read(f.vault.file(f.article.path)!)).toBe(before);
     },
@@ -889,19 +906,19 @@ describe('automatic selection event ownership', () => {
 
   it('allows keyboard-style selection changes, own deferred rendering and overlapping adjustment', async () => {
     f.select(0);
-    vi.advanceTimersByTime(250);
+    vi.advanceTimersByTime(900);
     await f.probe.operations;
     expect((await f.store.read(f.article.path)).body).toBe('==Alpha== phrase.\n\nBeta phrase.');
     expect(f.surface.displayedBody).toBe(f.body);
     expect(document.getSelection()!.toString()).toBe('Alpha');
     f.select(0, 12);
-    vi.advanceTimersByTime(250);
+    vi.advanceTimersByTime(900);
     await f.probe.operations;
     expect((await f.store.read(f.article.path)).body).toBe('==Alpha phrase==.\n\nBeta phrase.');
     document.getSelection()!.removeAllRanges();
     document.dispatchEvent(new Event('selectionchange'));
     expect(f.surface.displayedBody).toBe('==Alpha phrase==.\n\nBeta phrase.');
-    vi.advanceTimersByTime(250);
+    vi.advanceTimersByTime(900);
     await f.probe.operations;
     expect([...f.surface.body.querySelectorAll('mark')].map((mark) => mark.textContent)).toEqual([
       'Alpha phrase',
@@ -919,7 +936,7 @@ describe('automatic selection event ownership', () => {
     range.setEnd(node, 5);
     document.getSelection()!.addRange(range);
     document.dispatchEvent(new Event('selectionchange'));
-    vi.advanceTimersByTime(250);
+    vi.advanceTimersByTime(900);
     await f.probe.operations;
     expect(f.article.path).toBe('Reading/Inbox/Selection.md');
     expect((await f.store.read(f.article.path)).body).toBe('==Alpha== phrase.\n\nBeta phrase.');
@@ -937,14 +954,14 @@ describe('automatic selection event ownership', () => {
       return raw;
     });
     f.select(0);
-    vi.advanceTimersByTime(250);
+    vi.advanceTimersByTime(900);
     const oldJob = f.probe.operations;
     await dispatched.promise;
     f.select(1);
     release.resolve();
     await oldJob;
     expect((await f.store.read(f.article.path)).body).toBe('==Alpha== phrase.\n\nBeta phrase.');
-    vi.advanceTimersByTime(250);
+    vi.advanceTimersByTime(900);
     await f.probe.operations;
     expect((await f.store.read(f.article.path)).body).toBe('==Alpha== phrase.\n\n==Beta== phrase.');
     expect(mocks.notice).not.toHaveBeenCalled();
@@ -959,7 +976,7 @@ describe('automatic selection event ownership', () => {
     });
     await entered.promise;
     f.select(0);
-    vi.advanceTimersByTime(250);
+    vi.advanceTimersByTime(900);
     f.select(1);
     const closing = f.view.onClose();
     document.getSelection()!.removeAllRanges();
