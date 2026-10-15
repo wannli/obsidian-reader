@@ -19,7 +19,12 @@ describe('session-only manual capture filenames', () => {
   it('saves first, then uses native link-aware move and returns/indexes the actual saved snapshot', async () => {
     const { vault, store, file, snapshot } = await setup();
     expect(snapshot.path).toBe('Reading/Articles/261013 example.com.md');
-    expect(snapshot.properties).toEqual({ type: 'article', status: 'inbox', url });
+    expect(snapshot.properties).toEqual({
+      type: 'article',
+      status: 'inbox',
+      url,
+      published: '2026-10-13T12:00',
+    });
     const nativeMove = vault.move.bind(vault);
     const move = vi.spyOn(vault, 'move').mockImplementation(async (file, path) => {
       expect(await vault.read(file)).toContain(article);
@@ -40,6 +45,7 @@ describe('session-only manual capture filenames', () => {
       status: 'inbox',
       url,
       title: 'Publisher title',
+      published: '2026-10-13T12:00',
     });
     expect(saved.body).toContain('[[261013 Publisher title]]');
     expect(vault.file(snapshot.path)).toBeUndefined();
@@ -172,10 +178,22 @@ describe('session-only manual capture filenames', () => {
     expect(await vault.read(file)).toBe(snapshot.raw);
     vault.failWrite = false;
     const failed = await store.error(snapshot, 'Offline');
-    expect(failed.properties).toEqual({ type: 'article', status: 'inbox', url, error: 'Offline' });
+    expect(failed.properties).toEqual({
+      type: 'article',
+      status: 'inbox',
+      url,
+      error: 'Offline',
+      published: '2026-10-13T12:00',
+    });
     const saved = await store.acquire(failed, article, 'Title');
     expect(saved.path).toBe('Reading/Articles/261013 Title.md');
-    expect(saved.properties).toEqual({ type: 'article', status: 'inbox', url, title: 'Title' });
+    expect(saved.properties).toEqual({
+      type: 'article',
+      status: 'inbox',
+      url,
+      title: 'Title',
+      published: '2026-10-13T12:00',
+    });
   });
 
   it('consumes a receipt on success even when the publisher supplied no title', async () => {

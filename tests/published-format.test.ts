@@ -83,7 +83,7 @@ it.each([[new Date(2026, 9, 3, 4, 29, 59, 999).toISOString(), minute]])(
 );
 
 it.each([undefined, '', 'invalid', '2026-02-30T04:29:00Z'])(
-  'capture omits invalid/missing publication %j and retains local capture-day naming',
+  'capture falls back from invalid/missing publication %j to local capture time and naming',
   async (published) => {
     const vault = new MemoryVault(),
       store = new ArticleStore(vault),
@@ -93,11 +93,33 @@ it.each([undefined, '', 'invalid', '2026-02-30T04:29:00Z'])(
       now,
     );
     const raw = await vault.read(file);
-    expect(readDocument(raw).properties).not.toHaveProperty('published');
-    expect(raw).not.toContain('published:');
+    expect(readDocument(raw).properties.published).toBe(formatPublished(now.toISOString()));
+    expect(raw).toContain(`\npublished: ${formatPublished(now.toISOString())}\n`);
     expect(file.path).toBe(`Reading/Articles/${filename('Example', now)}`);
   },
 );
+
+it('freezes the original capture time before queued work and caller clock mutation', async () => {
+  const vault = new MemoryVault(),
+    store = new ArticleStore(vault);
+  const now = new Date(2026, 9, 3, 4, 29, 59),
+    original = now.toISOString();
+  const pending = store.capture({ url: 'https://example.com/frozen' }, now);
+  now.setFullYear(2030);
+  const file = await pending;
+  expect(readDocument(await vault.read(file)).properties.published).toBe(formatPublished(original));
+  expect(file.path).toContain('261003');
+});
+
+it('does not backfill a legacy missing publication on duplicate capture', async () => {
+  const vault = new MemoryVault(),
+    store = new ArticleStore(vault);
+  const raw = createDocument({ type: 'article', url: 'https://example.com/legacy' }, 'Authored.');
+  const file = await vault.create('Reading/Articles/Legacy.md', raw);
+  store.catalog.update(file.path, readDocument(raw).properties);
+  expect(await store.capture({ url: 'https://example.com/legacy' })).toBe(file);
+  expect(await vault.read(file)).toBe(raw);
+});
 
 it('uses a plain scalar only for a valid canonical published value, not other strings', () => {
   const raw = createDocument({ type: 'article', published: minute, custom: minute, title: 'true' });

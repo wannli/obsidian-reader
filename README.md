@@ -65,7 +65,9 @@ A ==[[Notes/A useful idea.md|linked passage]]== links directly to a note.
 
 `type: article` identifies the note. Capture/acquisition uses `url`; local articles can be read without it. `title`, `published`, `feed`, `topics` and `bookmark` are optional; `error` can describe an acquisition failure. The position is a text anchor, not a page number or completion flag. Inline highlights and passage links live in the body; feed and topic links are frontmatter properties.
 
-New captures write `published` as an unquoted **local wall-clock minute** in Obsidian’s `YYYY-MM-DDTHH:mm` format, without seconds or a timezone suffix. Zone-free values follow the current device’s timezone and native date/DST interpretation; they do not preserve a unique instant across timezones or repeated DST hours. Existing date-only, offset and full ISO values remain readable and are not rewritten or migrated. UTC filename dates still come from the original parsed publication instant, before local formatting.
+Every new Reader capture writes `published`: valid supplied publication wins, otherwise the original capture time. Eligible live external `type: article` creates receive a missing publication from frozen host ctime, without altering status, body or any existing publication value. Startup/cold-launch files and older/unknown ctimes are excluded; fresh Sync ctime is not proof of original share time. See the [storage contract](docs/storage-contract.md) for provenance limits.
+
+New publication writes use an unquoted **local wall-clock minute** in Obsidian’s `YYYY-MM-DDTHH:mm` format, without seconds or a timezone suffix. Zone-free values follow the current device’s timezone and native date/DST interpretation; they do not preserve a unique instant across timezones or repeated DST hours. Existing date-only, offset and full ISO values remain readable and are not rewritten or migrated. UTC filename dates still come from the original parsed publication instant, before local formatting.
 
 A subscription such as `Reading/Feeds/Example feed.md`:
 

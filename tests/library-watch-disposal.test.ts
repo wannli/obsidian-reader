@@ -27,13 +27,14 @@ function emitter() {
 
 it('keeps emitter and plugin-owned reference counts bounded across generation replacements', () => {
   const metadata = emitter(),
-    vault = emitter();
+    vault = emitter(),
+    workspace = emitter();
   const ownedEvents = new Set<unknown>(),
     ownedCleanup = new Set<unknown>();
   const app = {
     metadataCache: { ...metadata, getFileCache: vi.fn() },
     vault: { ...vault, getMarkdownFiles: () => [] },
-    workspace: { onLayoutReady: (callback: () => void) => callback() },
+    workspace: { ...workspace, onLayoutReady: (callback: () => void) => callback() },
   } as unknown as App;
   // Model real Plugin ownership: registerEvent/register retain their argument until unload.
   const plugin = {
@@ -44,13 +45,14 @@ it('keeps emitter and plugin-owned reference counts bounded across generation re
   let stop = () => {};
   for (let generation = 0; generation < 25; generation++) {
     stop();
-    expect(metadata.refs.size + vault.refs.size).toBe(0);
+    expect(metadata.refs.size + vault.refs.size + workspace.refs.size).toBe(0);
     expect(ownedEvents.size + ownedCleanup.size).toBe(0);
     const store = new ArticleStore(new MemoryVault()) as unknown as ArticleStore<TFile>;
     const changed = vi.fn();
     stop = watchLibrary(plugin, store, changed);
     expect(metadata.refs.size).toBe(1);
-    expect(vault.refs.size).toBe(2);
+    expect(vault.refs.size).toBe(3);
+    expect(workspace.refs.size).toBe(2);
     expect(ownedEvents.size + ownedCleanup.size).toBe(0);
     const ref = [...metadata.refs][0];
     const file = { path: `Reading/Articles/${generation}.md`, extension: 'md' };
@@ -65,7 +67,7 @@ it('keeps emitter and plugin-owned reference counts bounded across generation re
     expect(store.catalog.size).toBe(1);
   }
   stop();
-  expect(metadata.refs.size + vault.refs.size).toBe(0);
+  expect(metadata.refs.size + vault.refs.size + workspace.refs.size).toBe(0);
   expect(ownedEvents.size + ownedCleanup.size).toBe(0);
   expect(plugin.registerEvent).not.toHaveBeenCalled();
   expect(plugin.register).not.toHaveBeenCalled();

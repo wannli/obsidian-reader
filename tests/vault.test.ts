@@ -221,7 +221,14 @@ function libraryFixture() {
   const offref = vi.fn();
   Object.assign(f.vault, { on, offref });
   Object.assign(f.app, { metadataCache: { on, offref, getFileCache } });
-  Object.assign(f.app.workspace, { onLayoutReady() {} });
+  let ready = () => {};
+  Object.assign(f.app.workspace, {
+    on,
+    offref,
+    onLayoutReady(callback: () => void) {
+      ready = callback;
+    },
+  });
   const stop = watchLibrary(
     { app: f.app, registerEvent() {} } as unknown as Plugin,
     store,
@@ -268,12 +275,224 @@ function libraryFixture() {
     changes,
     offref,
     getFileCache,
+    ready: () => {
+      f.vault.getMarkdownFiles.mockImplementation(() =>
+        [...f.files.values()].filter((file): file is TFile => file instanceof TFile),
+      );
+      ready();
+    },
     add,
     renameFolder,
     deleteFolder,
     stop,
   };
 }
+describe('live newly created article publication', () => {
+  const settle = () => new Promise<void>((resolve) => setImmediate(resolve));
+  const create = (
+    f: ReturnType<typeof libraryFixture>,
+    raw = createDocument({ type: 'article' }, 'Offline authored body.'),
+    ctime = Date.now(),
+  ) => {
+    const file = f.note(SOURCE, raw);
+    Object.assign(file, { stat: { ctime } });
+    f.events.get('create')!(file);
+    return file;
+  };
+  const metadata = (f: ReturnType<typeof libraryFixture>, file: TFile, raw: string) => {
+    f.bytes.set(file, raw);
+    const cache = { frontmatter: readDocument(raw).properties };
+    f.caches.set(file, cache);
+    f.events.get('changed')!(file, raw, cache);
+  };
+  it('stamps a nonempty offline article using frozen create time, not later metadata time', async () => {
+    const clock = vi.spyOn(Date, 'now');
+    let now = new Date(2026, 9, 15, 10, 11, 42).getTime();
+    clock.mockImplementation(() => now);
+    try {
+      const f = libraryFixture();
+      f.ready();
+      const file = create(f, createDocument({ type: 'note' }, 'Shared text.'));
+      await settle();
+      now += 3600000;
+      // ctime changes after the event must not change the original receipt.
+      file.stat.ctime = now;
+      metadata(f, file, createDocument({ type: 'article', custom: 'keep' }, 'Shared text.'));
+      await settle();
+      expect(f.bytes.get(file)).toContain('\npublished: 2026-10-15T10:11\n');
+      expect(readDocument(f.bytes.get(file)!).body).toBe('Shared text.');
+      expect(readDocument(f.bytes.get(file)!).properties.custom).toBe('keep');
+      f.stop();
+    } finally {
+      clock.mockRestore();
+    }
+  });
+  it.each(['inbox', 'later', 'feed', 'archive', undefined, 'unknown'])(
+    'publishes native source-link captures anywhere without changing status %j or bookmark',
+    async (status) => {
+      const f = libraryFixture();
+      f.ready();
+      const properties = {
+        type: 'article',
+        url: 'https://example.com/story',
+        bookmark: 'Saved anchor',
+        ...(status === undefined ? {} : { status }),
+      };
+      const file = create(f, createDocument(properties, '[Source](https://example.com/story)'));
+      await settle();
+      const snapshot = await f.store.read(file.path);
+      expect(snapshot.properties.published).toBeDefined();
+      expect(snapshot.properties).toMatchObject(properties);
+      expect(Object.hasOwn(snapshot.properties, 'status')).toBe(status !== undefined);
+      const saved = await f.store.acquire(snapshot, 'Extracted body.', 'Publisher title');
+      expect(saved.path).toBe(SOURCE); // Native captures have no Reader retitle receipt.
+      expect(saved.properties.published).toBe(snapshot.properties.published);
+      expect(saved.properties.bookmark).toBe('Saved anchor');
+      expect(saved.properties.status).toBe(status);
+      const replaced = await f.store.replaceArticle(
+        saved,
+        'Confirmed replacement.',
+        'New title',
+        () => {},
+      );
+      expect(replaced.properties).toEqual(saved.properties);
+      expect(replaced.body).toContain('Confirmed replacement.');
+      f.stop();
+    },
+  );
+  it('rejects pre-publication acquisition/re-download snapshots rather than losing the new date', async () => {
+    const f = libraryFixture();
+    f.ready();
+    const wait = gate();
+    f.hooks.read = () => wait.promise;
+    const file = create(
+      f,
+      createDocument(
+        { type: 'article', status: 'inbox', url: 'https://example.com/story' },
+        '[Source](https://example.com/story)',
+      ),
+    );
+    const stale = { file, path: file.path, ...readDocument(f.bytes.get(file)!) };
+    wait.resolve();
+    await settle();
+    const current = f.bytes.get(file)!;
+    expect(readDocument(current).properties.published).toBeDefined();
+    await expect(f.store.acquire(stale, 'Extracted.', 'Title')).rejects.toThrow();
+    await expect(
+      f.store.replaceArticle(stale, 'Replacement.', 'Title', () => {}),
+    ).rejects.toThrow();
+    expect(f.bytes.get(file)).toBe(current);
+    f.stop();
+  });
+  it('handles immediate nonempty creates and type metadata arriving while the first read is pending', async () => {
+    const f = libraryFixture();
+    f.ready();
+    const wait = gate();
+    f.hooks.read = () => wait.promise;
+    const file = create(f, createDocument({ type: 'note' }, 'Nonempty.'));
+    metadata(f, file, createDocument({ type: 'article' }, 'Nonempty.'));
+    wait.resolve();
+    await settle();
+    expect(readDocument(f.bytes.get(file)!).properties.published).toBeDefined();
+    expect(readDocument(f.bytes.get(file)!).body).toBe('Nonempty.');
+    f.stop();
+  });
+  it.each([null, '', 'invalid', '2026-10-01', '2026-10-01T12:34:56Z'])(
+    'preserves every existing publication value %j byte-for-byte',
+    async (published) => {
+      const f = libraryFixture();
+      f.ready();
+      const raw = createDocument({ type: 'article', published }, 'Body.');
+      const file = create(f, raw);
+      await settle();
+      expect(f.bytes.get(file)).toBe(raw);
+      expect(f.vault.process).not.toHaveBeenCalled();
+      f.stop();
+    },
+  );
+  it('never backfills startup/indexed/metadata-only notes or old/unknown/future ctimes', async () => {
+    const f = libraryFixture();
+    const startup = create(f); // create replay before layout ready
+    f.ready();
+    const raw = f.bytes.get(startup)!;
+    metadata(f, startup, raw);
+    for (const ctime of [Date.now() - 60000, NaN, Date.now() + 60000]) {
+      const file = create(f, raw, ctime);
+      metadata(f, file, raw);
+    }
+    await settle();
+    expect(f.vault.process).not.toHaveBeenCalled();
+    f.stop();
+  });
+  it('does not convert ordinary URL-only shares into articles', async () => {
+    const f = libraryFixture();
+    f.ready();
+    const raw = 'https://example.com/shared\n';
+    const file = create(f, raw);
+    await settle();
+    expect(f.bytes.get(file)).toBe(raw);
+    f.events.get('layout-change')!();
+    await settle();
+    expect(f.vault.process).not.toHaveBeenCalled();
+    f.stop();
+  });
+  it('retries a dirty native editor receipt when layout changes, preserving body and creation minute', async () => {
+    const f = libraryFixture();
+    f.ready();
+    const file = create(f);
+    f.caches.set(file, { frontmatter: { type: 'article' } });
+    const { view } = f.open(file, f.bytes.get(file)!, 'source');
+    await settle();
+    expect(f.vault.process).not.toHaveBeenCalled();
+    view.mode = 'preview';
+    f.events.get('layout-change')!();
+    await settle();
+    expect(readDocument(f.bytes.get(file)!).properties.published).toBeDefined();
+    expect(readDocument(f.bytes.get(file)!).body).toBe('Offline authored body.');
+    f.stop();
+  });
+  it('does not transfer a deleted identity receipt to a same-path replacement without a create event', async () => {
+    const f = libraryFixture();
+    f.ready();
+    const wait = gate();
+    f.hooks.read = () => wait.promise;
+    const file = create(f);
+    const raw = f.bytes.get(file)!;
+    f.events.get('delete')!(file);
+    f.remove(file);
+    const replacement = f.note(SOURCE, raw);
+    metadata(f, replacement, raw);
+    wait.resolve();
+    await settle();
+    expect(f.bytes.get(replacement)).toBe(raw);
+    Object.assign(replacement, { stat: { ctime: Date.now() } });
+    f.events.get('create')!(replacement);
+    await settle();
+    expect(readDocument(f.bytes.get(replacement)!).properties.published).toBeDefined();
+    f.stop();
+  });
+  it.each(['revision', 'dirty', 'watcher disposal', 'store disposal'])(
+    'guards publication against late %s changes',
+    async (change) => {
+      const f = libraryFixture();
+      f.ready();
+      const wait = gate();
+      f.hooks.process = () => wait.promise;
+      const file = create(f);
+      const original = f.bytes.get(file)!;
+      await settle();
+      expect(f.vault.process).toHaveBeenCalledTimes(1);
+      if (change === 'revision') f.bytes.set(file, original + 'User edit.');
+      if (change === 'dirty') f.open(file, 'Unfinished edit.', 'source');
+      if (change === 'watcher disposal') f.stop();
+      if (change === 'store disposal') f.store.dispose();
+      wait.resolve();
+      await settle();
+      expect(f.bytes.get(file)).toBe(original + (change === 'revision' ? 'User edit.' : ''));
+      f.stop();
+    },
+  );
+});
 type Operation = 'process' | 'move' | 'trash';
 function operate(
   f: Fixture,
@@ -736,7 +955,7 @@ it('revokes auto-title ownership before reindexing every native file rename, inc
     app: {
       vault: { on },
       metadataCache: { on, getFileCache: () => ({ frontmatter: { type: 'article' } }) },
-      workspace: { onLayoutReady() {} },
+      workspace: { on, offref() {}, onLayoutReady() {} },
     },
     registerEvent() {},
   };
@@ -930,9 +1149,9 @@ describe('folder-only library events', () => {
     const folder = f.folder('Reading/Inbox/Group'),
       revoke = vi.spyOn(f.store, 'noteRenamed');
     f.stop();
-    expect(f.offref).toHaveBeenCalledTimes(3);
+    expect(f.offref).toHaveBeenCalledTimes(6);
     f.stop();
-    expect(f.offref).toHaveBeenCalledTimes(3);
+    expect(f.offref).toHaveBeenCalledTimes(6);
     f.renameFolder(folder, 'Reading/Later/Group');
     f.deleteFolder(folder);
     expect(f.changes).toEqual([]);

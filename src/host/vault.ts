@@ -10,6 +10,7 @@ import {
 } from 'obsidian';
 import { ChangedNote } from '../core/document';
 import { hasPropertyAnnotations } from '../core/annotations';
+import { formatPublished } from '../core/model';
 import type { ArticleStore, VaultPort } from '../core/store';
 
 export class ObsidianVault implements VaultPort<TFile> {
@@ -200,9 +201,44 @@ export function watchLibrary(
   const { app } = plugin;
   let active = true;
   const disposers: (() => void)[] = [];
+  // Only live post-layout creates authorize publication; indexing never backfills.
+  let readyAt: number | undefined;
+  const creations = new Map<TFile, string>();
+  const publishing = new WeakSet<TFile>();
+  const retryPublication = new WeakSet<TFile>();
+  const publish = (file: TFile) => {
+    const created = creations.get(file);
+    if (!active || created === undefined) return;
+    if (publishing.has(file)) {
+      retryPublication.add(file);
+      return;
+    }
+    publishing.add(file);
+    void store
+      .publishNew(file, created, () => {
+        if (!active || creations.get(file) !== created) throw new Error('Reader has stopped.');
+      })
+      .then((done) => {
+        if (done) creations.delete(file);
+      })
+      // Dirty editors, incomplete YAML and racing revisions stay untouched.
+      .catch(() => {})
+      .finally(() => {
+        publishing.delete(file);
+        if (retryPublication.delete(file)) publish(file);
+      });
+  };
   const observe = (host: Events, reference: EventRef) => {
     disposers.push(() => host.offref(reference));
   };
+  // Closing a native editor can unblock a receipt without new metadata.
+  const retryPublications = () => {
+    for (const file of creations.keys()) {
+      if (app.metadataCache.getFileCache(file)?.frontmatter?.type === 'article') publish(file);
+    }
+  };
+  observe(app.workspace, app.workspace.on('active-leaf-change', retryPublications));
+  observe(app.workspace, app.workspace.on('layout-change', retryPublications));
   const index = (file: TFile) => {
     if (!active || file.extension !== 'md') return;
     const cache = app.metadataCache.getFileCache(file);
@@ -238,7 +274,21 @@ export function watchLibrary(
         body.includes('[[') ||
         /\]\((?![a-z][\w+.-]*:|\/\/|#)/i.test(body) ||
         hasPropertyAnnotations(cache.frontmatter);
+      if (cache.frontmatter?.type === 'article') publish(file);
       changed({ path: file.path, metadataChanged, annotations });
+    }),
+  );
+  observe(
+    app.vault,
+    app.vault.on('create', (file) => {
+      if (!active || readyAt === undefined || !(file instanceof TFile) || file.extension !== 'md')
+        return;
+      const created = file.stat?.ctime;
+      if (!Number.isFinite(created) || created < readyAt || created > Date.now()) return;
+      const published = formatPublished(new Date(created).toISOString());
+      if (!published) return;
+      creations.set(file, published);
+      publish(file);
     }),
   );
   observe(
@@ -291,6 +341,7 @@ export function watchLibrary(
       const files =
         file instanceof TFolder ? descendants(file) : file instanceof TFile ? [file] : [];
       for (const child of files) {
+        creations.delete(child);
         store.noteRenamed(child);
         paths.add(child.path);
       }
@@ -304,10 +355,14 @@ export function watchLibrary(
     }),
   );
   // Enumerate once; later updates use event files, folder children and indexed paths.
-  app.workspace.onLayoutReady(seed);
+  app.workspace.onLayoutReady(() => {
+    seed();
+    if (active) readyAt = Date.now();
+  });
   return () => {
     if (!active) return;
     active = false;
+    creations.clear();
     for (const dispose of disposers.splice(0)) dispose();
   };
 }

@@ -142,6 +142,7 @@ export class ArticleStore<File extends NoteFile> {
     guard: () => void | Promise<void> = () => {},
   ): Promise<File> {
     const url = webUrl(input.url);
+    now = new Date(now.getTime()); // Freeze caller-owned capture time before queued work.
     return this.creates.run('articles', async () => {
       if (!this.active) throw new Error('Reader has stopped.');
       const existing = this.catalog.findUrl(url);
@@ -154,7 +155,7 @@ export class ArticleStore<File extends NoteFile> {
         this.catalog.remove(existing.path);
       }
       const publishedAt = timestamp(input.published);
-      const published = formatPublished(input.published);
+      const published = formatPublished(input.published) ?? formatPublished(now.toISOString());
       // Keep the original instant for the UTC filename; only persisted publication loses seconds.
       const date = publishedAt === undefined ? now : new Date(publishedAt);
       const name = filename(
@@ -191,6 +192,31 @@ export class ArticleStore<File extends NoteFile> {
       }
       this.catalog.update(path, properties);
       return file;
+    });
+  }
+  /** Only the host's live-create receipt authorizes this; never call from indexing/recovery. */
+  publishNew(file: File, published: string, guard: () => void = () => {}): Promise<boolean> {
+    return this.writes.run(file, async () => {
+      guard();
+      const path = file.path;
+      this.assert(file, path);
+      const raw = await this.vault.read(file);
+      guard();
+      this.assert(file, path);
+      const doc = readDocument(raw);
+      if (doc.properties.type !== 'article') return false;
+      // Any authored value (even null, empty or invalid) is protected.
+      if (Object.hasOwn(doc.properties, 'published')) return true;
+      if (formatPublished(published) !== published)
+        throw new Error('Invalid article creation time.');
+      await this.commit(
+        { file, path, raw, body: doc.body, properties: doc.properties },
+        (current) => {
+          guard();
+          return patchProperties(current, { published });
+        },
+      );
+      return true;
     });
   }
   /** RSS only: manual capture deliberately bypasses permanent suppression. */
