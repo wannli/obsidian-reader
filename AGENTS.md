@@ -27,8 +27,9 @@ Start with the [codebase map](docs/map.md), [approved scope](docs/rebuild-spec.m
 - With multiple worktrees, verify source authority and active file ownership before editing/building. Never replace validated code with an older partial rebuild or overwrite parallel features.
 - Pin native CLI calls to the registered vault ID before the command; verify the owned path and renderer. Respect native-input holds, even for read-only evaluation.
 - In the shared Sync acceptance vault, keep Hot Reload, watchers, corpora, backups and instrumentation out of Sync. Do not change Sync or companion-plugin settings without explicit authorization.
-- Do not stash, discard, auto-merge, or include unrelated work. Commits, merges, pushes, version changes, tags, publication and vault installation are separate authorization boundaries. When authorized, use Conventional Commits and describe the implemented scope and validation in the body. Hot Reload is for isolated development, never the shared Sync acceptance profile.
-- Release Please owns version and changelog updates. Release only by merging its PR; do not create or move tags manually.
+- Whenever requested work is complete and you are confident in its correctness after appropriate validation, commit your changes and push them to remote `main`; Wannes grants standing authorization for these commits and pushes. If validation or a safe push is blocked, report the blocker rather than forcing the push. Use Conventional Commits and describe the implemented scope and validation in the body.
+- Do not stash, discard, auto-merge, or include unrelated work. Vault installation remains a separate authorization boundary. Hot Reload is for isolated development, never the shared Sync acceptance profile.
+- Release management is exclusively Wannes's responsibility. Do not perform version bumps, changelog release updates, tag creation/movement, release PR merges, publication, or other release actions. Release Please owns version and changelog updates; Wannes handles releases by merging its PR.
 - Report actual checks run. Browser simulations do not prove native iOS, e-ink hardware, or cross-device sync behavior.
 
 ## Storage principles
