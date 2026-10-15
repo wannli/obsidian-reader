@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.1](https://github.com/wannli/obsidian-reader/compare/0.7.0...0.7.1) (2026-10-15)
+
+
+### Fixed
+
+* **capture:** enable native source-link extraction and article redownload ([3c337cd](https://github.com/wannli/obsidian-reader/commit/3c337cd969ede4f0d023be51f37e0c5c3c88b0a0))
+
 ## [0.7.0](https://github.com/wannli/obsidian-reader/compare/0.6.2...0.7.0) (2026-10-15)
 
 
