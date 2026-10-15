@@ -6,7 +6,9 @@ body.is-mobile.reader-mobile-active .mobile-navbar {
 }
 .view-content.reader-view,
 .reader-view {
-  --reader-controls-clearance: calc(60px + max(8px, env(safe-area-inset-bottom, 0px)));
+  --reader-pane-padding: 12px;
+  --reader-controls-bottom: max(8px, env(safe-area-inset-bottom, 0px));
+  --reader-controls-clearance: calc(60px + var(--reader-controls-bottom));
   --reader-scrollbar-clearance: 16px;
   box-sizing: border-box;
   position: relative;
@@ -15,7 +17,7 @@ body.is-mobile.reader-mobile-active .mobile-navbar {
   gap: 12px;
   height: 100%;
   min-height: 0;
-  padding: 12px;
+  padding: var(--reader-pane-padding);
   overflow: hidden;
 }
 .reader-view *,
@@ -72,7 +74,7 @@ body.is-mobile.reader-mobile-active .mobile-navbar {
   position: absolute;
   z-index: 2;
   left: 50%;
-  bottom: max(8px, env(safe-area-inset-bottom, 0px));
+  bottom: var(--reader-controls-bottom);
   transform: translateX(-50%);
   display: grid;
   gap: 4px;
@@ -85,6 +87,10 @@ body.is-mobile.reader-mobile-active .mobile-navbar {
   border-radius: 6px;
   background: var(--background-primary);
   box-shadow: none;
+}
+/* Article controls belong to the inner column, inset by the leaf padding. */
+.reader-view > .reader-toolbar {
+  bottom: calc(var(--reader-pane-padding) + var(--reader-controls-bottom));
 }
 .reader-toolbar {
   grid-template-columns: repeat(4, 44px);

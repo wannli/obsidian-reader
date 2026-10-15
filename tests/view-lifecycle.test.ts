@@ -2178,6 +2178,9 @@ describe('leaf-scoped floating Reader layout', () => {
           entry.style?.getPropertyValue('--reader-controls-clearance'),
         )!.style;
         expect(root.getPropertyValue('--reader-controls-clearance')).toContain(
+          'var(--reader-controls-bottom)',
+        );
+        expect(root.getPropertyValue('--reader-controls-bottom')).toContain(
           'safe-area-inset-bottom',
         );
         expect(root.getPropertyValue('--reader-scrollbar-clearance')).toBe('16px');
