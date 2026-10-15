@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.2](https://github.com/wannli/obsidian-reader/compare/0.7.1...0.7.2) (2026-10-15)
+
+
+### Fixed
+
+* **release:** build exact tags and retry draft publication ([3b8123e](https://github.com/wannli/obsidian-reader/commit/3b8123ec427c1a81664662d1be01f849d1f1e089))
+
 ## [0.7.1](https://github.com/wannli/obsidian-reader/compare/0.7.0...0.7.1) (2026-10-15)
 
 
