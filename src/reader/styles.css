@@ -252,7 +252,7 @@ body.is-mobile.reader-mobile-active .mobile-navbar {
   height: 1em;
 }
 .reader-actions {
-  grid-template-columns: repeat(5, 44px);
+  grid-template-columns: repeat(6, 44px);
 }
 .reader-view .reader-actions > button.reader-icon-button {
   width: 100% !important;
