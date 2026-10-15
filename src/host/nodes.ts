@@ -30,7 +30,7 @@ export interface NodesApi {
 }
 export function nodesApi(app: App): NodesApi | undefined {
   const host = app as App & { plugins?: { getPlugin(id: string): { api?: NodesApi } | undefined } };
-  const api = host.plugins?.getPlugin('obsidian-nodes')?.api;
+  const api = host.plugins?.getPlugin('fileclass-inline')?.api;
   return api?.version === 2 &&
     ['listTypes', 'searchNodes', 'getNode', 'createNode'].every(
       (key) => typeof (api as unknown as Record<string, unknown>)[key] === 'function',
