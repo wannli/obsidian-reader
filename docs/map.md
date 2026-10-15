@@ -17,16 +17,17 @@ src/main.ts                         Obsidian lifecycle, commands, routing
 
 ## Core: data and guarded writes
 
-| File in `src/core/` | Responsibility                                                          |
-| ------------------- | ----------------------------------------------------------------------- |
-| `model.ts`          | Article/feed types, paths, URLs, safe filenames, calendar-month age     |
-| `folders.ts`        | Five independent role paths, portable validation and overlap rejection  |
-| `document.ts`       | YAML AST updates and exact-revision Markdown snapshots                  |
-| `catalog.ts`        | Metadata-only queue/search/URL index and stable browsing snapshots      |
-| `store.ts`          | Serialized capture, acquisition, annotations, position, moves and trash |
-| `annotations.ts`    | Inline highlight/link operations, annotation detection, import escaping |
-| `projection.ts`     | Conservative mapping from rendered words to original Markdown ranges    |
-| `work.ts`           | Small keyed work queue and file-identity write serialization            |
+| File in `src/core/`      | Responsibility                                                            |
+| ------------------------ | ------------------------------------------------------------------------- |
+| `model.ts`               | Article/feed types, paths, URLs, safe filenames, calendar-month age       |
+| `folders.ts`             | Five independent role paths, portable validation and overlap rejection    |
+| `document.ts`            | YAML AST updates and exact-revision Markdown snapshots                    |
+| `capture-placeholder.ts` | Exact singleton native source-link eligibility; no authored-body override |
+| `catalog.ts`             | Metadata-only queue/search/URL index and stable browsing snapshots        |
+| `store.ts`               | Serialized capture, acquisition, annotations, position, moves and trash   |
+| `annotations.ts`         | Inline highlight/link operations, annotation detection, import escaping   |
+| `projection.ts`          | Conservative mapping from rendered words to original Markdown ranges      |
+| `work.ts`                | Small keyed work queue and file-identity write serialization              |
 
 `store.ts` is the mutation boundary. It rechecks current identity/revision, promotes before annotation, and uses guarded native moves. Session-only capture receipts permit safe filename retitling; they never become persisted ownership stamps. Explicit Reader deletion records feed-associated URLs in subscription `deleted_urls` before trash; RSS import rechecks suppression under a shared local import/delete lane. Expiry does not record suppression: it prefilters metadata, protects active work/backlinks, then reads only candidate bodies.
 
@@ -44,7 +45,7 @@ Runtime libraries: `yaml`, `marked`, `entities`, `dompurify`, `defuddle`. No UI 
 
 - `host/vault.ts`: public vault/metadata/editor APIs, dirty-buffer protection, folder/case collisions, recoverable trash, link-aware moves, change subscriptions.
 - `host/network.ts`: bounded request slots and delivery timeouts. An uncancellable timed-out request retains its slot until the host settles it.
-- `host/ingestion.ts`: local-only subscription creation (editable hostname title/prefix), explicit latest-20 Sync/Refresh feeds imports, dedupe, cancellation, and acquisition proof against current excerpt bytes. No automatic feed polling or add-time fetch/import.
+- `host/ingestion.ts`: local-only subscription creation (editable hostname title/prefix), explicit latest-20 Sync/Refresh feeds imports, dedupe, cancellation, and acquisition proof against current excerpt/standalone native source-link bytes. Explicit confirmed re-download is separate from conservative acquisition/Retry and retains snapshot/editor/lifetime guards. No automatic feed polling or add-time fetch/import.
 - `host/dialogs.ts` / `settings.ts`: native input/dialogs, staged independent-folder settings and subscription controls.
 - `host/read-later-setup.ts`: explicit create-only native iOS Quick Capture template installation and manual capture-location/Shortcuts instructions; no QuickAdd dependency, capture URI or native-settings writes.
 - `host/folder-settings.ts` / `folder-picker.ts`: explicit five-role folder-group persistence and native suggestions. Native Apply at the same current locations persisted `folders` in Reader `data.json`, preserving all three legacy keys/values; it aborted the old generation and opened a fresh list. All 43 Markdown/Base files were byte-identical across Apply: no automatic migration. Legacy keys stay inert; unknown settings remain preserved.

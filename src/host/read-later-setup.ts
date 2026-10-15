@@ -75,7 +75,7 @@ export function showReadLaterSetup(app: App, folders: ReaderFolders, signal: Abo
         text: 'Defuddle runs when Reader is active and online, not inside the background Quick Capture extension. Keep Obsidian open until extraction finishes. Offline captures retain their URL for foreground recovery. Native capture creates a new note each time; unlike Reader’s Add URL, it does not deduplicate URLs or apply Reader’s filenames.',
       });
       this.contentEl.createEl('p', {
-        text: 'For Safari Share Sheet capture instead (Obsidian 1.13+, iOS 18+), create a separate New note location in Inbox with Full Text enabled and a separate copy of the installed template with {{content}} replaced by {{url}}. The native Share Sheet appends the captured text itself; Reader preserves it rather than replacing it. URL-only body text is also protected, so use Full Text for that workflow.',
+        text: 'For Safari Share Sheet capture instead (Obsidian 1.13+, iOS 18+), create a separate New note location in Inbox and a separate copy of the installed template with {{content}} replaced by {{url}}. With Full Text off, Reader can replace the native standalone Markdown link when its destination exactly matches the source URL. Extra text, highlights, other links, plain URL bodies, and Full Text captures stay protected. To explicitly replace existing content, use Download article again (replace content) and confirm the warning.',
       });
       new Setting(this.contentEl).addButton((button) =>
         button.setButtonText('Done').onClick(() => this.close()),

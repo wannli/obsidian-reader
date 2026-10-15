@@ -63,7 +63,7 @@ vi.mock('../../src/host/network', () => ({
   },
 }));
 vi.mock('../../src/host/settings', () => ({ ReaderSettings: class {}, showFeeds: vi.fn() }));
-vi.mock('../../src/host/dialogs', () => ({ input: vi.fn() }));
+vi.mock('../../src/host/dialogs', () => ({ input: vi.fn(), confirmArticleReplacement: vi.fn() }));
 vi.mock('../../src/host/read-later-setup', () => ({ showReadLaterSetup: vi.fn() }));
 vi.mock('../../src/host/ingestion', () => ({
   Ingestion: class {

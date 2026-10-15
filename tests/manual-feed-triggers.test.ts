@@ -194,6 +194,57 @@ it('registers native capture setup without capturing, and ignores it after retir
 });
 
 it.each(['foreground', 'changed', 'resolve', 'resolved'])(
+  'shortlists a native single source-link capture after %s without body scans',
+  async (trigger) => {
+    const f = await fixture();
+    const file = { path: 'Reading/Inbox/Source link.md', extension: 'md' };
+    const properties = {
+      type: 'article',
+      url: 'https://example.com/native',
+      reading_position: 'Native title',
+    };
+    f.app.notes.set(file.path, { file, properties });
+    f.plugin.store.catalog.update(file.path, properties);
+    f.app.metadataCache.getFileCache = () => ({
+      frontmatter: properties,
+      sections: [{ type: 'yaml' }, { type: 'paragraph' }],
+      links: [{ link: properties.url }],
+    });
+    if (trigger === 'foreground') await f.event('visibilitychange');
+    else if (trigger === 'changed') f.runtime.watchers[0].changed({ path: file.path });
+    else await f.metadata(trigger, file);
+    expect(f.plugin.ingestion.acquire).toHaveBeenCalledExactlyOnceWith(file.path);
+    await f.metadata('resolve', file);
+    expect(f.plugin.ingestion.acquire).toHaveBeenCalledOnce();
+    expect(f.plugin.ingestion.refreshAll).not.toHaveBeenCalled();
+  },
+);
+
+it.each([
+  { sections: ['paragraph'], links: [] },
+  { sections: ['paragraph'], links: ['https://example.com/different'] },
+  { sections: ['paragraph'], links: ['https://example.com/native#different'] },
+  { sections: ['paragraph'], links: ['https://example.com/native', 'https://example.com/native'] },
+  { sections: ['heading', 'paragraph'], links: ['https://example.com/native'] },
+  { sections: ['paragraph', 'paragraph'], links: ['https://example.com/native'] },
+  { sections: ['paragraph', 'comment'], links: ['https://example.com/native'] },
+])('does not enqueue body reads for metadata non-candidates %j', async ({ sections, links }) => {
+  const f = await fixture();
+  const file = { path: 'Reading/Inbox/Protected.md', extension: 'md' };
+  const properties = { type: 'article', url: 'https://example.com/native' };
+  f.app.notes.set(file.path, { file, properties });
+  f.plugin.store.catalog.update(file.path, properties);
+  f.app.metadataCache.getFileCache = () => ({
+    frontmatter: properties,
+    sections: [{ type: 'yaml' }, ...sections.map((type) => ({ type }))],
+    links: links.map((link) => ({ link })),
+  });
+  await f.event('visibilitychange');
+  await f.metadata('resolve', file);
+  expect(f.plugin.ingestion.acquire).not.toHaveBeenCalled();
+});
+
+it.each(['foreground', 'changed', 'resolve', 'resolved'])(
   'recovers an externally created empty native capture after %s without polling feeds',
   async (trigger) => {
     const f = await fixture();
