@@ -33,7 +33,6 @@ afterAll(() => dom.teardown(globalThis));
 const mocks = vi.hoisted(() => ({
   choose: vi.fn(),
   topics: vi.fn(),
-  pickNode: vi.fn(),
   notice: vi.fn(),
   input: vi.fn(),
   confirmWebLink: vi.fn(),
@@ -160,7 +159,6 @@ vi.mock('../src/host/dialogs', () => ({
   input: mocks.input,
   confirmWebLink: mocks.confirmWebLink,
 }));
-vi.mock('../src/host/node-picker', () => ({ pickNode: mocks.pickNode }));
 vi.mock('../src/host/settings', () => ({ ReaderSettings: class {}, showFeeds: vi.fn() }));
 vi.mock('../src/host/vault', () => ({
   ObsidianVault: class {
@@ -262,7 +260,6 @@ beforeEach(() => {
   mocks.renderError = undefined;
   Platform.isMobile = false;
   mocks.choose.mockReset().mockResolvedValue(null);
-  mocks.pickNode.mockReset().mockResolvedValue(null);
   mocks.topics.mockResolvedValue(null);
 });
 afterEach(() => {
@@ -1364,16 +1361,13 @@ describe('public reading-list command and URI', () => {
       expect(mocks.commands.get('open-reader')!.name).toBe('Open reading list');
       expect([...mocks.protocols.keys()]).toEqual(['obsidian-reader']);
       const pending = gate(),
-        creation = new AbortController(),
-        chooser = new AbortController();
+        creation = new AbortController();
       f.probe.positionWrite = pending.promise;
       f.probe.nodeCreation = { controller: creation };
-      f.probe.passageChoice = chooser;
       f.probe.surface.selectionValue = { quote: 'words', before: 'before ', after: ' after' };
       f.probe.surface.marker = 'words';
       invoke(route);
       expect(creation.signal.aborted).toBe(true);
-      expect(chooser.signal.aborted).toBe(true);
       expect(f.view.file).toBe(article);
       pending.resolve();
       await f.probe.operations;
@@ -3197,6 +3191,28 @@ describe('browsing context and presentation', () => {
 });
 
 describe('commit-time annotation targets', () => {
+  function sharedPicker(f: ReturnType<typeof hostFixture>, target: TFile, wait = async () => {}) {
+    const node: NodeResult = {
+      path: target.path,
+      title: 'Target',
+      type: 'topic',
+      classes: ['topic'],
+      aliases: [],
+    };
+    const api: NodesApi = {
+      version: 2,
+      listTypes: () => [],
+      searchNodes: () => [node],
+      getNode: () => node,
+      createNode: vi.fn(async () => null),
+      pickNodeForLink: async (_options, link) => {
+        await wait();
+        await link(node);
+        return node;
+      },
+    };
+    (f.app as any).plugins = { getPlugin: () => ({ api }) };
+  }
   it('allows a position save while a link picker is open without losing the annotation', async () => {
     const f = hostFixture(),
       article = await f.note('Reading/Inbox/A.md', '==words=='),
@@ -3204,10 +3220,9 @@ describe('commit-time annotation targets', () => {
     await f.view.openArticle(article.path);
     const started = gate(),
       finish = gate();
-    mocks.choose.mockImplementation(async () => {
+    sharedPicker(f, target, async () => {
       started.resolve();
       await finish.promise;
-      return target;
     });
     const linking = menu(f.view, 'Link to note…');
     await started.promise;
@@ -3224,7 +3239,7 @@ describe('commit-time annotation targets', () => {
       article = await f.note('Reading/Inbox/A.md', '==words=='),
       target = await f.note('Notes/Target.md', '', 'topic');
     await f.view.openArticle(article.path);
-    mocks.choose.mockResolvedValue(target);
+    sharedPicker(f, target);
     const original = f.vault.process.bind(f.vault);
     vi.spyOn(f.vault, 'process').mockImplementation(async (file, transform) => {
       f.vault.files.set(target.path, { path: target.path });
@@ -3253,11 +3268,14 @@ describe('commit-time annotation targets', () => {
         searchNodes: () => [node],
         getNode: () => node,
         createNode: async () => node,
+        pickNodeForLink: async (_options: unknown, link: (node: NodeResult) => Promise<void>) => {
+          await link({ ...node });
+          return node;
+        },
       };
       let current: unknown = api;
       (f.app as any).plugins = { getPlugin: () => ({ api: current }) };
       await f.view.openArticle(article.path);
-      mocks.pickNode.mockResolvedValue({ ...node });
       const original = f.vault.process.bind(f.vault);
       vi.spyOn(f.vault, 'process').mockImplementation(async (file, transform) => {
         if (kind === 'api') current = { ...api };
@@ -3266,7 +3284,6 @@ describe('commit-time annotation targets', () => {
         else f.vault.files.set(target.path, { path: target.path });
         return original(file, transform);
       });
-      mocks.choose.mockResolvedValueOnce('By class');
       await expect(menu(f.view, 'Link to note…')).rejects.toThrow(/selected (node|note)/);
       expect((await f.store.read(article.path)).body).toBe('==words==');
     },
@@ -3314,7 +3331,7 @@ describe('commit-time annotation targets', () => {
       article = await f.note('Reading/Stream/A.md', '==words=='),
       target = await f.note('Notes/Target.md', '', 'topic');
     await f.view.openArticle(article.path);
-    mocks.choose.mockResolvedValue(target);
+    sharedPicker(f, target);
     // Opening now promotes preexisting annotations. Explicitly move back to Stream
     // to exercise the later annotation's own move-first partial-failure boundary.
     f.probe.snapshot = await f.store.move(await f.store.read(article.path), 'Stream');
@@ -3372,6 +3389,10 @@ describe('Nodes v2 linked creation', () => {
       // Discovery's last-bound type legitimately differs from creation's chosen class.
       getNode: vi.fn(() => ({ ...node, type: 'Other', classes: [...node.classes] })),
       createNode: vi.fn(async () => node),
+      pickNodeForLink: vi.fn(async (_options, link) => {
+        await link(node);
+        return node;
+      }),
     };
     (f.app as any).plugins = { getPlugin: () => ({ api }) };
     await f.view.openArticle(article.path);
@@ -3402,7 +3423,7 @@ describe('Nodes v2 linked creation', () => {
         const command = mocks.commands.get(id!);
         expect(command?.checkCallback?.(true)).toBe(true);
         expect(command?.checkCallback?.(false)).toBe(true);
-      } else if (route === 'menu' || route === 'menu-class') {
+      } else if (route === 'menu') {
         f.probe.surface.body.innerHTML = '<mark>words</mark>';
         f.probe.surface.body
           .querySelector('mark')
@@ -3461,8 +3482,8 @@ describe('Nodes v2 linked creation', () => {
           .querySelector('mark')
           .dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
         expect([...mocks.menus.at(-1)!.keys()]).toEqual([
-          ...(linked ? ['Open note', 'Change link…'] : ['Link to note…']),
-          ...(integrated ? ['Create note…'] : []),
+          ...(linked ? ['Open note'] : []),
+          ...(integrated ? [linked ? 'Change link…' : 'Link to note…', 'Create note…'] : []),
           '---',
           ...(linked ? ['Remove link (keeps highlight)'] : []),
           'Remove highlight',
@@ -3473,114 +3494,42 @@ describe('Nodes v2 linked creation', () => {
     },
   );
 
-  it('keeps all-note linking available inside the integrated linking flow', async () => {
-    const f = await fixture(),
-      target = await f.note('Notes/Ordinary.md', 'Keep ordinary note', 'note');
-    mocks.choose.mockResolvedValueOnce('All notes').mockResolvedValueOnce(target);
-    await menu(f.view, 'Link to note…');
-    expect(mocks.choose.mock.calls[0].slice(1, 3)).toEqual([
-      'Find a note',
-      ['All notes', 'By class'],
-    ]);
-    expect(mocks.choose.mock.calls[1][1]).toBe('Link passage to note');
-    expect(mocks.choose.mock.calls[1][2]).toContain(target);
-    expect(mocks.choose.mock.calls[1][4]).toBe(mocks.choose.mock.calls[0][4]);
-    expect(mocks.pickNode).not.toHaveBeenCalled();
-    expect(f.api.getNode).not.toHaveBeenCalled();
-    expect((await f.store.read(f.article.path)).body).toBe('==[[Notes/Ordinary.md|words]]==');
-    expect(await f.vault.read(target)).toContain('Keep ordinary note');
-  });
+  it.each(['Link to note…', 'Change link…', 'Create note…'])(
+    'uses the shared seeded picker for %s',
+    async (label) => {
+      const f = await fixture(label === 'Change link…' ? originalLinkedBody : '==words==');
+      await menu(f.view, label);
+      expect(f.api.pickNodeForLink).toHaveBeenCalledWith(
+        { suggestedTitle: 'words', sourcePath: f.article.path, signal: expect.any(AbortSignal) },
+        expect.any(Function),
+      );
+      expect(mocks.choose).not.toHaveBeenCalled();
+      expect(f.api.createNode).not.toHaveBeenCalled();
+      expect((await f.store.read(f.article.path)).body).toBe(linkedBody);
+    },
+  );
 
-  it.each([null, 'All notes', 'By class'])(
-    'cancels either linking chooser without a write: %j',
-    async (route) => {
+  it.each(['Link to note…', 'Create note…'])(
+    'cancels the shared picker without a write: %s',
+    async (label) => {
       const f = await fixture(),
         before = await f.vault.read(f.article);
-      mocks.choose.mockResolvedValueOnce(route).mockResolvedValueOnce(null);
-      await menu(f.view, 'Link to note…');
-      expect(mocks.choose).toHaveBeenCalledTimes(route === 'All notes' ? 2 : 1);
-      expect(mocks.pickNode).toHaveBeenCalledTimes(route === 'By class' ? 1 : 0);
+      f.api.pickNodeForLink = vi.fn(async () => null);
+      await menu(f.view, label);
       expect(await f.vault.read(f.article)).toBe(before);
       expect(f.vault.trashed).toEqual([]);
       expect(f.probe.dialog).toBe(false);
     },
   );
 
-  it('does not enter class search after the API changes in the chooser', async () => {
-    const f = await fixture();
-    mocks.choose.mockImplementation(async () => {
-      (f.app as any).plugins = { getPlugin: () => ({ api: { ...f.api } }) };
-      return 'By class';
-    });
-    await expect(menu(f.view, 'Link to note…')).rejects.toThrow('Nodes API changed');
-    expect(mocks.pickNode).not.toHaveBeenCalled();
-    expect((await f.store.read(f.article.path)).body).toBe('==words==');
-  });
-
-  it.each(['mode', 'all', 'class'] as const)(
-    'navigation aborts the active %s chooser before entering another picker',
-    async (stage) => {
-      const f = await fixture(),
-        entered = gate();
-      let choiceSignal!: AbortSignal;
-      const waitForAbort = (...args: any[]) => {
-        choiceSignal = args.at(-1);
-        entered.resolve();
-        return new Promise<null>((resolve) =>
-          choiceSignal.addEventListener('abort', () => resolve(null), { once: true }),
-        );
-      };
-      if (stage === 'mode') mocks.choose.mockImplementationOnce(waitForAbort);
-      else if (stage === 'all')
-        mocks.choose.mockResolvedValueOnce('All notes').mockImplementationOnce(waitForAbort);
-      else {
-        mocks.choose.mockResolvedValueOnce('By class');
-        mocks.pickNode.mockImplementationOnce(waitForAbort);
-      }
-      const linking = menu(f.view, 'Link to note…');
-      await entered.promise;
-      const leaving = f.view.readingList();
-      expect(choiceSignal.aborted).toBe(true);
-      await linking;
-      await leaving;
-      expect(mocks.choose).toHaveBeenCalledTimes(stage === 'all' ? 2 : 1);
-      expect(mocks.pickNode).toHaveBeenCalledTimes(stage === 'class' ? 1 : 0);
-      expect((await f.store.read(f.article.path)).body).toBe('==words==');
-      expect(f.view.file).toBeUndefined();
-      expect(f.vault.trashed).toEqual([]);
-    },
-  );
-
-  it('rejects a late mode choice after close without entering a picker', async () => {
-    const f = await fixture(),
-      entered = gate(),
-      released = gate();
-    let choiceSignal!: AbortSignal;
-    mocks.choose.mockImplementationOnce(async (...args: any[]) => {
-      choiceSignal = args.at(-1);
-      entered.resolve();
-      await released.promise;
-      return 'By class';
-    });
-    const linking = menu(f.view, 'Link to note…');
-    await entered.promise;
-    const close = f.view.onClose();
-    expect(choiceSignal.aborted).toBe(true);
-    released.resolve();
-    await linking;
-    await close;
-    expect(mocks.pickNode).not.toHaveBeenCalled();
-    expect((await f.store.read(f.article.path)).body).toBe('==words==');
-  });
-
-  it('preserves stale-source checks across the new chooser', async () => {
+  it('preserves stale-source checks across the shared picker', async () => {
     const f = await fixture(),
       changed = createDocument({ type: 'article' }, '==new words==');
-    mocks.choose.mockImplementationOnce(async () => {
+    f.api.pickNodeForLink = async (_options, link) => {
       f.vault.bytes.set(f.article, changed);
-      return 'By class';
-    });
-    mocks.pickNode.mockResolvedValueOnce(f.node);
+      await link(f.node);
+      return f.node;
+    };
     await expect(menu(f.view, 'Link to note…')).rejects.toThrow();
     expect(await f.vault.read(f.article)).toBe(changed);
     expect(f.vault.trashed).toEqual([]);
@@ -3610,8 +3559,6 @@ describe('Nodes v2 linked creation', () => {
     async (...classes) => {
       const f = await fixture();
       f.api.getNode = () => ({ ...f.node, type: 'Other', classes });
-      mocks.pickNode.mockResolvedValue(f.node);
-      mocks.choose.mockResolvedValueOnce('By class');
       await menu(f.view, 'Link to note…');
       expect((await f.store.read(f.article.path)).body).toBe(linkedBody);
     },
@@ -3641,7 +3588,7 @@ describe('Nodes v2 linked creation', () => {
         await f.view.changed({ path: file.path, metadataChanged: true });
         return raw;
       });
-      f.api.createNodeForLink = vi.fn(async (options, link) => {
+      f.api.pickNodeForLink = vi.fn(async (options, link) => {
         expect(options).toMatchObject({ suggestedTitle: 'words', sourcePath: f.article.path });
         requestSignal = options.signal!;
         expect(requestSignal.aborted).toBe(false);
@@ -3683,7 +3630,7 @@ describe('Nodes v2 linked creation', () => {
         linked = gate(),
         stopped = gate();
       let requestSignal!: AbortSignal;
-      f.api.createNodeForLink = async (options, link) => {
+      f.api.pickNodeForLink = async (options, link) => {
         requestSignal = options.signal!;
         requestSignal.addEventListener('abort', () => stopped.resolve(), { once: true });
         await link(f.node);
@@ -3724,7 +3671,7 @@ describe('Nodes v2 linked creation', () => {
       entered = gate(),
       stopped = gate();
     let requestSignal!: AbortSignal;
-    f.api.createNodeForLink = async (options) => {
+    f.api.pickNodeForLink = async (options) => {
       requestSignal = options.signal!;
       requestSignal.addEventListener('abort', () => stopped.resolve(), { once: true });
       entered.resolve();
@@ -3758,7 +3705,7 @@ describe('Nodes v2 linked creation', () => {
         stopped = gate();
       f.probe.readingQueue.open([f.article.path, next.path], f.article.path);
       let requestSignal!: AbortSignal;
-      f.api.createNodeForLink = async (options, link) => {
+      f.api.pickNodeForLink = async (options, link) => {
         requestSignal = options.signal!;
         requestSignal.addEventListener('abort', () => stopped.resolve(), { once: true });
         if (phase === 'after') await link(f.node);
@@ -3801,7 +3748,7 @@ describe('Nodes v2 linked creation', () => {
       f.probe.readingQueue.open([f.article.path, next.path], f.article.path);
       const annotate = vi.spyOn(f.store, 'annotate');
       let requestSignal!: AbortSignal;
-      f.api.createNodeForLink = vi.fn(async (options, link) => {
+      f.api.pickNodeForLink = vi.fn(async (options, link) => {
         requestSignal = options.signal!;
         if (phase === 'after') await link(f.node);
         entered.resolve();
@@ -3821,7 +3768,7 @@ describe('Nodes v2 linked creation', () => {
       await creation;
       await transition; // Must finish while the provider remains suspended.
       providerRelease.resolve();
-      await vi.mocked(f.api.createNodeForLink).mock.results[0].value;
+      await vi.mocked(f.api.pickNodeForLink).mock.results[0].value;
       expect(annotate).toHaveBeenCalledTimes(phase === 'after' ? 1 : 0);
       expect((await f.store.read(f.article.path)).body).toBe(
         phase === 'after' ? linkedBody : '==words==',
@@ -3849,7 +3796,6 @@ describe('Nodes v2 linked creation', () => {
         ['link', 'external'],
         ['menu', 'Open note'],
         ['menu', 'Change link…'],
-        ['menu-class', 'Change link…'],
         ['menu', 'Create note…'],
         ['menu', 'Remove link (keeps highlight)'],
         ['menu', 'Remove highlight'],
@@ -3865,12 +3811,9 @@ describe('Nodes v2 linked creation', () => {
         targetBytes = await f.vault.read(f.target);
       const sourcePath = f.article.path;
       const neighbour = f.probe.readingQueue.neighbour(label === 'Previous' ? -1 : 1, () => true);
-      mocks.pickNode.mockResolvedValue(null);
-      if (label === 'Change link…')
-        mocks.choose.mockResolvedValueOnce(route === 'menu-class' ? 'By class' : 'All notes');
       let requestSignal!: AbortSignal,
         calls = 0;
-      f.api.createNodeForLink = vi.fn(async (options, link) => {
+      f.api.pickNodeForLink = vi.fn(async (options, link) => {
         if (++calls > 1) return null; // A second explicit Create node action is cancelled at its picker.
         requestSignal = options.signal!;
         if (phase === 'after') await link(f.node);
@@ -3893,12 +3836,14 @@ describe('Nodes v2 linked creation', () => {
         if (label === 'Read later') {
           expect(f.article.path).toBe('Reading/Later/A.md');
           expect(f.view.file).toBe(f.article);
+          expect(mocks.choose).not.toHaveBeenCalled();
+          expect(f.api.pickNodeForLink).toHaveBeenCalledTimes(1);
+          expect(f.probe.readingQueue.neighbour(1, () => true)).toBe(neighbour);
         }
         if (label === 'List') expect(f.view.file).toBeUndefined();
         if (label === 'Move…') expect(mocks.choose).toHaveBeenCalled();
         if (label === 'Topics…') expect(mocks.topics).toHaveBeenCalled();
-        if (label === 'Change link…') expect(mocks.choose).toHaveBeenCalled();
-        if (route === 'menu-class') expect(mocks.pickNode).toHaveBeenCalled();
+        if (label === 'Change link…') expect(f.api.pickNodeForLink).toHaveBeenCalledTimes(2);
         if (label === 'Create note…') expect(calls).toBe(2);
         if (label === 'Save to Treasury') expect(f.article.path).toBe('Reading/Treasury/A.md');
         if (label === 'Open Markdown')
@@ -3931,7 +3876,7 @@ describe('Nodes v2 linked creation', () => {
           expect(f.web).not.toHaveBeenCalled();
         }
         providerRelease.resolve();
-        await vi.mocked(f.api.createNodeForLink).mock.results[0].value;
+        await vi.mocked(f.api.pickNodeForLink).mock.results[0].value;
         const changesPassage = ['Remove link (keeps highlight)', 'Remove highlight'].includes(
           label,
         );
@@ -3977,7 +3922,7 @@ describe('Nodes v2 linked creation', () => {
         await release.promise;
         return raw;
       });
-      f.api.createNodeForLink = async (options, link) => {
+      f.api.pickNodeForLink = async (options, link) => {
         requestSignal = options.signal!;
         await link(f.node);
         return f.node;
@@ -4020,7 +3965,7 @@ describe('Nodes v2 linked creation', () => {
         entered = gate(),
         providerRelease = gate();
       let requestSignal!: AbortSignal;
-      f.api.createNodeForLink = vi.fn(async (options, link) => {
+      f.api.pickNodeForLink = vi.fn(async (options, link) => {
         requestSignal = options.signal!;
         if (phase === 'after') await link(f.node);
         entered.resolve();
@@ -4052,7 +3997,7 @@ describe('Nodes v2 linked creation', () => {
           { interval: 1 },
         );
         providerRelease.resolve();
-        await vi.mocked(f.api.createNodeForLink).mock.results[0].value;
+        await vi.mocked(f.api.pickNodeForLink).mock.results[0].value;
         expect(await f.vault.read(f.article)).toBe(external);
         expect(f.vault.file(f.target.path)).toBe(f.target);
         expect(f.vault.trashed).toEqual([]);
@@ -4074,7 +4019,7 @@ describe('Nodes v2 linked creation', () => {
       const f = await uiFixture(),
         entered = gate(),
         release = gate();
-      f.api.createNodeForLink = vi.fn(async () => f.node);
+      f.api.pickNodeForLink = vi.fn(async () => f.node);
       try {
         const busy = f.probe.operation(async () => {
           entered.resolve();
@@ -4087,7 +4032,7 @@ describe('Nodes v2 linked creation', () => {
         await busy;
         await creation;
         await f.probe.operations;
-        expect(f.api.createNodeForLink).not.toHaveBeenCalled();
+        expect(f.api.pickNodeForLink).not.toHaveBeenCalled();
         expect(f.api.createNode).not.toHaveBeenCalled();
         expect(f.vault.file(f.target.path)).toBe(f.target);
         expect(f.vault.trashed).toEqual([]);
@@ -4104,7 +4049,7 @@ describe('Nodes v2 linked creation', () => {
       entered = gate(),
       complete = gate();
     let requestSignal!: AbortSignal;
-    f.api.createNodeForLink = async (options, link) => {
+    f.api.pickNodeForLink = async (options, link) => {
       requestSignal = options.signal!;
       await link(f.node);
       entered.resolve();
@@ -4147,7 +4092,7 @@ describe('Nodes v2 linked creation', () => {
     const f = await fixture(),
       entered = gate(),
       release = gate();
-    f.api.createNodeForLink = vi.fn(async () => f.node);
+    f.api.pickNodeForLink = vi.fn(async () => f.node);
     const busy = f.probe.operation(async () => {
       entered.resolve();
       await release.promise;
@@ -4159,7 +4104,7 @@ describe('Nodes v2 linked creation', () => {
     await busy;
     await creation;
     await navigation;
-    expect(f.api.createNodeForLink).not.toHaveBeenCalled();
+    expect(f.api.pickNodeForLink).not.toHaveBeenCalled();
     expect(f.api.createNode).not.toHaveBeenCalled();
     expect((await f.store.read(f.article.path)).body).toBe('==words==');
     expect(f.vault.trashed).toEqual([]);
@@ -4172,7 +4117,7 @@ describe('Nodes v2 linked creation', () => {
         annotate = vi.spyOn(f.store, 'annotate');
       const rejection = { reason: 'completion failed' },
         targetBytes = await f.vault.read(f.target);
-      f.api.createNodeForLink = async (_options, link) => {
+      f.api.pickNodeForLink = async (_options, link) => {
         await link(f.node);
         if (kind === 'cancel') f.probe.articleLifetime.abort();
         if (kind === 'reject') throw rejection;
@@ -4195,7 +4140,7 @@ describe('Nodes v2 linked creation', () => {
       const f = await fixture(),
         annotate = vi.spyOn(f.store, 'annotate');
       let late!: (node: NodeResult) => Promise<void>;
-      f.api.createNodeForLink = async (_options, link) => {
+      f.api.pickNodeForLink = async (_options, link) => {
         late = link;
         return result === 'null' ? null : f.node;
       };
@@ -4220,7 +4165,7 @@ describe('Nodes v2 linked creation', () => {
       return process(file, update);
     });
     let pending!: Promise<void>;
-    f.api.createNodeForLink = async (_options, link) => {
+    f.api.pickNodeForLink = async (_options, link) => {
       pending = link(f.node);
       void pending.catch(() => {});
       await entered.promise;
@@ -4244,7 +4189,7 @@ describe('Nodes v2 linked creation', () => {
   it('rejects a duplicate callback without attempting a second source write', async () => {
     const f = await fixture(),
       annotate = vi.spyOn(f.store, 'annotate');
-    f.api.createNodeForLink = async (_options, link) => {
+    f.api.pickNodeForLink = async (_options, link) => {
       await link(f.node);
       await link(f.node);
       return f.node;
@@ -4274,7 +4219,7 @@ describe('Nodes v2 linked creation', () => {
         completion = vi.fn(),
         targetBytes = await f.vault.read(f.target);
       const replacement = createDocument({ type: 'article' }, 'New source');
-      f.api.createNodeForLink = async (_options, link) => {
+      f.api.pickNodeForLink = async (_options, link) => {
         if (kind === 'disk-source') f.vault.bytes.set(f.article, replacement);
         if (kind === 'snapshot') {
           f.vault.bytes.set(f.article, replacement);
@@ -4317,7 +4262,7 @@ describe('Nodes v2 linked creation', () => {
       f.probe.articleLifetime.abort();
       return result;
     });
-    f.api.createNodeForLink = async (_options, link) => {
+    f.api.pickNodeForLink = async (_options, link) => {
       await link(f.node);
       completion();
       return f.node;
@@ -4333,7 +4278,7 @@ describe('Nodes v2 linked creation', () => {
     const f = await fixture(),
       entered = gate(),
       complete = gate();
-    f.api.createNodeForLink = async (_options, link) => {
+    f.api.pickNodeForLink = async (_options, link) => {
       entered.resolve();
       await complete.promise;
       await link(f.node);
@@ -4349,40 +4294,30 @@ describe('Nodes v2 linked creation', () => {
     expect((await f.store.read(f.article.path)).body).toBe(linkedBody);
   });
 
-  it('uses guarded standalone capture only when linked capture is absent', async () => {
-    const f = await fixture(),
-      entered = gate(),
-      complete = gate(),
-      annotate = vi.spyOn(f.store, 'annotate');
-    f.api.createNode = vi.fn(async (options) => {
-      expect(options?.sourcePath).toBe(f.article.path);
-      entered.resolve();
-      await complete.promise;
-      return f.node;
-    });
-    const creation = menu(f.view, 'Create note…');
-    await entered.promise;
-    expect(annotate).not.toHaveBeenCalled();
-    complete.resolve();
-    await creation;
-    expect(f.api.createNode).toHaveBeenCalledOnce();
-    expect(annotate).toHaveBeenCalledOnce();
-    expect((await f.store.read(f.article.path)).body).toBe(linkedBody);
-  });
-
-  it('does not prune a standalone partial result or link a late standalone result after cancellation', async () => {
-    const f = await fixture();
-    f.api.createNode = vi.fn(async () => null);
-    await menu(f.view, 'Create note…');
-    expect(f.vault.file(f.target.path)).toBe(f.target);
-    f.api.createNode = vi.fn(async () => {
-      f.probe.articleLifetime.abort();
-      return f.node;
-    });
-    await expect(menu(f.view, 'Create note…')).rejects.toThrow('cancelled');
-    expect((await f.store.read(f.article.path)).body).toBe('==words==');
-    expect(f.vault.trashed).toEqual([]);
-  });
+  it.each(['missing', 'old', 'standalone', 'legacy-id'] as const)(
+    'leaves highlight actions usable without a supported picker (%s)',
+    async (mode) => {
+      const f = await fixture();
+      if (mode === 'missing') (f.app as any).plugins = undefined;
+      else if (mode === 'old') (f.api as any).version = 1;
+      else if (mode === 'standalone') delete f.api.pickNodeForLink;
+      else
+        (f.app as any).plugins = {
+          getPlugin: (id: string) => (id === 'obsidian-nodes' ? { api: f.api } : undefined),
+        };
+      await f.view.onOpen();
+      await f.view.openArticle(f.article.path, true);
+      f.probe.surface.body.innerHTML = '<mark>words</mark>';
+      f.probe.surface.body
+        .querySelector('mark')
+        .dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+      expect([...mocks.menus.at(-1)!.keys()]).toEqual(['---', 'Remove highlight']);
+      await menu(f.view, 'Remove highlight');
+      expect((await f.store.read(f.article.path)).body).toBe('words');
+      expect(f.api.createNode).not.toHaveBeenCalled();
+      f.view.stopForUnload();
+    },
+  );
 });
 
 describe('safe links and drawing', () => {

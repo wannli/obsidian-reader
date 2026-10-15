@@ -27,7 +27,6 @@ import { type ArticleStore, type Snapshot } from '../core/store';
 import { choose, chooseTopics, confirmWebLink } from '../host/dialogs';
 import type { Ingestion } from '../host/ingestion';
 import { nodesApi, type NodesApi, type NodeResult } from '../host/nodes';
-import { pickNode } from '../host/node-picker';
 import type { LibraryChange } from '../host/vault';
 import { ReadingSurface } from './surface';
 
@@ -101,7 +100,6 @@ export class ReaderView extends ItemView {
   private lifetime = new AbortController();
   private articleLifetime = new AbortController();
   private nodeCreationEpoch = 0;
-  private passageChoice?: AbortController;
   private indicatorReads = 0;
   private indicatorPump?: () => void;
   private boundaryNavigation = false;
@@ -1363,63 +1361,8 @@ export class ReaderView extends ItemView {
       );
     const api = nodesApi(this.app);
     if (passage.target) action('Open note', () => this.openLinked(passage.target!), false);
-    action(passage.target ? 'Change link…' : 'Link to note…', async (epoch) => {
-      if (epoch !== this.nodeCreationEpoch) return;
-      this.dialog = true;
-      const choice = new AbortController(),
-        abort = () => choice.abort();
-      this.passageChoice = choice;
-      for (const lifetime of [signal, this.host.signal]) {
-        if (lifetime.aborted) abort();
-        else lifetime.addEventListener('abort', abort, { once: true });
-      }
-      const active = () =>
-        !choice.signal.aborted &&
-        !this.stopping &&
-        epoch === this.nodeCreationEpoch &&
-        this.current(snapshot, generation);
-      const validate = (target: () => void) => () => {
-        if (!active()) throw new Error('The article changed; reopen the highlight menu.');
-        target();
-      };
-      try {
-        const route = api
-          ? await choose(
-              this.app,
-              'Find a note',
-              ['All notes', 'By class'],
-              (route) => route,
-              choice.signal,
-            )
-          : 'All notes';
-        if (!route || !active()) return;
-        this.assertDisplayed(snapshot);
-        if (route === 'By class' && api) {
-          if (nodesApi(this.app) !== api)
-            throw new Error('The Nodes API changed. Reopen the menu.');
-          const node = await pickNode(this.app, api, passage.text, choice.signal);
-          if (node && active())
-            await apply('link', node.path, validate(this.targetGuard(node.path, api, node.type)));
-        } else if (route === 'All notes') {
-          const file = await choose(
-            this.app,
-            'Link passage to note',
-            this.app.vault.getMarkdownFiles(),
-            (file) => file.path,
-            choice.signal,
-          );
-          if (file && active() && this.host.store.vault.file(file.path) === file)
-            await apply('link', file.path, validate(this.targetGuard(file.path)));
-        }
-      } finally {
-        signal.removeEventListener('abort', abort);
-        this.host.signal.removeEventListener('abort', abort);
-        if (this.passageChoice === choice) this.passageChoice = undefined;
-        this.dialog = false;
-      }
-    });
-    if (api) {
-      action('Create note…', async (creationEpoch) => {
+    if (api?.pickNodeForLink) {
+      const pick = async (creationEpoch: number) => {
         if (creationEpoch !== this.nodeCreationEpoch) return;
         this.dialog = true;
         const request = { controller: new AbortController(), source: snapshot, writing: false };
@@ -1489,16 +1432,10 @@ export class ReaderView extends ItemView {
             sourcePath: snapshot.path,
             signal: request.controller.signal,
           };
-          if (api.createNodeForLink !== undefined) {
-            // Nodes awaits our commit before required completion. Never link again from
-            // the returned identity/null, and never prune a created or partially filled note.
-            // A provider ignoring cancellation must not hold navigation hostage. The
-            // race observes late rejection; the callback still guards every actual write.
-            await Promise.race([api.createNodeForLink(options, link), cancelled]);
-          } else {
-            const node = await Promise.race([api.createNode(options), cancelled]);
-            if (node) await link(node);
-          }
+          // The shared picker awaits our commit before required completion. Never link
+          // again from its return value or prune a created/partially filled note.
+          // Race cancellation so an uncooperative provider cannot block navigation.
+          await Promise.race([api.pickNodeForLink!(options, link), cancelled]);
         } finally {
           acceptingLink = false;
           signal.removeEventListener('abort', abort);
@@ -1510,7 +1447,9 @@ export class ReaderView extends ItemView {
           // Closing the callback scope first also rejects a premature provider return.
           await pendingLink;
         }
-      });
+      };
+      action(passage.target ? 'Change link…' : 'Link to note…', pick);
+      action('Create note…', pick);
     }
     menu.addSeparator();
     if (passage.target) action('Remove link (keeps highlight)', () => apply('unlink'));
@@ -1521,7 +1460,6 @@ export class ReaderView extends ItemView {
     // Explicit navigation/action intent only, never save/render/position/background flush.
     // Run before entering the operation queue that Nodes currently occupies.
     this.nodeCreationEpoch++;
-    this.passageChoice?.abort();
     this.nodeCreation?.controller.abort();
   }
   /** Validate only the active Nodes request, independently of its occupied operation queue.

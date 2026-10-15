@@ -18,9 +18,8 @@ export interface NodesApi {
     sourcePath?: string;
     signal?: AbortSignal;
   }): Promise<NodeResult | null>;
-  createNodeForLink?(
+  pickNodeForLink?(
     options: {
-      type?: string;
       suggestedTitle?: string;
       sourcePath: string;
       signal?: AbortSignal;
@@ -35,7 +34,7 @@ export function nodesApi(app: App): NodesApi | undefined {
     ['listTypes', 'searchNodes', 'getNode', 'createNode'].every(
       (key) => typeof (api as unknown as Record<string, unknown>)[key] === 'function',
     ) &&
-    (api.createNodeForLink === undefined || typeof api.createNodeForLink === 'function')
+    (api.pickNodeForLink === undefined || typeof api.pickNodeForLink === 'function')
     ? api
     : undefined;
 }

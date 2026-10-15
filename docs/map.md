@@ -47,7 +47,7 @@ Runtime libraries: `yaml`, `marked`, `entities`, `dompurify`, `defuddle`. No UI 
 - `host/ingestion.ts`: local-only subscription creation (editable hostname title/prefix), explicit latest-20 Sync/Refresh feeds imports, dedupe, cancellation, and acquisition proof against current excerpt bytes. No automatic feed polling or add-time fetch/import.
 - `host/dialogs.ts` / `settings.ts`: native input/dialogs, staged independent-folder settings and subscription controls.
 - `host/folder-settings.ts` / `folder-picker.ts`: explicit five-role folder-group persistence and native suggestions. Native Apply at the same current locations persisted `folders` in Reader `data.json`, preserving all three legacy keys/values; it aborted the old generation and opened a fresh list. All 43 Markdown/Base files were byte-identical across Apply: no automatic migration. Legacy keys stay inert; unknown settings remain preserved.
-- `host/nodes.ts` / `node-picker.ts`: optional public Nodes v2 API; Fileclass class/icon discovery, existing-note fallback and delegated creation. No private Fileclass calls, invented schema colors, or duplicate schema system.
+- `host/nodes.ts`: optional public `fileclass-inline.api` v2. Link/Change and Create note require `pickNodeForLink` and delegate to Fileclass Inline’s shared picker. No Reader picker, All notes route, standalone fallback, private Fileclass calls or migration.
 
 ## Reader: presentation and transient state
 
@@ -59,7 +59,7 @@ Runtime libraries: `yaml`, `marked`, `entities`, `dompurify`, `defuddle`. No UI 
 - `reader/text.ts`: visible-text indexing across inline nodes.
 - `reader/styles.css`: the **only source stylesheet**, with leaf-owned floating controls and scroll clearance. Only Obsidian’s floating mobile navigation bar is hidden while Reader is active; native editing/capture controls remain.
 
-Linked Nodes creation must reject an uncertain source write, commit before required completion when the v2 callback API is available, and never prune the target. Creation's chosen class may differ from discovery's last bound class; validate membership, not unique-type equality.
+Shared-picker linking/creation must reject an uncertain source write, commit in the v2 callback before required completion, and never prune the target. Preserve single-use callbacks, cancellation races and dispatched-write draining. Creation's chosen class may differ from discovery's last bound class; validate membership, not unique-type equality.
 
 Displayed text must match the write snapshot before a selection action. Position-only changes do not remount the article. Close saving is best effort: Obsidian unload cannot await completion or undo host I/O already started.
 
