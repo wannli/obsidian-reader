@@ -227,6 +227,29 @@ it.each(['scroll', 'selectionchange', 'pointerdown', 'keydown', 'visibilitychang
     expect(status().hidden).toBe(true);
   },
 );
+it('invalidates on article pointerdown before a Reader bubble boundary without clearing selection', () => {
+  const confirm = feedback.prepare(range),
+    workspace = vi.fn(),
+    events = new AbortController();
+  confirm();
+  parent.addEventListener('pointerdown', (event) => event.stopPropagation(), {
+    passive: true,
+    signal: events.signal,
+  });
+  document.addEventListener('pointerdown', workspace, { signal: events.signal });
+  try {
+    const event = new Event('pointerdown', { bubbles: true, cancelable: true });
+    body.dispatchEvent(event);
+    expect(event.defaultPrevented).toBe(false);
+    expect(workspace).not.toHaveBeenCalled();
+    expect(status().hidden).toBe(true);
+    expect(document.getSelection()!.toString()).toBe('selected passage');
+    confirm();
+    expect(status().hidden).toBe(true);
+  } finally {
+    events.abort();
+  }
+});
 it('invalidates on resize and disposal', () => {
   const confirm = feedback.prepare(range);
   window.dispatchEvent(new Event('resize'));

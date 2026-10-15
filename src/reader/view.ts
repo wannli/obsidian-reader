@@ -171,39 +171,81 @@ export class ReaderView extends ItemView {
   async onOpen(): Promise<void> {
     const doc = this.containerEl.ownerDocument,
       options = { signal: this.lifetime.signal };
+    const pointers = new Set<number>(),
+      touches = new Set<number>();
+    const release = (event: Event) => {
+      if (this.stopping || this.host.signal.aborted) return;
+      if (event.type.startsWith('touch')) {
+        for (const touch of Array.from((event as TouchEvent).changedTouches ?? []))
+          touches.delete(touch.identifier);
+      } else pointers.delete((event as PointerEvent).pointerId);
+      this.selecting = pointers.size > 0 || touches.size > 0;
+      this.selectionChanged();
+    };
     doc.addEventListener('selectionchange', () => this.selectionChanged(), options);
     this.contentEl.addEventListener(
       'pointerdown',
-      () => {
+      (event) => {
+        if (this.stopping || this.host.signal.aborted) return;
+        pointers.add(event.pointerId);
         this.selecting = true;
         this.invalidateSelection();
       },
       options,
     );
-    doc.addEventListener(
-      'pointerup',
+    for (const type of ['pointerup', 'pointercancel', 'touchend', 'touchcancel'])
+      doc.addEventListener(type, release, options);
+    doc.defaultView?.addEventListener(
+      'blur',
       () => {
+        pointers.clear();
+        touches.clear();
         this.selecting = false;
         this.selectionChanged();
       },
       options,
     );
-    doc.addEventListener(
-      'pointercancel',
-      () => {
-        this.selecting = false;
-        this.selectionChanged();
-      },
-      options,
-    );
-    doc.addEventListener(
+    // Stop only workspace swipe recognition, not native selection, scrolling or
+    // zoom. Bubble after Surface's capture handlers and Reader's pointerdown.
+    const gestures = new AbortController(),
+      stopGestures = () => {
+        gestures.abort();
+        this.invalidateSelection();
+      };
+    this.lifetime.signal.addEventListener('abort', stopGestures, { once: true });
+    this.host.signal.addEventListener('abort', stopGestures, { ...options, once: true });
+    if (this.lifetime.signal.aborted || this.host.signal.aborted) stopGestures();
+    const isolate = (event: Event) => {
+      if (this.stopping || this.host.signal.aborted) return;
+      if (
+        event.type.startsWith('pointer') &&
+        !['touch', 'pen'].includes((event as PointerEvent).pointerType)
+      )
+        return;
+      if (event.type === 'touchstart') {
+        for (const touch of Array.from((event as TouchEvent).changedTouches ?? []))
+          touches.add(touch.identifier);
+        this.selecting = true;
+        this.invalidateSelection();
+      }
+      if (['pointerup', 'pointercancel', 'touchend', 'touchcancel'].includes(event.type))
+        release(event); // Document bubble cannot observe this isolated release.
+      event.stopPropagation();
+    };
+    for (const type of [
+      'touchstart',
+      'touchmove',
       'touchend',
-      () => {
-        this.selecting = false;
-        this.selectionChanged();
-      },
-      options,
-    );
+      'touchcancel',
+      'pointerdown',
+      'pointermove',
+      'pointerup',
+      'pointercancel',
+    ])
+      this.contentEl.addEventListener(type, isolate, {
+        passive: true,
+        signal: gestures.signal,
+      });
     this.contentEl.addEventListener('click', (event) => this.clicked(event), options);
     this.showList();
   }
@@ -753,7 +795,7 @@ export class ReaderView extends ItemView {
     return ++this.selectionRevision;
   }
   private selectionChanged(): void {
-    if (this.stopping) return;
+    if (this.stopping || this.host.signal.aborted) return;
     const revision = this.invalidateSelection();
     const selection = this.surface?.selection();
     if (!selection) {

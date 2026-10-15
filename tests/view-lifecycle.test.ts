@@ -603,6 +603,99 @@ describe('automatic selection event ownership', () => {
     expect(f.view.contentEl.textContent).not.toContain('End of article');
   });
 
+  function gesture(
+    type: string,
+    target: EventTarget = f.surface.body,
+    pointerType = 'touch',
+    pointerId = 1,
+  ): Event {
+    const event = new Event(type, { bubbles: true, cancelable: true });
+    Object.assign(event, {
+      button: 0,
+      pointerId,
+      pointerType,
+      changedTouches: [{ identifier: pointerId }],
+    });
+    target.dispatchEvent(event);
+    return event;
+  }
+
+  it.each(['article', 'list', 'controls', 'margin'] as const)(
+    'isolates the whole mobile gesture throughout Reader %s without cancelling defaults or same-element handlers',
+    async (area) => {
+      if (area === 'list') await f.view.readingList();
+      const target =
+        area === 'list'
+          ? f.view.contentEl.querySelector('.reader-list-item')!
+          : area === 'controls'
+            ? f.view.contentEl.querySelector('.reader-actions button')!
+            : area === 'margin'
+              ? f.view.contentEl
+              : f.surface.body;
+      const workspace = vi.fn(),
+        reader = vi.fn(),
+        capture = vi.fn();
+      const types = [
+        'pointerdown',
+        'touchstart',
+        'pointermove',
+        'touchmove',
+        'pointerup',
+        'pointercancel',
+        'touchend',
+        'touchcancel',
+      ];
+      for (const type of types) {
+        f.view.containerEl.addEventListener(type, workspace);
+        f.view.containerEl.addEventListener(type, capture, { capture: true });
+        f.view.contentEl.addEventListener(type, reader);
+        expect(gesture(type, target).defaultPrevented).toBe(false);
+      }
+      expect(workspace).not.toHaveBeenCalled();
+      expect(reader).toHaveBeenCalledTimes(types.length);
+      expect(capture).toHaveBeenCalledTimes(types.length); // Not a capture-phase barrier.
+      expect(f.probe.selecting).toBe(false);
+    },
+  );
+
+  it.each(
+    ['touch', 'pen'].flatMap((kind) =>
+      ['pointerup', 'pointercancel'].map((release) => ({ kind, release })),
+    ),
+  )(
+    'preserves selection and saves exactly once 900ms after isolated $kind $release',
+    async ({ kind, release }) => {
+      const annotate = vi.spyOn(f.store, 'annotate'),
+        workspace = vi.fn();
+      for (const type of ['pointerdown', 'pointerup', 'pointercancel', 'touchstart', 'touchend'])
+        f.view.containerEl.addEventListener(type, workspace);
+      gesture('pointerdown', f.surface.body, kind);
+      if (kind === 'touch') gesture('touchstart');
+      expect(f.surface.pointerActive).toBe(true);
+      f.select(0);
+      vi.advanceTimersByTime(1200);
+      await f.probe.operations;
+      expect(annotate).not.toHaveBeenCalled();
+      gesture(release, f.surface.body, kind);
+      expect(f.surface.pointerActive).toBe(false);
+      if (kind === 'touch') {
+        vi.advanceTimersByTime(1200); // A known touch remains even after pointer release/cancel.
+        await f.probe.operations;
+        expect(annotate).not.toHaveBeenCalled();
+        gesture('touchend');
+      }
+      vi.advanceTimersByTime(899);
+      await f.probe.operations;
+      expect(annotate).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(1);
+      await f.probe.operations;
+      expect(annotate).toHaveBeenCalledOnce();
+      expect((await f.store.read(f.article.path)).body).toBe('==Alpha== phrase.\n\nBeta phrase.');
+      expect(document.getSelection()!.toString()).toBe('Alpha');
+      expect(workspace).not.toHaveBeenCalled();
+    },
+  );
+
   it('restarts the full 900ms quiet period for every adjustment, including repeated text', async () => {
     const annotate = vi.spyOn(f.store, 'annotate');
     f.select(0);
@@ -618,6 +711,118 @@ describe('automatic selection event ownership', () => {
     expect(annotate).toHaveBeenCalledOnce();
     expect((await f.store.read(f.article.path)).body).toBe('Alpha phrase.\n\n==Beta== phrase.');
     expect(document.getSelection()!.toString()).toBe('Beta');
+  });
+
+  it.each(['pointerup', 'pointercancel', 'touchend', 'touchcancel'])(
+    'retains the outside-Reader %s fallback and its full quiet period',
+    async (release) => {
+      const annotate = vi.spyOn(f.store, 'annotate');
+      gesture(release.startsWith('touch') ? 'touchstart' : 'pointerdown');
+      f.select(0);
+      vi.advanceTimersByTime(1200);
+      await f.probe.operations;
+      expect(annotate).not.toHaveBeenCalled();
+      expect(gesture(release, document.body).defaultPrevented).toBe(false);
+      expect(f.surface.pointerActive).toBe(false);
+      expect(f.probe.selecting).toBe(false);
+      vi.advanceTimersByTime(899);
+      await f.probe.operations;
+      expect(annotate).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(1);
+      await f.probe.operations;
+      expect(annotate).toHaveBeenCalledOnce();
+      expect(document.getSelection()!.toString()).toBe('Alpha');
+    },
+  );
+
+  it('does not isolate mouse, click or keyboard events', () => {
+    const workspace = vi.fn();
+    for (const type of [
+      'pointerdown',
+      'pointermove',
+      'pointerup',
+      'pointercancel',
+      'click',
+      'keydown',
+    ]) {
+      f.view.containerEl.addEventListener(type, workspace);
+      expect(gesture(type, f.surface.body, 'mouse').defaultPrevented).toBe(false);
+    }
+    expect(workspace).toHaveBeenCalledTimes(6);
+  });
+
+  it('leaves native headers, other leaves and dialogs outside the mobile boundary', () => {
+    const header = document.createElement('button'),
+      other = document.createElement('div'),
+      dialog = document.createElement('dialog'),
+      outside = vi.fn(),
+      click = vi.fn(),
+      events = new AbortController();
+    f.view.containerEl.prepend(header);
+    document.body.append(other, dialog);
+    document.addEventListener('touchmove', outside, { signal: events.signal });
+    header.addEventListener('click', click);
+    try {
+      for (const target of [header, other, dialog])
+        expect(gesture('touchmove', target).defaultPrevented).toBe(false);
+      header.click();
+      expect(outside).toHaveBeenCalledTimes(3);
+      expect(click).toHaveBeenCalledOnce();
+    } finally {
+      events.abort();
+    }
+  });
+
+  it.each(['close', 'unload', 'host retirement'])(
+    'removes mobile interception after %s',
+    async (end) => {
+      const workspace = vi.fn(),
+        annotate = vi.spyOn(f.store, 'annotate');
+      f.view.containerEl.addEventListener('touchstart', workspace);
+      if (end === 'close') await f.view.onClose();
+      else if (end === 'unload') f.view.stopForUnload();
+      else f.signal.abort();
+      expect(gesture('touchstart', f.view.contentEl).defaultPrevented).toBe(false);
+      expect(workspace).toHaveBeenCalledOnce();
+      vi.advanceTimersByTime(1200);
+      await f.probe.operations;
+      expect(annotate).not.toHaveBeenCalled();
+    },
+  );
+
+  it('keeps a touch-only adjustment held until every known touch releases', async () => {
+    const annotate = vi.spyOn(f.store, 'annotate');
+    gesture('touchstart', f.surface.body, 'touch', 1);
+    gesture('touchstart', f.surface.body, 'touch', 2);
+    f.select(0);
+    gesture('touchend', f.surface.body, 'touch', 1);
+    vi.advanceTimersByTime(1200);
+    await f.probe.operations;
+    expect(annotate).not.toHaveBeenCalled();
+    gesture('touchcancel', f.surface.body, 'touch', 2);
+    vi.advanceTimersByTime(899);
+    await f.probe.operations;
+    expect(annotate).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1);
+    await f.probe.operations;
+    expect(annotate).toHaveBeenCalledOnce();
+    expect(document.getSelection()!.toString()).toBe('Alpha');
+  });
+
+  it('cancels a pending automatic save on host retirement without isolating later gestures', async () => {
+    const annotate = vi.spyOn(f.store, 'annotate'),
+      workspace = vi.fn();
+    f.view.containerEl.addEventListener('touchmove', workspace);
+    f.select(0);
+    vi.advanceTimersByTime(899);
+    f.signal.abort();
+    document.dispatchEvent(new Event('selectionchange'));
+    gesture('touchmove');
+    vi.advanceTimersByTime(1200);
+    await f.probe.operations;
+    expect(annotate).not.toHaveBeenCalled();
+    expect(workspace).toHaveBeenCalledOnce();
+    expect(document.getSelection()!.toString()).toBe('Alpha');
   });
 
   it('saves 900ms after the last pointer releases, shows one transient acknowledgement, then paints without clearing native selection', async () => {
