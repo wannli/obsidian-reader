@@ -9,7 +9,7 @@
     { "type": "feat", "section": "Added" },
     { "type": "fix", "section": "Fixed" },
     { "type": "perf", "section": "Improved" },
-    { "type": "refactor", "hidden": true },
+    { "type": "refactor", "section": "Refactored" },
     { "type": "chore", "hidden": true },
     { "type": "docs", "hidden": true },
     { "type": "ci", "hidden": true },

@@ -82,6 +82,13 @@ test('main pushes build before Release Please and publish only its created relea
   assert.doesNotMatch(release, /--clobber/);
 });
 
+test('Release Please includes refactors in the visible Refactored section', () => {
+  const refactor = config['changelog-sections'].find(({ type }) => type === 'refactor');
+  assert.ok(refactor, 'Refactors must have a changelog section');
+  assert.equal(refactor.section, 'Refactored');
+  assert.notEqual(refactor.hidden, true);
+});
+
 test('Release Please uses the last published version and Obsidian-compatible numeric tags', () => {
   assert.equal(config['release-type'], 'node');
   assert.equal(
