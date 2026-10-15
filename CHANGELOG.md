@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.8.0](https://github.com/wannli/obsidian-reader/compare/0.7.2...0.8.0) (2026-10-15)
+
+
+### Added
+
+* **reader:** merge YAML organization with current main ([6e50988](https://github.com/wannli/obsidian-reader/commit/6e50988febf62509acc333d87cc38e9d8c29eb99))
+* **reader:** organize articles with YAML status and bookmarks ([977a2ae](https://github.com/wannli/obsidian-reader/commit/977a2ae72379e05576179c9564be68e0bb785ccb))
+
 ## [0.7.2](https://github.com/wannli/obsidian-reader/compare/0.7.1...0.7.2) (2026-10-15)
 
 
