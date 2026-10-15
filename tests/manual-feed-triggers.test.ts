@@ -188,7 +188,7 @@ it('omits native capture setup while retaining explicit article re-download', as
     expect.arrayContaining([
       expect.objectContaining({
         id: 'redownload-article',
-        name: 'Download article again (replace content)',
+        name: 'Run Defuddle again (replace article content)',
         checkCallback: expect.any(Function),
       }),
     ]),

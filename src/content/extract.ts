@@ -1,6 +1,7 @@
 import { webUrl } from '../core/model';
 import { fragment, plainText, toMarkdown } from './html';
 import { parseHtml } from './bounds';
+import { restoreStreamedContent } from './stream';
 
 export interface Response {
   text: string;
@@ -22,6 +23,7 @@ export async function extract(url: string, get: Get): Promise<{ title: string; m
   const template = parseHtml(response.text);
   const title =
     plainText(template.content.querySelector('title')?.textContent ?? '') || new URL(url).hostname;
+  restoreStreamedContent(template.content);
   const safe = fragment(template.innerHTML, url);
   const doc = document.implementation.createHTMLDocument(title);
   doc.body.append(safe);
@@ -37,6 +39,18 @@ export async function extract(url: string, get: Get): Promise<{ title: string; m
   }).parse();
   const extracted = fragment(result.content, url);
   const readable = extracted.textContent?.replace(/\s+/g, ' ').trim() ?? '';
+  const normalized = (value: string): string =>
+    value
+      .toLowerCase()
+      .replace(/[^\p{L}\p{N}]+/gu, ' ')
+      .trim();
+  const text = normalized(readable);
+  const titleOnly = [title, result.title].some((candidate) => {
+    const heading = normalized(candidate || '');
+    return heading && text && text.split(heading).every((part) => !part.trim());
+  });
+  if (titleOnly)
+    throw new Error('Only the page title was found, not the article. Please retry extraction.');
   if (readable.length < 40 || (readable.match(/\p{L}/gu)?.length ?? 0) < 20)
     throw new Error('No readable article found. The page may be blocked or require JavaScript.');
   if (

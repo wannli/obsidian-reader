@@ -45,7 +45,7 @@ it.each([false, true])(
   'offers contextual replacement in Reader/native Markdown (%s), with side-effect-free checking',
   async (native) => {
     const f = await fixture(native);
-    expect(f.command.name).toBe('Download article again (replace content)');
+    expect(f.command.name).toBe('Run Defuddle again (replace article content)');
     expect(f.command.checkCallback!(true)).toBe(true);
     expect(confirmArticleReplacement).not.toHaveBeenCalled();
     f.command.checkCallback!(false);

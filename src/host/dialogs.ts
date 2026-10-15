@@ -110,7 +110,7 @@ export function confirmArticleReplacement(
   const lifetime = new AbortController();
   class Replacement extends Modal {
     onOpen(): void {
-      this.setTitle('Download article again (replace content)');
+      this.setTitle('Run Defuddle again?');
       this.contentEl.createEl('p', { text: path });
       this.contentEl.createEl('p', {
         text: 'Replace this article’s entire body, including all highlights and inline links, with newly downloaded content? Existing content is kept if downloading or extraction fails. This cannot be undone by Reader.',

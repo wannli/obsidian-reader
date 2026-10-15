@@ -36,7 +36,8 @@ src/main.ts                         Obsidian lifecycle, commands, routing
 ## Content: untrusted publisher input
 
 - `content/feed.ts`: RSS/Atom parsing; no historical cursor.
-- `content/extract.ts`: HTML response checks and Defuddle extraction without background fetching.
+- `content/extract.ts`: HTML response checks, title-only rejection and Defuddle extraction without background fetching.
+- `content/stream.ts`: inert restoration of unambiguous empty React streaming boundaries before extraction; ordinary hidden content stays excluded.
 - `content/html.ts`: DOMPurify sanitization, hidden-content removal, safe destinations, Markdown conversion.
 - `content/bounds.ts`: byte, node and nesting limits before expensive conversion.
 - `content/code.ts` / `security.ts`: literal passive code, processor-label removal, fail-closed default Dataview/Templater checks.

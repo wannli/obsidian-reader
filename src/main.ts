@@ -105,7 +105,7 @@ export default class ReaderPlugin extends Plugin {
     this.addCommand({ id: 'add-url', name: 'Add URL', callback: () => this.capture() });
     this.addCommand({
       id: 'redownload-article',
-      name: 'Download article again (replace content)',
+      name: 'Run Defuddle again (replace article content)',
       checkCallback: (checking) => {
         const view = this.app.workspace.getActiveViewOfType(ReaderView),
           native = this.app.workspace.getActiveViewOfType(MarkdownView),
