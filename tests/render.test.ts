@@ -1,6 +1,10 @@
 // @vitest-environment jsdom
 import { afterEach, expect, it, vi } from 'vitest';
-import { renderBody as renderMarkdown, selectedPassage } from '../src/reader/render';
+import {
+  renderBody as renderMarkdown,
+  selectedPassage,
+  selectionRange,
+} from '../src/reader/render';
 import {
   addHighlight,
   changePassage,
@@ -460,6 +464,74 @@ it('backs off failed image URLs across rerenders without retrying disposed views
   dispose();
   root.ownerDocument.dispatchEvent(new Event('visibilitychange'));
   expect(image.hasAttribute('src')).toBe(false);
+});
+
+it('bounds context work to adjacent text and keeps the live range probe serialization-free', () => {
+  const root = document.createElement('article');
+  root.innerHTML = `<p>${'prefix '.repeat(10000)}</p><p>before <strong>selected</strong> after</p><p>${'suffix '.repeat(10000)}</p>`;
+  document.body.append(root);
+  const range = document.createRange();
+  range.selectNodeContents(root.querySelector('strong')!);
+  document.getSelection()!.addRange(range);
+  const serialize = vi.spyOn(Range.prototype, 'toString');
+  expect(selectionRange(root)).toBe(range);
+  expect(serialize).not.toHaveBeenCalled();
+  const result = selectedPassage(root)!;
+  expect(result).toMatchObject({ quote: 'selected' });
+  expect(result.before).toHaveLength(120);
+  expect(result.after).toHaveLength(120);
+  expect(serialize).toHaveBeenCalledOnce(); // Only the selected words, never the article prefix/suffix.
+});
+
+it('matches native context slices at text and element boundaries across formatting and empty nodes', () => {
+  const root = document.createElement('article');
+  root.innerHTML = `<p>${'prefix '.repeat(30)}<b>bold<i>nested</i></b><!--ignored--><span></span>tail</p><p>next <em>formatted</em> words${' suffix'.repeat(30)}</p>`;
+  document.body.append(root);
+  const nodes: Node[] = [root];
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT);
+  let node: Node | null;
+  while ((node = walker.nextNode())) nodes.push(node);
+  for (const container of nodes) {
+    const size =
+      container.nodeType === Node.TEXT_NODE
+        ? container.nodeValue!.length
+        : container.childNodes.length;
+    for (const offset of new Set([0, Math.floor(size / 2), size])) {
+      const range = document.createRange();
+      range.setStart(container, offset);
+      range.setEndAfter(root.lastChild!);
+      if (range.collapsed) continue;
+      const before = document.createRange(),
+        after = document.createRange();
+      before.selectNodeContents(root);
+      before.setEnd(container, offset);
+      after.selectNodeContents(root);
+      after.setStart(range.endContainer, range.endOffset);
+      const selection = document.getSelection()!;
+      selection.removeAllRanges();
+      selection.addRange(range);
+      expect(selectedPassage(root)).toMatchObject({
+        quote: range.toString(),
+        before: before.toString().slice(-120),
+        after: after.toString().slice(0, 120),
+      });
+      // Also exercise the same boundary as an end point, not just a start point.
+      range.selectNodeContents(root);
+      range.setEnd(container, offset);
+      if (range.collapsed) continue;
+      before.selectNodeContents(root);
+      before.setEnd(range.startContainer, range.startOffset);
+      after.selectNodeContents(root);
+      after.setStart(container, offset);
+      selection.removeAllRanges();
+      selection.addRange(range);
+      expect(selectedPassage(root)).toMatchObject({
+        quote: range.toString(),
+        before: before.toString().slice(-120),
+        after: after.toString().slice(0, 120),
+      });
+    }
+  }
 });
 
 it('selection capture includes context but excludes UI outside the article', () => {

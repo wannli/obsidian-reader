@@ -596,6 +596,44 @@ describe('automatic selection event ownership', () => {
     vi.useRealTimers();
     vi.unstubAllGlobals();
   });
+  it('does not serialize text or update status during live selection adjustments or pointer holds', async () => {
+    const capture = vi.spyOn(f.surface, 'selection'),
+      status = vi.spyOn(f.probe, 'updateStatus'),
+      serialize = vi.spyOn(Range.prototype, 'toString'),
+      selectionText = vi.spyOn(document.getSelection()!, 'toString');
+    gesture('pointerdown', f.surface.body, 'mouse');
+    for (let i = 0; i < 20; i++) f.select(i % 2);
+    vi.advanceTimersByTime(1200);
+    expect(capture).not.toHaveBeenCalled();
+    expect(serialize).not.toHaveBeenCalled();
+    expect(selectionText).not.toHaveBeenCalled();
+    expect(status).not.toHaveBeenCalled();
+    gesture('pointerup', f.surface.body, 'mouse');
+    for (let i = 0; i < 20; i++) f.select(i % 2);
+    vi.advanceTimersByTime(899);
+    expect(capture).not.toHaveBeenCalled();
+    expect(serialize).not.toHaveBeenCalled();
+    expect(selectionText).not.toHaveBeenCalled();
+    expect(status).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1);
+    await f.probe.operations;
+    expect(capture).toHaveBeenCalled();
+    expect((await f.store.read(f.article.path)).body).toBe('Alpha phrase.\n\n==Beta== phrase.');
+  });
+
+  it('rejects a range changed without selectionchange before the quiet timer fires', async () => {
+    const capture = vi.spyOn(f.surface, 'selection');
+    f.select(0);
+    // jsdom also queues its own selectionchange task; hold delivery, as a native
+    // event can remain queued when the quiet-period timer gets its turn first.
+    vi.spyOn(f.probe, 'selectionChanged').mockImplementation(() => {});
+    f.select(1, 4, false);
+    vi.advanceTimersByTime(900);
+    await f.probe.operations;
+    expect(capture).not.toHaveBeenCalled();
+    expect((await f.store.read(f.article.path)).body).toBe(f.body);
+  });
+
   it('mounts one aligned article column with exactly six persistent actions outside the scroller', () => {
     const column = f.view.contentEl.querySelector('.reader-article')!;
     const actions = column.querySelector('.reader-actions')!;

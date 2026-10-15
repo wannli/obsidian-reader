@@ -116,24 +116,67 @@ export function renderBody(body: string, root: HTMLElement, base: string): () =>
     for (const image of images) image.removeAttribute('src');
   };
 }
-export function selectedPassage(
-  root: HTMLElement,
-): { range: Range; quote: string; before: string; after: string } | undefined {
+/** Containment-only probe: never serialize article text on live selection events. */
+export function selectionRange(root: HTMLElement): Range | undefined {
   const selection = root.ownerDocument.getSelection();
   if (!selection?.rangeCount || selection.isCollapsed) return;
   const range = selection.getRangeAt(0);
-  if (!root.contains(range.startContainer) || !root.contains(range.endContainer)) return;
-  const before = root.ownerDocument.createRange();
-  before.selectNodeContents(root);
-  before.setEnd(range.startContainer, range.startOffset);
-  const after = root.ownerDocument.createRange();
-  after.selectNodeContents(root);
-  after.setStart(range.endContainer, range.endOffset);
+  if (root.contains(range.startContainer) && root.contains(range.endContainer)) return range;
+}
+
+/** Read only the adjacent 120 UTF-16 units, preserving Range.toString() text semantics. */
+function selectionContext(
+  root: HTMLElement,
+  container: Node,
+  offset: number,
+  before: boolean,
+): string {
+  const descend = (node: Node): Node => {
+    let child: ChildNode | null;
+    while ((child = before ? node.lastChild : node.firstChild)) node = child;
+    return node;
+  };
+  const adjacent = (node: Node): Node | undefined => {
+    while (node !== root) {
+      const sibling = before ? node.previousSibling : node.nextSibling;
+      if (sibling) return descend(sibling);
+      if (!node.parentNode) return;
+      node = node.parentNode;
+    }
+  };
+  let value = '',
+    node: Node | undefined;
+  if (container.nodeType === Node.TEXT_NODE) {
+    const text = container.nodeValue ?? '';
+    value = before
+      ? text.slice(Math.max(0, offset - 120), offset)
+      : text.slice(offset, offset + 120);
+    node = adjacent(container);
+  } else {
+    const child = container.childNodes[before ? offset - 1 : offset];
+    node = child ? descend(child) : adjacent(container);
+  }
+  while (node && value.length < 120) {
+    if (node.nodeType === Node.TEXT_NODE) {
+      const text = node.nodeValue ?? '',
+        remaining = 120 - value.length;
+      value = before ? text.slice(-remaining) + value : value + text.slice(0, remaining);
+    }
+    node = adjacent(node);
+  }
+  return value;
+}
+
+export function selectedPassage(
+  root: HTMLElement,
+): { range: Range; quote: string; before: string; after: string } | undefined {
+  const range = selectionRange(root);
+  if (!range) return;
   return {
     range: range.cloneRange(),
-    quote: selection.toString(),
-    before: before.toString().slice(-120),
-    after: after.toString().slice(0, 120),
+    quote: range.toString(),
+    before: selectionContext(root, range.startContainer, range.startOffset, true),
+    after: selectionContext(root, range.endContainer, range.endOffset, false),
   };
 }
 export function textBookmark(

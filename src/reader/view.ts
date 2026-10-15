@@ -28,6 +28,7 @@ import type { Ingestion } from '../host/ingestion';
 import { nodesApi, type NodesApi, type NodeResult } from '../host/nodes';
 import type { LibraryChange } from '../host/vault';
 import { ReadingSurface } from './surface';
+import { selectionRange } from './render';
 
 export const READER_VIEW = 'obsidian-reader';
 type PendingSelection = {
@@ -771,15 +772,13 @@ export class ReaderView extends ItemView {
   private selectionChanged(): void {
     if (this.stopping || this.host.signal.aborted) return;
     const revision = this.invalidateSelection();
-    const selection = this.surface?.selection();
-    if (!selection) {
+    const range = this.surface && selectionRange(this.surface.body);
+    if (!range) {
       this.automatic = undefined;
       this.lastSelection = '';
       this.surface?.refresh();
-      this.updateStatus();
       return;
     }
-    this.updateStatus();
     const surface = this.surface,
       source = this.snapshot,
       generation = this.generation;
@@ -791,14 +790,24 @@ export class ReaderView extends ItemView {
       source &&
       surface.displayedBody !== undefined
     ) {
-      // Snapshot text, not the live native Range. An old timer/queued action cannot
-      // acquire a different selection merely because an operation or position write waited.
-      const pending: PendingSelection = {
-        selection: { quote: selection.quote, before: selection.before, after: selection.after },
-        body: surface.displayedBody,
+      // Keep live events cheap: materialize quote/context only after the quiet period.
+      // Copy endpoints, not a live Range (whose boundaries can follow DOM mutations).
+      const start = range.startContainer,
+        startOffset = range.startOffset,
+        end = range.endContainer,
+        endOffset = range.endOffset,
+        body = surface.displayedBody;
+      const currentRange = () => {
+        const live = selectionRange(surface.body);
+        return (
+          live?.startContainer === start &&
+          live.startOffset === startOffset &&
+          live.endContainer === end &&
+          live.endOffset === endOffset
+        );
       };
-      const valid = () => {
-        if (
+      const active = () => {
+        return !(
           this.stopping ||
           this.selecting ||
           surface.pointerActive ||
@@ -806,10 +815,13 @@ export class ReaderView extends ItemView {
           this.selectionRevision !== revision ||
           this.surface !== surface ||
           !this.current(source, generation) ||
-          surface.displayedBody !== pending.body ||
-          !this.acceptsSource(this.snapshot!, pending.body, true)
-        )
-          return false;
+          surface.displayedBody !== body ||
+          !this.acceptsSource(this.snapshot!, body, true)
+        );
+      };
+      let pending: PendingSelection;
+      const valid = () => {
+        if (!active() || !currentRange()) return false;
         // Native selectionchange can itself be queued: check the current text too.
         const live = surface.selection();
         return (
@@ -821,6 +833,14 @@ export class ReaderView extends ItemView {
       // Require 900ms of quiet after the last adjustment/release; never
       // write while a pointer is held. Tokens still guard every asynchronous boundary.
       this.selectionTimer = setTimeout(() => {
+        if (!active() || !currentRange()) return;
+        const selection = surface.selection();
+        if (!selection) return;
+        // Immutable text/source snapshot is captured before entering any async queue.
+        pending = {
+          selection: { quote: selection.quote, before: selection.before, after: selection.after },
+          body,
+        };
         void this.operation(async () => {
           try {
             await this.saveSelection(pending, valid);
