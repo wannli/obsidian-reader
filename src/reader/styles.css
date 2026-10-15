@@ -229,6 +229,13 @@ body.is-mobile.reader-mobile-active .mobile-navbar {
 .reader-document mark {
   color: inherit;
   background: var(--text-highlight-bg, rgba(var(--color-yellow-rgb, 224, 172, 0), 0.4));
+  /* A persistent text-color cue survives pale fills in either reading mode.
+     Text decoration preserves inline wrapping and pagination geometry. */
+  text-decoration-line: underline;
+  text-decoration-style: solid;
+  text-decoration-color: currentColor;
+  text-decoration-thickness: 2px;
+  text-underline-offset: 0.12em;
 }
 .reader-document.reader-highlight-fallback mark {
   background: rgba(var(--color-yellow-rgb, 224, 172, 0), 0.4);
