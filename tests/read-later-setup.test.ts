@@ -1,5 +1,6 @@
 import { expect, it, vi } from 'vitest';
 import type { Vault } from 'obsidian';
+import { parse } from 'yaml';
 import { defaultFolders } from '../src/core/folders';
 
 vi.mock('obsidian', () => ({ Modal: class {}, Setting: class {} }));
@@ -26,7 +27,7 @@ it('explicitly installs an empty-body native Quick Capture template without sett
   expect(vault.createFolder).toHaveBeenCalledWith('Templates');
   expect(vault.create).toHaveBeenCalledExactlyOnceWith(
     readLaterTemplatePath,
-    '---\ntype: article\nurl: {{content}}\n---\n',
+    '---\ntype: article\nurl: >-\n  {{content}}\n---\n',
   );
   expect(readLaterTemplate).not.toContain('created-by');
 });
@@ -64,6 +65,28 @@ it('refuses installation inside any Reader role, case-insensitively', async () =
     expect(vault.createFolder).not.toHaveBeenCalled();
   }
 });
+
+it.each([readLaterTemplatePath, `${readLaterTemplatePath}/Inbox`])(
+  'rejects a Reader role equal to or descending from the template file: %s',
+  async (inbox) => {
+    const { vault, port } = fixture();
+    await expect(
+      installReadLaterTemplate(port, { ...defaultFolders, inbox }, new AbortController().signal),
+    ).rejects.toThrow('overlaps');
+    expect(vault.create).not.toHaveBeenCalled();
+    expect(vault.createFolder).not.toHaveBeenCalled();
+  },
+);
+
+it.each(['{{content}}', 'https://example.com/a?x=1&y=2#section', 'https://example.com/é?q=%20'])(
+  'keeps the native placeholder and substituted URL as YAML strings: %s',
+  (url) => {
+    const template = readLaterTemplate.replace('{{content}}', url);
+    const properties = parse(template.split('---')[1]);
+    expect(properties).toEqual({ type: 'article', url });
+    expect(template.split('---')[2].trim()).toBe('');
+  },
+);
 
 it('aborts before installation and after dispatched folder creation', async () => {
   const { vault, port } = fixture(),

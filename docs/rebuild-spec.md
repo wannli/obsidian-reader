@@ -40,7 +40,7 @@
 - Failed extraction preserves the URL and available text, reports failure, and offers Retry.
 - Never overwrite authored text or annotations to repair extraction.
 - Remote images load only as needed; no permanent offline image downloads.
-- No capture URI or QuickAdd dependency/adapter. Approved 15 October: a create-only template installer and setup guide for native iOS Quick Capture into Inbox, with an empty article body and `url: {{content}}`. Reader acquires while foreground/online; native capture locations, widgets and Shortcuts remain user-configured. Native Share Sheet Full Text can supply its own body using `url: {{url}}`; authored/nonempty text stays protected. No note-schema change, native-settings modification, or silent shortcut installation. The existing reading-list URI remains navigation-only.
+- No capture URI or QuickAdd dependency/adapter. Approved 15 October: a create-only template installer and setup guide for native iOS Quick Capture into Inbox, with an empty article body and a YAML-safe `url` scalar populated by `{{content}}`. Reader acquires while foreground/online; native capture locations, widgets and Shortcuts remain user-configured. Native Share Sheet Full Text can supply its own body using `url: {{url}}`; authored/nonempty text stays protected. No note-schema change, native-settings modification, or silent shortcut installation. The existing reading-list URI remains navigation-only.
 
 ## Approved organization and reading
 

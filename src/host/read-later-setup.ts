@@ -2,7 +2,7 @@ import { Modal, Setting, type App, type Vault } from 'obsidian';
 import type { ReaderFolders } from '../core/folders';
 
 export const readLaterTemplatePath = 'Templates/Reader Read later.md';
-export const readLaterTemplate = '---\ntype: article\nurl: {{content}}\n---\n';
+export const readLaterTemplate = '---\ntype: article\nurl: >-\n  {{content}}\n---\n';
 
 /** Explicit, create-only setup: never edits an existing template or native settings. */
 export async function installReadLaterTemplate(
@@ -17,7 +17,7 @@ export async function installReadLaterTemplate(
   for (const folder of Object.values(folders)) {
     const path = readLaterTemplatePath.toLowerCase(),
       role = folder.toLowerCase();
-    if (path.startsWith(`${role}/`))
+    if (path === role || path.startsWith(`${role}/`) || role.startsWith(`${path}/`))
       throw new Error(
         'The template location overlaps a Reader folder. Choose a template location outside Reader queues manually.',
       );
