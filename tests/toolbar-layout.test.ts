@@ -24,13 +24,13 @@ describe('leaf-owned bottom toolbar alignment contract', () => {
     expect(rule('.reader-article')).toContain('position: relative;');
   });
 
-  it('keeps both four- and five-button groups centered without shrinking touch targets', () => {
+  it('keeps both four- and six-button groups centered without shrinking touch targets', () => {
     const controls = rule('.reader-view .reader-bottom-controls');
     expect(controls).toContain('position: absolute;');
     expect(controls).toContain('left: 50%;');
     expect(controls).toContain('transform: translateX(-50%);');
     expect(rule('.reader-toolbar')).toContain('repeat(4, 44px)');
-    expect(rule('.reader-actions')).toContain('repeat(5, 44px)');
+    expect(rule('.reader-actions')).toContain('repeat(6, 44px)');
     const button = rule('.reader-view button.reader-icon-button');
     expect(button).toContain('min-width: 44px !important;');
     expect(button).toContain('min-height: 44px !important;');

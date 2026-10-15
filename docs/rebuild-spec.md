@@ -51,12 +51,12 @@
 - Reading-list rows show full titles without URL subtitles or an embedded search field; use native Obsidian search. Preserve source URL metadata and core search capabilities.
 - Previous/next follows the originating browsing queue, even after moving an article.
 - Explicit moves between all four queues preserve content and existing links.
-- UI simplification: one aligned title/content area, flat reading-list rows, no “End of article” label or action divider. Both views use compact Reader-owned floating bottom controls, accessible icon labels/tooltips and 44px targets; article actions remain Previous, Next, Keep, Delete, List.
+- UI simplification: one aligned title/content area, flat reading-list rows, no “End of article” label or action divider. Both views use compact Reader-owned floating bottom controls, accessible icon labels/tooltips and 44px targets; article actions are Previous, Next, Read later, Save to Treasury, Delete, List. The explicit Read later action and destination-named Treasury action were approved on 15 October.
 - Floating controls stay within the Reader pane, with safe-area and final-content clearance. Desktop uses the available pane width, and scrollbars must not overlap text.
 - Right-side indicators show opened-before (existing saved reading position, not completion) and highlights (derived Markdown). Use bounded, cancellable reads; no whole-vault body scan, new YAML fields, timestamps, sidecars or persisted read/annotation history.
 - Treasury and Feeds buttons are absent from the main view; Open Treasury and Manage feeds commands retain access without deleting data.
 - Open reading list and Copy reading-list link commands share a navigation-only URI route using the current device’s encoded vault name; clipboard access is explicit and write-only.
-- Keep moves to Treasury and advances; Delete uses recoverable trash and advances. Previous/Next retain the original browsing context; List returns to it.
+- Read later (clock) uses the guarded move to Later, stays open and preserves browsing context. Save to Treasury (bookmark, formerly Keep) moves to Treasury and advances; Delete uses recoverable trash and advances. Previous/Next retain the original browsing context; List returns to it.
 - Open Markdown, Topics and explicit Move remain context-aware commands, not duplicate article buttons. Visually avoid a repeated leading title without rewriting authored Markdown/headings.
 - Ordinary highlights must remain visible when the host does not define its optional highlight-colour variable; preserve native theme integration with a safe fallback.
 - Deletion uses recoverable Obsidian trash, never permanent removal.
