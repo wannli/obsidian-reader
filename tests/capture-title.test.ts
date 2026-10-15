@@ -37,6 +37,7 @@ describe('session-only manual capture filenames', () => {
     expect(move).toHaveBeenCalledExactlyOnceWith(
       file,
       'Reading/Articles/261013 Publisher title.md',
+      expect.any(Function),
     );
     expect(saved).toEqual(await store.read(file.path));
     expect(saved.raw).toBe(await vault.read(file));

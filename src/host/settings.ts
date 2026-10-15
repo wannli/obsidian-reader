@@ -5,6 +5,8 @@ import type { Ingestion } from './ingestion';
 import type { ArticleStore } from '../core/store';
 import type { TFile } from 'obsidian';
 import { input } from './dialogs';
+import { articleStatuses, type ArticleStatus } from '../core/model';
+import { validateStatusFolders, type StatusFolders } from '../core/status-folders';
 
 export function showFeeds(
   app: App,
@@ -90,6 +92,8 @@ export class ReaderSettings extends PluginSettingTab {
     private paged: boolean,
     private saveFolders: (folders: ReaderFolders) => Promise<void>,
     private savePaged: (value: boolean) => void,
+    private statusFolders: StatusFolders = {},
+    private saveStatusFolders: (folders: StatusFolders) => Promise<void> = async () => {},
   ) {
     super(app, plugin);
   }
@@ -141,6 +145,45 @@ export class ReaderSettings extends PluginSettingTab {
             }
           }),
       );
+    this.containerEl.createEl('h3', { text: 'Status folders (optional)' });
+    this.containerEl.createEl('p', {
+      text: 'When Reader changes a status, move the article to its mapped folder. Includes promotion to Later before annotations. Blank means no move; / means vault root. Observed YAML status changes also move mapped articles once native editors are safe. Applying mappings never moves existing notes.',
+    });
+    const mappings: Partial<Record<ArticleStatus, string>> = { ...this.statusFolders };
+    for (const status of articleStatuses) {
+      const setting = new Setting(this.containerEl).setName(`${status} folder`);
+      setting.addText((control) => {
+        control
+          .setValue(mappings[status] === '' ? '/' : (mappings[status] ?? ''))
+          .onChange((value) => {
+            if (value === '') delete mappings[status];
+            else mappings[status] = value === '/' ? '' : value;
+          });
+        setting.addButton((button) =>
+          button.setButtonText('Choose folder').onClick(() => {
+            new FolderPicker(this.app, (path) => {
+              mappings[status] = path;
+              control.setValue(path || '/');
+            }).open();
+          }),
+        );
+      });
+    }
+    new Setting(this.containerEl).setName('Apply status folders').addButton((button) =>
+      button.setButtonText('Apply mappings').onClick(async () => {
+        button.setDisabled(true);
+        try {
+          const next = validateStatusFolders(mappings);
+          await this.saveStatusFolders(next);
+          this.statusFolders = next;
+          new Notice('Status folders applied. Existing files were not moved.');
+        } catch (error) {
+          new Notice(error instanceof Error ? error.message : String(error));
+        } finally {
+          button.setDisabled(false);
+        }
+      }),
+    );
     new Setting(this.containerEl)
       .setName('Boox / e-ink pagination (this device)')
       .setDesc(

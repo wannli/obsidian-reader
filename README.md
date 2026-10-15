@@ -93,7 +93,9 @@ This checkout contains the rebuilt implementation; it has **not been published a
 
 For an available release, use BRAT with `wannli/obsidian-reader`, or download `main.js`, `manifest.json`, and `styles.css` from the same release into `<vault>/.obsidian/plugins/obsidian-reader/`, then enable Reader in Community plugins. Installing a released version does not install uncommitted work from this checkout.
 
-Choose **article and subscription capture folders** in Reader settings. These affect only new notes, never queue membership or discovery. Settings use the new `captureFolders` group; older folder/root settings remain preserved but inert. Applying destinations does not move or rewrite notes. Existing `reading_position` properties remain untouched and are not used as bookmarks; no automatic conversion is performed.
+Optionally map each YAML status (`inbox`, `feed`, `later`, `archive`) to a folder in **Status folders** settings. Blank means no move; `/` means vault root. Reader status changes (including annotation promotion) and observed manual/native/synced YAML transitions move mapped articles safely through Obsidian's link-aware rename. Same-status choices, body edits and manual file moves do not reapply mappings. Dirty editors defer relocation until safe; collisions get a suffix. YAML stays authoritative if relocation fails. Reader-created articles use their initial status mapping; external creates/startup notes are not swept. Applying mappings never relocates existing notes. Native link-update preferences are respected; Sync moves are not cross-device atomic.
+
+Choose **article and subscription capture folders** in Reader settings. These affect only new notes (as fallback when no status folder is mapped), never queue membership or discovery. Settings use the new `captureFolders` group; older folder/root settings remain preserved but inert. Applying destinations does not move or rewrite notes. Existing `reading_position` properties remain untouched and are not used as bookmarks; no automatic conversion is performed.
 
 ## Develop safely
 

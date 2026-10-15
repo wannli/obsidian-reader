@@ -117,7 +117,7 @@ it('stages two creation destination picker values and applies one whole group', 
     vi.fn(),
   );
   settings.display();
-  expect(ui.settings.filter((setting) => setting.input)).toHaveLength(2);
+  expect(ui.settings.filter((setting) => setting.input)).toHaveLength(6);
   row('Articles').input.change('Capture');
   row('Feed subscriptions').buttons[0].click();
   ui.picker.onChooseItem({ path: 'Subscriptions' });
@@ -200,4 +200,46 @@ it.each([
   row('Feed subscriptions').input.change(candidate.feeds);
   await row('Apply folder locations').buttons[0].click();
   expect(save).toHaveBeenCalledExactlyOnceWith(candidate);
+});
+
+it('stages four status mappings, with blank disabled and picker root explicit', async () => {
+  const save = vi.fn(async () => {});
+  const settings = new ReaderSettings(
+    {} as App,
+    {} as Plugin,
+    defaultFolders,
+    false,
+    vi.fn(),
+    vi.fn(),
+    { later: 'Old', feed: '' },
+    save,
+  );
+  settings.display();
+  expect(row('feed folder').input.value).toBe('/');
+  row('later folder').input.change('');
+  row('inbox folder').buttons[0].click();
+  ui.picker.onChooseItem({ path: '' });
+  row('archive folder').input.change('Shared/Archive');
+  expect(save).not.toHaveBeenCalled();
+  await row('Apply status folders').buttons[0].click();
+  expect(save).toHaveBeenCalledExactlyOnceWith({ inbox: '', feed: '', archive: 'Shared/Archive' });
+});
+
+it('rejects unsafe status mappings before saving', async () => {
+  const save = vi.fn(async () => {});
+  const settings = new ReaderSettings(
+    {} as App,
+    {} as Plugin,
+    defaultFolders,
+    false,
+    vi.fn(),
+    vi.fn(),
+    {},
+    save,
+  );
+  settings.display();
+  row('later folder').input.change('../Outside');
+  await row('Apply status folders').buttons[0].click();
+  expect(save).not.toHaveBeenCalled();
+  expect(ui.notices.at(-1)).toMatch(/vault-relative/);
 });

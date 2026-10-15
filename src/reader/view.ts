@@ -341,6 +341,7 @@ export class ReaderView extends ItemView {
       );
   }
   private adoptSnapshot(snapshot: Snapshot<TFile>): void {
+    if (this.snapshot) this.readingQueue.rename(this.snapshot.path, snapshot.path);
     if (this.snapshot?.body !== snapshot.body) {
       this.automatic = undefined;
       this.lastSelection = '';
@@ -1087,7 +1088,9 @@ export class ReaderView extends ItemView {
       this.assertDisplayed(snapshot, true);
       const moved = await this.host.store.move(snapshot, target);
       if (!this.current(snapshot, generation) || this.stopping) return;
-      this.snapshot = moved;
+      this.adoptSnapshot(moved);
+      if (moved.body !== snapshot.body)
+        this.surface?.setBody(moved.body, text(moved.properties.url));
       this.controls();
       if (target === 'Inbox' || target === 'Later')
         void this.host.ingestion.acquire(moved.path).catch((error) => this.error(error));

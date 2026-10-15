@@ -945,6 +945,7 @@ it('revokes auto-title ownership before reindexing every native file rename, inc
   };
   const file = Object.assign(new TFile(), { path: TARGET, extension: 'md' });
   const store = {
+    observeStatusWrites: () => () => {},
     noteRenamed: vi.fn((actual: TFile) => {
       expect(actual).toBe(file);
       calls.push('revoke');
@@ -1149,9 +1150,9 @@ describe('folder-only library events', () => {
     const folder = f.folder('Reading/Inbox/Group'),
       revoke = vi.spyOn(f.store, 'noteRenamed');
     f.stop();
-    expect(f.offref).toHaveBeenCalledTimes(6);
+    expect(f.offref).toHaveBeenCalledTimes(7);
     f.stop();
-    expect(f.offref).toHaveBeenCalledTimes(6);
+    expect(f.offref).toHaveBeenCalledTimes(7);
     f.renameFolder(folder, 'Reading/Later/Group');
     f.deleteFolder(folder);
     expect(f.changes).toEqual([]);

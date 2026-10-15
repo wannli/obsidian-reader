@@ -2,6 +2,7 @@ import { expect, it, vi } from 'vitest';
 import type { App, TFile } from 'obsidian';
 import { ArticleStore } from '../src/core/store';
 import { MemoryVault } from './helpers/memory-vault';
+import { createDocument, readDocument } from '../src/core/document';
 
 vi.mock('obsidian', () => ({ MarkdownView: class {}, TFile: class {}, TFolder: class {} }));
 import { watchLibrary } from '../src/host/vault';
@@ -52,7 +53,7 @@ it('keeps emitter and plugin-owned reference counts bounded across generation re
     stop = watchLibrary(plugin, store, changed);
     expect(metadata.refs.size).toBe(1);
     expect(vault.refs.size).toBe(3);
-    expect(workspace.refs.size).toBe(2);
+    expect(workspace.refs.size).toBe(3);
     expect(ownedEvents.size + ownedCleanup.size).toBe(0);
     const ref = [...metadata.refs][0];
     const file = { path: `Reading/Articles/${generation}.md`, extension: 'md' };
@@ -71,4 +72,27 @@ it('keeps emitter and plugin-owned reference counts bounded across generation re
   expect(ownedEvents.size + ownedCleanup.size).toBe(0);
   expect(plugin.registerEvent).not.toHaveBeenCalled();
   expect(plugin.register).not.toHaveBeenCalled();
+});
+
+it('does not organize an existing startup note whose metadata cache arrives after layout', async () => {
+  const memory = new MemoryVault(),
+    store = new ArticleStore(memory);
+  store.setStatusFolders({ later: 'Mapped' });
+  const raw = createDocument({ type: 'article', status: 'later' }, 'Words');
+  const file = Object.assign(await memory.create('Existing.md', raw), { extension: 'md' });
+  const metadata = emitter(),
+    vault = emitter(),
+    workspace = emitter();
+  const app = {
+    metadataCache: { ...metadata, getFileCache: () => undefined },
+    vault: { ...vault, getMarkdownFiles: () => [file] },
+    workspace: { ...workspace, onLayoutReady: (callback: () => void) => callback() },
+  } as unknown as App;
+  const stop = watchLibrary({ app } as any, store as unknown as ArticleStore<TFile>, vi.fn());
+  const read = vi.spyOn(memory, 'read');
+  metadata.emit('changed', file, raw, { frontmatter: readDocument(raw).properties });
+  for (let i = 0; i < 100; i++) await Promise.resolve();
+  expect(file.path).toBe('Existing.md');
+  expect(read).not.toHaveBeenCalled();
+  stop();
 });

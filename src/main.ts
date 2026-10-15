@@ -13,6 +13,11 @@ import { queueAt, type Queue } from './core/model';
 import { defaultFolders, validateFolders, type ReaderFolders } from './core/folders';
 import { SerialWrites } from './core/work';
 import { loadFolders, saveFolderSettings } from './host/folder-settings';
+import {
+  loadStatusFolders,
+  saveStatusFolderSettings,
+  type StatusFolders,
+} from './core/status-folders';
 import { Network } from './host/network';
 import { readDocument } from './core/document';
 import { ArticleStore } from './core/store';
@@ -38,6 +43,7 @@ export default class ReaderPlugin extends Plugin {
   private promotions = new Map<TFile, boolean>();
   private promoting = new Set<TFile>();
   private lastMaintenance = 0;
+  private statusFolders: StatusFolders = {};
   private refreshing = false;
   private referencesReady = false;
   private referencesRecovered = false;
@@ -67,6 +73,12 @@ export default class ReaderPlugin extends Plugin {
     const data = await this.loadData();
     if (this.unloaded) return;
     let folders = defaultFolders;
+    let statusFolders: StatusFolders = {};
+    try {
+      statusFolders = loadStatusFolders(data);
+    } catch (error) {
+      this.notice(`Status folder mappings disabled: ${String(error)}`);
+    }
     let invalid = false;
     try {
       folders = loadFolders(data);
@@ -75,6 +87,8 @@ export default class ReaderPlugin extends Plugin {
       this.notice(`Reader is paused until its folder settings are corrected: ${String(error)}`);
     }
     this.startFolders(folders);
+    this.statusFolders = statusFolders;
+    this.store.setStatusFolders(statusFolders);
     if (invalid) this.stopFolders();
     this.registerView(READER_VIEW, (leaf) => new ReaderView(leaf, this.readerHost()));
     const openReadingList = () => {
@@ -153,6 +167,18 @@ export default class ReaderPlugin extends Plugin {
             this.notice(error);
           }
         },
+        statusFolders,
+        (next) =>
+          this.folderSaves.run('folders', async () => {
+            if (this.unloaded) throw new Error('Reader has stopped.');
+            const data = await this.loadData();
+            if (this.unloaded) throw new Error('Reader has stopped.');
+            await this.saveData(saveStatusFolderSettings(data, next));
+            if (!this.unloaded) {
+              this.statusFolders = next;
+              this.store.setStatusFolders(next);
+            }
+          }),
       ),
     );
     this.registerEvent(
@@ -272,6 +298,7 @@ export default class ReaderPlugin extends Plugin {
     const signal = this.signal;
     this.vault = new ObsidianVault(this.app, () => !signal.aborted);
     this.store = new ArticleStore(this.vault, folders);
+    this.store.setStatusFolders(this.statusFolders);
     this.ingestion = new Ingestion(
       this.store,
       (message) => {

@@ -13,6 +13,7 @@ import {
 import { hasAnnotations } from './annotations';
 import {
   deletedUrls,
+  articleStatus,
   linkPath,
   text,
   filename,
@@ -29,6 +30,7 @@ import {
 } from './model';
 import { SerialWrites } from './work';
 import { defaultFolders, type ReaderFolders } from './folders';
+import { validateStatusFolders, type StatusFolders } from './status-folders';
 
 export interface NoteFile {
   path: string;
@@ -42,10 +44,10 @@ export interface VaultPort<File extends NoteFile> {
   read(file: File): Promise<string>;
   create(path: string, content: string, guard?: () => void | Promise<void>): Promise<File>;
   process(file: File, update: (current: string) => string): Promise<string>;
-  move(file: File, path: string, guard?: () => void): Promise<void>;
+  move(file: File, path: string, guard?: (current: string) => void): Promise<void>;
   /** Validate fresh bytes synchronously after the final read, immediately before native trash. */
   trash(file: File, validate: (current: string) => void): Promise<void>;
-  assertWritable(file: File): void;
+  assertWritable(file: File, current?: string): void;
 }
 export interface Snapshot<File extends NoteFile> {
   file: File;
@@ -67,6 +69,48 @@ export class ArticleStore<File extends NoteFile> {
   private captures = new WeakMap<File, { path: string; date: Date }>();
   private active = true;
   readonly folders: ReaderFolders;
+  private statusFolders: StatusFolders = {};
+  private ownRevisions: { file: File; raw: string }[] = [];
+  private ownRevisionSize = 0;
+  private statusFolderRevision = 0;
+  private statusListeners = new Set<
+    (file: File, status: unknown, raw: string, changed: boolean) => void
+  >();
+  observeStatusWrites(
+    listener: (file: File, status: unknown, raw: string, changed: boolean) => void,
+  ): () => void {
+    this.statusListeners.add(listener);
+    return () => {
+      this.statusListeners.delete(listener);
+    };
+  }
+  hasStatusFolder(status: unknown): boolean {
+    const valid = articleStatus(status);
+    return valid !== undefined && this.statusFolders[valid] !== undefined;
+  }
+  get statusFolderGeneration(): number {
+    return this.statusFolderRevision;
+  }
+  /** Consume delayed metadata acknowledgement, independent of write-lane timing. */
+  acknowledgeStatus(file: File, raw: string): boolean {
+    const index = this.ownRevisions.findIndex((entry) => entry.file === file && entry.raw === raw);
+    if (index < 0) return false;
+    this.ownRevisionSize -= this.ownRevisions[index].raw.length;
+    this.ownRevisions.splice(index, 1);
+    return true;
+  }
+  private rememberRevision(file: File, raw: string): void {
+    this.ownRevisions.push({ file, raw });
+    this.ownRevisionSize += raw.length;
+    // Exact-byte receipts are session-only and globally bounded (UTF-16 units).
+    while (this.ownRevisions.length > 128 || this.ownRevisionSize > 4 * 1024 * 1024) {
+      this.ownRevisionSize -= this.ownRevisions.shift()!.raw.length;
+    }
+  }
+  setStatusFolders(folders: StatusFolders): void {
+    this.statusFolders = validateStatusFolders(folders);
+    this.statusFolderRevision++;
+  }
   constructor(
     readonly vault: VaultPort<File>,
     folders: ReaderFolders = defaultFolders,
@@ -76,6 +120,9 @@ export class ArticleStore<File extends NoteFile> {
   }
   dispose(): void {
     this.active = false;
+    this.ownRevisions = [];
+    this.ownRevisionSize = 0;
+    this.statusListeners.clear();
     this.captures = new WeakMap();
   }
   /** Host path changes revoke ownership even if the file later returns to its original path. */
@@ -164,7 +211,11 @@ export class ArticleStore<File extends NoteFile> {
         input.prefix,
         publishedAt !== undefined,
       );
-      const path = await this.unique(this.folders.articles, name);
+      const initialStatus = queueStatus(input.queue ?? (input.feed ? 'Feed' : 'Inbox'));
+      const path = await this.unique(
+        this.statusFolders[initialStatus] ?? this.folders.articles,
+        name,
+      );
       const properties: Properties = {
         type: 'article',
         url,
@@ -283,9 +334,18 @@ export class ArticleStore<File extends NoteFile> {
     const raw = await this.vault.process(snapshot.file, (current) => {
       this.assert(snapshot.file, snapshot.path);
       if (current !== snapshot.raw) throw new ChangedNote();
-      return transform(current);
+      const next = transform(current);
+      this.rememberRevision(snapshot.file, next);
+      return next;
     });
     const doc = requireArticle(raw);
+    for (const listener of this.statusListeners)
+      listener(
+        snapshot.file,
+        doc.properties.status,
+        raw,
+        snapshot.properties.status !== doc.properties.status,
+      );
     this.catalog.update(snapshot.file.path, doc.properties);
     return {
       file: snapshot.file,
@@ -308,12 +368,77 @@ export class ArticleStore<File extends NoteFile> {
     snapshot: Snapshot<File>,
     queue: Queue,
     guard: () => void = () => {},
+    relocate = true,
   ): Promise<Snapshot<File>> {
     guard();
     this.captures.delete(snapshot.file);
-    return this.commit(snapshot, (raw) => {
+    const status = queueStatus(queue),
+      folder = this.statusFolders[status],
+      transition = snapshot.properties.status !== status;
+    const saved = await this.commit(snapshot, (raw) => {
       guard();
-      return patchProperties(raw, { status: queueStatus(queue) });
+      return patchProperties(raw, { status });
+    });
+    // YAML commits first: a failed relocation never makes a retained article disposable.
+    // Selecting the same status is not a request to organize existing notes.
+    if (!relocate || !transition || folder === undefined) return saved;
+    return this.relocate(saved, status, folder, guard);
+  }
+  /** Only an observed status transition calls this; never startup or path reconciliation. */
+  observedStatusChange(
+    file: File,
+    raw: string,
+    valid: () => void = () => {},
+    expectedStatus?: string,
+  ): Promise<void> {
+    return this.writes.run(file, async () => {
+      valid();
+      const current = await this.read(file.path);
+      if (current.file !== file || current.raw !== raw) throw new ChangedNote();
+      const status = articleStatus(current.properties.status);
+      if (expectedStatus !== undefined && status !== expectedStatus) throw new ChangedNote();
+      if (!status || this.statusFolders[status] === undefined) return;
+      this.captures.delete(file);
+      await this.relocate(current, status, this.statusFolders[status]!, valid);
+    });
+  }
+  private relocate(
+    saved: Snapshot<File>,
+    status: string,
+    folder: string,
+    guard: () => void = () => {},
+  ): Promise<Snapshot<File>> {
+    return this.creates.run('articles', async () => {
+      const name = saved.path.split('/').pop()!;
+      const target = await this.unique(folder, name, saved.path);
+      if (target === saved.path) return saved;
+      await this.validate(saved);
+      try {
+        await this.vault.move(saved.file, target, (current) => {
+          guard();
+          this.assert(saved.file, saved.path);
+          if (current !== saved.raw) throw new ChangedNote();
+        });
+      } catch (error) {
+        // A native rename may complete before reporting failure. Never roll back
+        // YAML or bytes over a concurrent edit; recover the actual catalog path.
+        try {
+          const actual = await this.read(saved.file.path);
+          if (actual.file === saved.file)
+            this.catalog.rename(saved.path, actual.path, actual.properties);
+        } catch {
+          /* A removed/replaced note remains protected. */
+        }
+        throw new Error(
+          `Status saved as ${status}, but the folder move failed: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+      const current = await this.read(saved.file.path);
+      if (current.file !== saved.file || current.properties.status !== status)
+        throw new ChangedNote();
+      this.rememberRevision(current.file, current.raw);
+      this.catalog.rename(saved.path, current.path, current.properties);
+      return current;
     });
   }
   /** Retain first: interruption may leave Later, never an annotated disposable Feed article. */
@@ -323,12 +448,19 @@ export class ArticleStore<File extends NoteFile> {
       const proposed = transform(snapshot.raw);
       if (proposed === snapshot.raw) return snapshot;
       let current = snapshot;
-      if (queueAt(current.properties) === 'Feed') current = await this.moveNow(current, 'Later');
+      const promote = queueAt(current.properties) === 'Feed';
+      const folder = this.statusFolders.later;
+      if (promote) current = await this.moveNow(current, 'Later', () => {}, false);
       if (current.body !== snapshot.body)
         throw new ChangedNote(
           'The article changed to Later, but its text changed. Reopen it to retry the annotation.',
         );
-      return this.commit(current, transform);
+      const annotated = await this.commit(current, (raw) => {
+        if (promote && requireArticle(raw).properties.status !== 'later') throw new ChangedNote();
+        return transform(raw);
+      });
+      if (promote && folder !== undefined) return this.relocate(annotated, 'later', folder);
+      return annotated;
     });
   }
   position(path: string, marker: string): Promise<Snapshot<File>> {
@@ -382,7 +514,11 @@ export class ArticleStore<File extends NoteFile> {
               snapshot.path === receipt.path &&
               current === saved.raw
             ) {
-              await this.vault.move(saved.file, target);
+              await this.vault.move(saved.file, target, (bytes) => {
+                this.assert(saved.file, receipt.path);
+                if (this.captures.get(saved.file) !== receipt || bytes !== saved.raw)
+                  throw new ChangedNote();
+              });
             }
           } catch {
             /* Keep the saved body, including when a native move fails. */
