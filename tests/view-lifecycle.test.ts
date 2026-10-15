@@ -1565,6 +1565,144 @@ describe('article keyboard boundaries', () => {
     f.probe.surface.atBoundary.mockReturnValue(true);
     return { ...f, a, b, c };
   }
+  describe('real Surface arrow handoff', () => {
+    let f: Awaited<ReturnType<typeof realFixture>>;
+    const width = 366,
+      height = 600,
+      columns = 18,
+      gap = 32;
+    const extent = columns * width + (columns - 1) * gap;
+    const maxLeft = extent - width; // 6766: the browser reproduction's reachable endpoint.
+    async function realFixture() {
+      const actual = await vi.importActual<typeof surfaceModule>('../src/reader/surface');
+      const render = await import('../src/reader/render');
+      // Only absent jsdom geometry/position capture is stubbed. Paging, boundaries,
+      // rendering and the Reader key/navigation path remain production code.
+      vi.spyOn(render, 'textBookmark').mockReturnValue('');
+      vi.stubGlobal(
+        'ResizeObserver',
+        class {
+          observe() {}
+          disconnect() {}
+        },
+      );
+      vi.spyOn(surfaceModule, 'ReadingSurface').mockImplementation(function (...args) {
+        const surface = new actual.ReadingSurface(...args);
+        let left = 0;
+        Object.defineProperties(surface.viewport, {
+          clientWidth: { get: () => width },
+          clientHeight: { get: () => height },
+          scrollWidth: { get: () => extent },
+          scrollHeight: { get: () => 1800 },
+          scrollLeft: {
+            get: () => left,
+            set: (value: number) => {
+              left = Math.max(0, Math.min(maxLeft, value));
+            },
+          },
+        });
+        Object.defineProperty(surface.flow, 'scrollWidth', { get: () => extent });
+        return surface;
+      });
+      const f = hostFixture();
+      f.host.paged = true;
+      const a = await f.note('Reading/Inbox/A.md'),
+        b = await f.note('Reading/Inbox/B.md'),
+        c = await f.note('Reading/Inbox/C.md');
+      await f.view.onOpen();
+      await f.view.openArticle(b.path, true);
+      return { ...f, a, b, c };
+    }
+    beforeEach(async () => {
+      f = await realFixture();
+    });
+    afterEach(() => {
+      f?.view.stopForUnload();
+      vi.unstubAllGlobals();
+    });
+
+    it.each(['ArrowDown', 'ArrowUp'])(
+      'aligns %s from four pixels short, rejects held-repeat handoff, then navigates once on a fresh press',
+      async (key) => {
+        const surface = f.probe.surface as surfaceModule.ReadingSurface;
+        const direction = key === 'ArrowDown' ? 1 : -1;
+        const end = direction === 1 ? maxLeft : 0;
+        surface.viewport.scrollLeft = direction === 1 ? maxLeft - 4 : 4;
+        expect(surface.atBoundary(direction)).toBe(false);
+        expect(surface.canPage(direction)).toBe(false); // Buttons can already navigate here.
+        const step = new KeyboardEvent('keydown', { key, cancelable: true });
+        f.view.key(step);
+        await f.probe.operations;
+        expect(surface.viewport.scrollLeft).toBe(end);
+        expect(step.defaultPrevented).toBe(true);
+        expect(f.view.file).toBe(f.b);
+        expect(surface.atBoundary(direction)).toBe(true);
+        f.view.key(new KeyboardEvent('keydown', { key, repeat: true }));
+        await f.probe.operations;
+        expect(f.view.file).toBe(f.b);
+        const open = vi.spyOn(f.probe, 'openArticleNow');
+        f.view.key(new KeyboardEvent('keydown', { key }));
+        f.view.key(new KeyboardEvent('keydown', { key })); // No overlapping handoffs.
+        await f.probe.operations;
+        expect(f.view.file).toBe(direction === 1 ? f.c : f.a);
+        expect(open).toHaveBeenCalledOnce();
+        expect(f.vault.trashed).toEqual([]);
+      },
+    );
+
+    it('preserves immediate Previous for ArrowUp already at the true boundary', async () => {
+      const surface = f.probe.surface as surfaceModule.ReadingSurface;
+      expect(surface.atBoundary(-1)).toBe(true);
+      const page = vi.spyOn(surface, 'page');
+      f.view.key(new KeyboardEvent('keydown', { key: 'ArrowUp' }));
+      await f.probe.operations;
+      expect(f.view.file).toBe(f.a);
+      expect(page).not.toHaveBeenCalled();
+    });
+
+    it.each(['ArrowDown', 'ArrowUp'])('leaves flow-mode %s scrolling native', async (key) => {
+      f.host.paged = false;
+      await f.view.openArticle(f.b.path, true);
+      const surface = f.probe.surface as surfaceModule.ReadingSurface;
+      surface.viewport.scrollTop = 200;
+      const page = vi.spyOn(surface, 'page');
+      const event = new KeyboardEvent('keydown', { key, cancelable: true });
+      f.view.key(event);
+      await f.probe.operations;
+      expect(event.defaultPrevented).toBe(false);
+      expect(page).not.toHaveBeenCalled();
+      expect(f.view.file).toBe(f.b);
+    });
+
+    it.each(
+      ['ArrowDown', 'ArrowUp'].flatMap((key) =>
+        ['input', 'modal', 'selection'].map((context) => ({ key, context })),
+      ),
+    )(
+      'keeps $key paging behind the $context guard four pixels before the boundary',
+      ({ key, context }) => {
+        const surface = f.probe.surface as surfaceModule.ReadingSurface;
+        const start = key === 'ArrowDown' ? maxLeft - 4 : 4;
+        surface.viewport.scrollLeft = start;
+        let target: HTMLElement = surface.body;
+        if (context === 'input')
+          target = document.body.appendChild(document.createElement('input'));
+        if (context === 'modal') document.body.createDiv({ cls: 'modal-container' });
+        if (context === 'selection') {
+          const range = document.createRange();
+          range.selectNodeContents(surface.body);
+          document.getSelection()!.addRange(range);
+        }
+        const event = new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true });
+        target.addEventListener('keydown', (event) => f.view.key(event), { once: true });
+        target.dispatchEvent(event);
+        expect(event.defaultPrevented).toBe(false);
+        expect(surface.viewport.scrollLeft).toBe(start);
+        expect(f.view.file).toBe(f.b);
+      },
+    );
+  });
+
   it.each(['ArrowDown', 'PageDown', 'ArrowUp', 'PageUp'])(
     'uses the existing navigation pipeline once at %s boundary, and ignores repeats',
     async (key) => {
@@ -1591,9 +1729,7 @@ describe('article keyboard boundaries', () => {
       expect(event.defaultPrevented).toBe(false);
       f.host.paged = true;
       f.view.key(new KeyboardEvent('keydown', { key, cancelable: true }));
-      if (key.startsWith('Page'))
-        expect(surface.page).toHaveBeenCalledWith(key.endsWith('Down') ? 1 : -1);
-      else expect(surface.page).not.toHaveBeenCalled();
+      expect(surface.page).toHaveBeenCalledWith(key.endsWith('Down') ? 1 : -1);
       await f.probe.operations;
       expect(f.view.file).toBe(f.b);
     },

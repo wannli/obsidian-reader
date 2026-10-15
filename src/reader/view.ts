@@ -1665,9 +1665,9 @@ export class ReaderView extends ItemView {
         .finally(() => {
           this.boundaryNavigation = false;
         });
-    } else if (this.host.paged && ['PageUp', 'PageDown'].includes(event.key)) {
+    } else if (this.host.paged && direction) {
       event.preventDefault();
-      this.surface?.page(event.key === 'PageUp' ? -1 : 1);
+      this.surface?.page(direction);
       this.controls();
     } else if (['j', 'k'].includes(event.key)) {
       event.preventDefault();
