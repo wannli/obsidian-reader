@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.9.0](https://github.com/wannli/obsidian-reader/compare/0.8.1...0.9.0) (2026-10-15)
+
+
+### Added
+
+* **reader:** map yaml statuses to optional folders ([5be9694](https://github.com/wannli/obsidian-reader/commit/5be969459ad99ef7418976c626af25fcf449b9c4))
+
+
+### Fixed
+
+* **reader:** match image spacing to paragraph rhythm ([b447a91](https://github.com/wannli/obsidian-reader/commit/b447a91f14ed674393a8f0f49a1b85646adcbe35))
+* **selection:** defer text extraction until gestures settle ([cab9a00](https://github.com/wannli/obsidian-reader/commit/cab9a0085f78dc8db8faaafd3cf1dc691b697563))
+
 ## [0.8.1](https://github.com/wannli/obsidian-reader/compare/0.8.0...0.8.1) (2026-10-15)
 
 
