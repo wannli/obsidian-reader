@@ -1,5 +1,5 @@
 import { isMap, isNode, isScalar, isSeq, parseDocument, Scalar, type Document } from 'yaml';
-import { formatPublished, type Properties } from './model';
+import { deletedUrls, formatPublished, webUrl, type Properties } from './model';
 
 interface ArticleDocument {
   raw: string;
@@ -28,6 +28,17 @@ export function requireArticle(raw: string): ArticleDocument {
   const doc = readDocument(raw);
   if (doc.properties.type !== 'article') throw new Error('Not an article; preserved the note.');
   return doc;
+}
+export function rememberDeletedUrl(raw: string, url: string): string {
+  const doc = readDocument(raw);
+  if (doc.properties.type !== 'feed') throw new ChangedNote('Not a subscription.');
+  const urls = deletedUrls(doc.properties.deleted_urls);
+  const normalized = webUrl(url);
+  if (urls.includes(normalized)) return raw;
+  // Keep existing sequence nodes (and their comments); normalize only the new entry.
+  return patchProperties(raw, {
+    deleted_urls: [...((doc.properties.deleted_urls as string[] | undefined) ?? []), normalized],
+  });
 }
 export function replaceBody(raw: string, expectedBody: string, next: string): string {
   const doc = requireArticle(raw);

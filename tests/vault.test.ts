@@ -47,6 +47,24 @@ function gate() {
 const SOURCE = 'Reading/Inbox/Story.md',
   TARGET = 'Reading/Later/Story.md',
   RAW = 'Original article.\n';
+it('resolves subscription links natively with source context and rejects ambiguous short names', () => {
+  const f = fixture();
+  const subscription = f.note('Reading/Wires/Example.md');
+  const resolve = vi.fn(() => subscription);
+  Object.assign(f.app, { metadataCache: { getFirstLinkpathDest: resolve } });
+  f.vault.getMarkdownFiles.mockImplementation(() =>
+    [...f.files.values()].filter((file): file is TFile => file instanceof TFile),
+  );
+  expect(f.adapter.resolveLink('Example', SOURCE)).toBe(subscription);
+  expect(resolve).toHaveBeenCalledWith('Example', SOURCE);
+  expect(f.adapter.resolveLink('../Wires/Example', SOURCE)).toBe(subscription);
+  f.note('Other/Example.md');
+  expect(f.adapter.resolveLink('Example', SOURCE)).toBeUndefined();
+  expect(f.adapter.resolveLink('Reading/Wires/Example.md', SOURCE)).toBe(subscription);
+  resolve.mockReturnValue(undefined as unknown as TFile);
+  expect(f.adapter.resolveLink('Missing', SOURCE)).toBeUndefined();
+});
+
 function fixture() {
   const root = new TFolder(),
     files = new Map<string, TAbstractFile>([['', root]]),
@@ -95,7 +113,7 @@ function fixture() {
   const vault = {
     getRoot: () => root,
     getAbstractFileByPath: vi.fn((path: string) => files.get(path) ?? null),
-    getMarkdownFiles: vi.fn(() => {
+    getMarkdownFiles: vi.fn((): TFile[] => {
       throw new Error('No vault enumeration');
     }),
     getAllLoadedFiles: vi.fn(() => {

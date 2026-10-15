@@ -35,7 +35,7 @@
 - Automatic housekeeping still recovers offline URL captures and safely expires Stream notes; it never refreshes subscriptions.
 - Consider at most the latest 20 entries on every explicit refresh, before deduplication/age filtering; no historical backfill feature.
 - Deduplicate feed imports against existing articles, including articles moved to another queue.
-- No permanent deleted-URL history; a deleted entry still listed by its feed may reappear.
+- Approved 15 October: subscription `deleted_urls` remembers future explicit Reader deletions of feed-associated articles across queues. Refresh skips these normalized URLs; manual Add URL remains allowed. Native/external and past deletions are not recorded; expiry does not add history.
 - Unsubscribing stops imports and leaves existing articles untouched.
 - Failed extraction preserves the URL and available text, reports failure, and offers Retry.
 - Never overwrite authored text or annotations to repair extraction.
@@ -136,7 +136,7 @@ Five focused responsibilities, not five independent frameworks:
 
 ## Approved storage contract
 
-[storage-contract.md](storage-contract.md) records the article/feed schemas, exact-byte acquisition proof, annotation syntax, position anchors, promotion, recoverable expiry, and filename rules. Wannes approved it with “Yes, the contract looks good.” The later refresh clarification was “Yes, only the last 20 entries.” No cursor or history state is authorized.
+[storage-contract.md](storage-contract.md) records the article/feed schemas, exact-byte acquisition proof, annotation syntax, position anchors, promotion, recoverable expiry, and filename rules. Wannes approved it with “Yes, the contract looks good.” The later refresh clarification was “Yes, only the last 20 entries.” No cursor or read history is authorized. Subscription deleted-URL suppression was additionally approved on 15 October.
 
 Changes to this contract still require approval. Development uses an explicitly approved, marked synthetic vault; never old/personal data.
 

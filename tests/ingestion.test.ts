@@ -383,7 +383,7 @@ describe('subscription import contracts', () => {
     expect(request).toHaveBeenCalledTimes(2);
   });
 
-  it('recreates deleted listed entries only inside the current latest-20 window, without tombstones', async () => {
+  it('keeps Reader-deleted entries suppressed when they reenter the latest-20 window', async () => {
     const h = host(),
       entries = Array.from({ length: 25 }, (_, i) => item(i + 1));
     let current = entries.slice(0, 20);
@@ -398,19 +398,50 @@ describe('subscription import contracts', () => {
     await h.ingestion.refreshAll();
     expect(urls(h.store)).toEqual(
       entries
-        .slice(1)
+        .filter((entry) => entry.url !== item(1).url && entry.url !== item(20).url)
         .map((entry) => entry.url)
         .sort(),
     );
     expect(h.vault.file(outside.path)).toBeUndefined();
-    expect(h.vault.file(inside.path)).toBeDefined();
-    expect(h.vault.file(inside.path)).not.toBe(inside.file);
+    expect(h.vault.file(inside.path)).toBeUndefined();
     // If newer entries disappear, an older listed entry can enter the window again.
     current = entries.slice(0, 20);
     await h.ingestion.refreshAll();
-    expect(urls(h.store)).toEqual(entries.map((entry) => entry.url).sort());
-    expect(h.vault.file(outside.path)).toBeDefined();
-    expect(h.vault.file(outside.path)).not.toBe(outside.file);
+    expect(urls(h.store)).toEqual(
+      entries
+        .filter((entry) => ![item(1).url, item(20).url].includes(entry.url))
+        .map((entry) => entry.url)
+        .sort(),
+    );
+    expect(h.vault.file(outside.path)).toBeUndefined();
+    const feed = h.store.catalog.feeds()[0];
+    expect(
+      readDocument(await h.vault.read(h.vault.file(feed.path)!)).properties.deleted_urls,
+    ).toEqual([item(1).url, item(20).url]);
+  });
+
+  it('preserves suppression through failed refresh and successful error clearing', async () => {
+    const h = host();
+    await h.ingestion.subscribe(FEED);
+    const feed = h.store.catalog.feeds()[0];
+    const file = h.vault.file(feed.path)!;
+    await h.vault.process(file, (raw) =>
+      patchProperties(raw, { deleted_urls: [item(1).url], custom: 'keep' }),
+    );
+    serve(() => response('', 500));
+    await h.ingestion.refreshAll();
+    expect(readDocument(await h.vault.read(file)).properties).toMatchObject({
+      deleted_urls: [item(1).url],
+      custom: 'keep',
+      error: expect.any(String),
+    });
+    serve(() => response(xml([item(1), item(2)])));
+    await h.ingestion.refreshAll();
+    expect(urls(h.store)).toEqual([item(2).url]);
+    const properties = readDocument(await h.vault.read(file)).properties;
+    expect(properties.deleted_urls).toEqual([item(1).url]);
+    expect(properties.custom).toBe('keep');
+    expect(properties.error).toBeUndefined();
   });
 
   it('treats a repeated subscription to the normalized URL as a no-op', async () => {

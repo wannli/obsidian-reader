@@ -34,6 +34,31 @@ export class ObsidianVault implements VaultPort<TFile> {
     const file = this.app.vault.getAbstractFileByPath(path);
     return file instanceof TFile ? file : undefined;
   }
+  resolveLink(linkpath: string, sourcePath: string): TFile | undefined {
+    const resolved = this.app.metadataCache.getFirstLinkpathDest(linkpath, sourcePath);
+    if (!resolved || this.file(resolved.path) !== resolved) return;
+    // Fully qualified paths are unambiguous. Short links may otherwise silently select
+    // one of several same-name notes; never record history on an arbitrary subscription.
+    const exact = this.file(linkpath) ?? this.file(linkpath + '.md');
+    if (exact === resolved && linkpath.includes('/')) return resolved;
+    if (/^\.\.?\//.test(linkpath)) {
+      const parts = sourcePath.split('/').slice(0, -1);
+      for (const part of linkpath.split('/')) {
+        if (part === '..') parts.pop();
+        else if (part !== '.') parts.push(part);
+      }
+      const relative = parts.join('/');
+      return (this.file(relative) ?? this.file(relative + '.md')) === resolved
+        ? resolved
+        : undefined;
+    }
+    const suffix = linkpath.replace(/\.md$/i, '').normalize('NFC').toLowerCase() + '.md';
+    const candidates = this.app.vault.getMarkdownFiles().filter((file) => {
+      const path = file.path.normalize('NFC').toLowerCase();
+      return path === suffix || path.endsWith('/' + suffix);
+    });
+    return candidates.length === 1 && candidates[0] === resolved ? resolved : undefined;
+  }
   read(file: TFile): Promise<string> {
     return this.app.vault.read(file);
   }

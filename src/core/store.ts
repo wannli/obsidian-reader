@@ -5,11 +5,15 @@ import {
   createDocument,
   patchProperties,
   readDocument,
+  rememberDeletedUrl,
   requireArticle,
   savePosition,
 } from './document';
 import { hasAnnotations } from './annotations';
 import {
+  deletedUrls,
+  linkPath,
+  text,
   filename,
   filenameDay,
   formatPublished,
@@ -30,6 +34,8 @@ export interface NoteFile {
 }
 export interface VaultPort<File extends NoteFile> {
   file(path: string): File | undefined;
+  /** Source-aware native link resolution; missing/ambiguous destinations return undefined. */
+  resolveLink?(linkpath: string, sourcePath: string): File | undefined;
   /** Includes folders and host-specific aliases (such as case-insensitive names). */
   exists?(path: string): boolean;
   read(file: File): Promise<string>;
@@ -53,6 +59,8 @@ export class ArticleStore<File extends NoteFile> {
   readonly catalog: Catalog;
   private writes = new SerialWrites<File>();
   private creates = new SerialWrites<string>();
+  // Imports and explicit trash share a lane through the final native operation.
+  private rss = new SerialWrites<string>();
   // Filename ownership is session-local, never inferred from a hostname/date on disk.
   // After restart an unfinished capture keeps its original filename, even on success.
   private captures = new WeakMap<File, { path: string; date: Date }>();
@@ -173,6 +181,57 @@ export class ArticleStore<File extends NoteFile> {
       this.catalog.update(path, properties);
       return file;
     });
+  }
+  /** RSS only: manual capture deliberately bypasses permanent suppression. */
+  importFeed(
+    input: Parameters<ArticleStore<File>['capture']>[0],
+    now = new Date(),
+    guard: () => void | Promise<void> = () => {},
+    expected?: { url: string; check: () => void },
+  ): Promise<File | undefined> {
+    return this.rss.run('rss', async () => {
+      const subscription = this.associatedSubscription(input.feed);
+      if (!subscription) throw new ChangedNote('Subscription is required.');
+      const { file, path } = subscription;
+      const suppressed = async () => {
+        await guard();
+        const doc = readDocument(await this.vault.read(file));
+        // No await between this cancellation check and validation of the same fresh snapshot.
+        expected?.check();
+        this.assert(file, path);
+        if (
+          doc.properties.type !== 'feed' ||
+          doc.properties.enabled === false ||
+          (expected && doc.properties.url !== expected.url)
+        )
+          throw new ChangedNote('Subscription changed; import cancelled.');
+        return deletedUrls(doc.properties.deleted_urls).includes(webUrl(input.url));
+      };
+      if (await suppressed()) return;
+      const blocked = new Error('Entry was deleted.');
+      try {
+        return await this.capture(input, now, async () => {
+          // Also runs in the native create guard, after directory creation/other awaits.
+          if (await suppressed()) throw blocked;
+        });
+      } catch (error) {
+        if (error !== blocked) throw error;
+      }
+    });
+  }
+  private associatedSubscription(
+    link: unknown,
+    sourcePath?: string,
+  ): { file: File; path: string } | undefined {
+    if (link === undefined) return;
+    const path = linkPath(text(link));
+    if (!path) throw new ChangedNote('Invalid subscription link; article retained.');
+    const file =
+      sourcePath && this.vault.resolveLink
+        ? this.vault.resolveLink(path, sourcePath)
+        : (this.vault.file(path) ?? this.vault.file(path + '.md'));
+    if (!file) throw new ChangedNote('Subscription is missing; article retained.');
+    return { file, path: file.path };
   }
   private async commit(
     snapshot: Snapshot<File>,
@@ -323,9 +382,31 @@ export class ArticleStore<File extends NoteFile> {
     );
   }
   trash(snapshot: Snapshot<File>, guard: () => void = () => {}): Promise<void> {
+    return this.rss.run('rss', () => this.trashNote(snapshot, guard, true));
+  }
+  private trashNote(snapshot: Snapshot<File>, guard: () => void, remember = false): Promise<void> {
     this.captures.delete(snapshot.file);
     return this.writes.run(snapshot.file, async () => {
       this.assert(snapshot.file, snapshot.path);
+      if ((await this.vault.read(snapshot.file)) !== snapshot.raw) throw new ChangedNote();
+      guard();
+      if (remember) {
+        const subscription = this.associatedSubscription(snapshot.properties.feed, snapshot.path);
+        if (subscription) {
+          const { file, path } = subscription;
+          const url = webUrl(text(snapshot.properties.url));
+          this.assert(file, path);
+          const before = await this.vault.read(file);
+          const raw = await this.vault.process(file, (current) => {
+            this.assert(snapshot.file, snapshot.path);
+            this.assert(file, path);
+            guard();
+            if (current !== before) throw new ChangedNote();
+            return rememberDeletedUrl(current, url);
+          });
+          this.catalog.update(path, readDocument(raw).properties);
+        }
+      }
       await this.vault.trash(snapshot.file, (current) => {
         this.assert(snapshot.file, snapshot.path);
         if (current !== snapshot.raw) throw new ChangedNote();
@@ -359,7 +440,7 @@ export class ArticleStore<File extends NoteFile> {
         } else if (
           publicationBefore(snapshot.properties.published, cutoff, filenameDay(snapshot.path))
         ) {
-          await this.trash(snapshot, () => {
+          await this.trashNote(snapshot, () => {
             if (inUse(file)) throw new ChangedNote('Article is in use.');
           });
           result.deleted++;

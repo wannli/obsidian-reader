@@ -45,6 +45,8 @@ url: https://example.com/feed.xml
 title: Example
 prefix: Example
 enabled: true
+deleted_urls:
+  - https://example.com/dismissed-article
 ---
 ```
 
@@ -53,11 +55,17 @@ enabled: true
 - Subscription notes and articles can share the configured subscription folder (default `Reading/Wires`); their `type` distinguishes them. Articles outside the four queue folders remain unqueued.
 - Unsubscribe trashes the subscription note, not its articles.
 
+### Deleted articles
+
+Approved on 15 October: optional `deleted_urls` stores normalized article URLs in the subscription note. Reader records a feed-associated article’s URL before explicit recoverable deletion, in any queue. Refresh skips these URLs; manual Add URL remains allowed. The list travels with ordinary vault sync, without sidecars or custom conflict resolution. Removing an entry permits future feed import again.
+
+This covers future Reader deletions, not past or native/external deletions. Suppression is per subscription; another feed can still import the URL. Expiry does not add history. Concurrent edits on different devices remain subject to the vault sync provider’s conflict handling; a device may import before receiving the suppression record. No existing articles are automatically removed when records arrive.
+
 ### Bounded refresh
 
-Add feed saves the subscription only, allowing its parameters to be edited before an explicit Sync. Startup and periodic timers do not refresh RSS/Atom feeds. Only explicit Sync imports entries from enabled subscriptions; each Sync considers at most the latest 20 entries, before deduplication and age filtering. No cursor, backlog traversal, or deleted-URL history is stored.
+Add feed saves the subscription only, allowing its parameters to be edited before an explicit Sync. Startup and periodic timers do not refresh RSS/Atom feeds. Only explicit Sync imports entries from enabled subscriptions; each Sync considers at most the latest 20 entries, before deduplication and age filtering. No cursor or backlog traversal is stored. Subscription `deleted_urls` prevents explicitly dismissed articles from returning.
 
-Deleted entries still in that window can return. More than 20 new entries between explicit Syncs can mean missed entries; feed reordering can change which entries fall in the window.
+Articles deleted outside Reader or before suppression was recorded can return while in that window. More than 20 new entries between explicit Syncs can mean missed entries; feed reordering can change which entries fall in the window.
 
 ## Acquisition and safety
 

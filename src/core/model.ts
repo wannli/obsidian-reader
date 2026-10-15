@@ -20,6 +20,7 @@ export interface Subscription {
   url: string;
   prefix: string;
   enabled: boolean;
+  deletedUrls?: string[];
   error?: string;
 }
 export const text = (value: unknown): string => (typeof value === 'string' ? value : '');
@@ -30,6 +31,13 @@ export function webUrl(input: string, base?: string): string {
     throw new Error('Use an HTTP(S) URL without credentials.');
   url.hash = '';
   return url.href;
+}
+/** Strict at mutation/import boundaries: malformed history must never silently disappear. */
+export function deletedUrls(value: unknown): string[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || value.some((url) => typeof url !== 'string'))
+    throw new Error('Invalid deleted_urls; expected a list of HTTP(S) URLs.');
+  return [...new Set(value.map((url) => webUrl(url as string)))];
 }
 export function queueFolder(queue: Queue, folders: ReaderFolders = defaultFolders): string {
   const keys = { Inbox: 'inbox', Stream: 'stream', Later: 'later', Treasury: 'treasury' } as const;
@@ -129,6 +137,14 @@ export function subscription(path: string, properties: Properties): Subscription
     url: text(properties.url),
     prefix: text(properties.prefix).trim() || title,
     enabled: properties.enabled !== false,
+    // Metadata is only a display cache; invalid history is rejected from fresh bytes on use.
+    deletedUrls: (() => {
+      try {
+        return deletedUrls(properties.deleted_urls);
+      } catch {
+        return undefined;
+      }
+    })(),
     error: text(properties.error) || undefined,
   };
 }

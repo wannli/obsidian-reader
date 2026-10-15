@@ -28,7 +28,7 @@ src/main.ts                         Obsidian lifecycle, commands, routing
 | `projection.ts`     | Conservative mapping from rendered words to original Markdown ranges    |
 | `work.ts`           | Small keyed work queue and file-identity write serialization            |
 
-`store.ts` is the mutation boundary. It rechecks current identity/revision, promotes before annotation, and uses guarded native moves. Session-only capture receipts permit safe filename retitling; they never become persisted ownership stamps. Expiry prefilters metadata, protects active work/backlinks, then reads only candidate bodies.
+`store.ts` is the mutation boundary. It rechecks current identity/revision, promotes before annotation, and uses guarded native moves. Session-only capture receipts permit safe filename retitling; they never become persisted ownership stamps. Explicit Reader deletion records feed-associated URLs in subscription `deleted_urls` before trash; RSS import rechecks suppression under a shared local import/delete lane. Expiry does not record suppression: it prefilters metadata, protects active work/backlinks, then reads only candidate bodies.
 
 ## Content: untrusted publisher input
 

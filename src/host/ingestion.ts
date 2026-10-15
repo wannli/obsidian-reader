@@ -248,7 +248,7 @@ export class Ingestion {
         await guard.validate();
         const body = await feedMarkdown(item);
         await guard.validate();
-        await this.store.capture(
+        await this.store.importFeed(
           {
             url: item.url,
             title: item.title,
@@ -260,6 +260,7 @@ export class Ingestion {
           },
           new Date(),
           guard.validate,
+          { url: feed.url, check: guard.check },
         );
       }
       await this.feedError(feed, undefined, guard.check);
