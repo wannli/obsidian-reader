@@ -31,6 +31,8 @@ export class ReadingSurface {
   private restorePending = false;
   private restoreFrame?: number;
   private saveTimer?: ReturnType<typeof setTimeout>;
+  private boundaryRevision = 0;
+  private reachableEnd?: { position: number; geometry: string };
 
   constructor(
     parent: HTMLElement,
@@ -59,6 +61,10 @@ export class ReadingSurface {
     this.viewport.classList.toggle('reader-paged', paged);
     this.resize = new ResizeObserver(() => this.reflow());
     this.resize.observe(this.viewport);
+    for (const type of ['loadingdone', 'loadingerror'])
+      document.fonts?.addEventListener(type, () => this.invalidateEnd(), {
+        signal: this.events.signal,
+      });
     this.viewport.addEventListener(
       'scroll',
       () => {
@@ -116,6 +122,8 @@ export class ReadingSurface {
     if (this.dead) return;
     // A newer snapshot can revert a queued change, or change only the URL base.
     this.next = body === this.content && url === this.url ? undefined : { body, url };
+    // Position-only saves call setBody too; they must not revoke a confirmed clamp.
+    if (this.next) this.invalidateEnd();
     this.refresh();
   }
 
@@ -205,6 +213,7 @@ export class ReadingSurface {
 
   private reflow(): void {
     if (this.dead) return;
+    this.invalidateEnd();
     this.feedback.dismiss();
     if (this.saveTimer !== undefined && !this.nativeSelection()) this.flush();
     if (this.dead) return;
@@ -281,7 +290,14 @@ export class ReadingSurface {
       // An unmeasured extent must not turn the start of a long article into its end.
       const end =
         extent > 0 ? Math.min(last, Math.max(0, extent - this.viewport.clientWidth)) : last;
-      return direction === -1 ? this.viewport.scrollLeft <= 1 : this.viewport.scrollLeft >= end - 1;
+      if (direction === -1) return this.viewport.scrollLeft <= 1;
+      if (this.viewport.scrollLeft >= end - 1) return true;
+      // This is observed reachability, not a larger geometric tolerance.
+      return !!(
+        this.reachableEnd &&
+        this.boundaryGeometry()?.key === this.reachableEnd.geometry &&
+        this.viewport.scrollLeft >= this.reachableEnd.position - 1
+      );
     }
     if (this.viewport.scrollHeight <= 0) return false;
     return direction === -1
@@ -297,21 +313,137 @@ export class ReadingSurface {
     return direction < 0 ? current > 0 : current < this.pageCount() - 1;
   }
 
+  private invalidateEnd(): void {
+    this.boundaryRevision++;
+    this.reachableEnd = undefined;
+  }
+
+  private boundaryGeometry(): { key: string; scale: number } | undefined {
+    if (
+      this.dead ||
+      !this.paged ||
+      !this.index ||
+      this.next ||
+      this.restoring ||
+      this.restorePending ||
+      this.layoutPending ||
+      this.nativeSelection()
+    )
+      return;
+    const viewport = this.viewport,
+      frame = viewport.getBoundingClientRect();
+    const zoom = (viewport as HTMLElement & { currentCSSZoom?: number }).currentCSSZoom;
+    const scale = zoom ?? frame.width / viewport.offsetWidth;
+    const metrics = [
+      viewport.clientWidth,
+      viewport.clientHeight,
+      viewport.scrollWidth,
+      this.flow.scrollWidth,
+      frame.width,
+      frame.height,
+      scale,
+    ];
+    if (
+      metrics.some((value) => !Number.isFinite(value) || value <= 0) ||
+      ![frame.left, frame.top].every(Number.isFinite)
+    )
+      return;
+    const style = this.window.getComputedStyle(viewport);
+    const flowStyle = this.window.getComputedStyle(this.flow);
+    if (
+      style.scrollSnapType !== 'none' ||
+      style.direction !== 'ltr' ||
+      flowStyle.direction !== 'ltr' ||
+      (flowStyle.writingMode && flowStyle.writingMode !== 'horizontal-tb')
+    )
+      return;
+    return {
+      scale,
+      // Do not include scroll-behavior: the temporary instant override is restored.
+      key: [
+        this.boundaryRevision,
+        ...metrics,
+        viewport.offsetWidth,
+        viewport.scrollHeight,
+        frame.left,
+        frame.top,
+        this.window.devicePixelRatio,
+        this.window.visualViewport?.scale,
+        style.scrollSnapType,
+        style.writingMode,
+        flowStyle.writingMode,
+        style.borderLeftWidth,
+        style.borderRightWidth,
+        style.borderTopWidth,
+        style.borderBottomWidth,
+        style.paddingLeft,
+        style.paddingRight,
+      ].join('|'),
+    };
+  }
+
   page(direction: -1 | 1): void {
     if (this.dead || !this.paged || this.nativeSelection()) return;
+    // A page may cancel restoration, but that unsettled request cannot prove EOF.
+    const geometry = direction === 1 ? this.boundaryGeometry() : undefined;
+    this.reachableEnd = undefined;
     this.stopRestoring();
     clearTimeout(this.saveTimer);
     this.saveTimer = undefined;
     const stride = this.columnWidth() + GAP;
+    const lastIndex = this.pageCount() - 1,
+      last = lastIndex * stride;
     const current = Math.round(this.viewport.scrollLeft / stride);
-    this.viewport.scrollLeft =
-      Math.min(this.pageCount() - 1, Math.max(0, current + direction)) * stride;
+    const target = Math.min(lastIndex, Math.max(0, current + direction)) * stride;
+    const style = this.viewport.style;
+    const behavior = style.getPropertyValue('scroll-behavior');
+    const priority = style.getPropertyPriority('scroll-behavior');
+    const styled = this.viewport.hasAttribute('style');
+    try {
+      style.setProperty('scroll-behavior', 'auto', 'important');
+      const instant = this.window.getComputedStyle(this.viewport).scrollBehavior === 'auto';
+      this.viewport.scrollLeft = target;
+      const landed = this.viewport.scrollLeft;
+      const end = Math.min(
+        last,
+        Math.max(0, this.viewport.scrollWidth - this.viewport.clientWidth),
+      );
+      const quantum = geometry ? Math.max(1, Math.ceil(1 / geometry.scale)) : 0;
+      if (
+        geometry &&
+        instant &&
+        target === last &&
+        Math.round(landed / stride) === lastIndex &&
+        end - landed > 1 &&
+        end - landed <= quantum &&
+        quantum < stride / 2 &&
+        this.boundaryGeometry()?.key === geometry.key
+      ) {
+        // Request beyond one quantization step, but no more than one extra stride.
+        // Any extra progress is still paging, never permission to hand off this press.
+        this.viewport.scrollLeft = Math.min(
+          last + stride,
+          Math.max(last + quantum + 1, this.viewport.scrollWidth),
+        );
+        if (
+          this.viewport.scrollLeft === landed &&
+          this.window.getComputedStyle(this.viewport).scrollBehavior === 'auto' &&
+          this.boundaryGeometry()?.key === geometry.key
+        )
+          this.reachableEnd = { position: landed, geometry: geometry.key };
+      }
+    } finally {
+      if (behavior) style.setProperty('scroll-behavior', behavior, priority);
+      else style.removeProperty('scroll-behavior');
+      if (!styled && !style.length) this.viewport.removeAttribute('style');
+    }
     this.fallback = this.viewportPosition();
     this.capture();
   }
 
   restore(marker: string): void {
     if (this.dead) return;
+    this.invalidateEnd();
     this.marker = marker;
     this.fallback = undefined;
     this.explicitRestore = this.restorePending = true;
@@ -375,6 +507,7 @@ export class ReadingSurface {
 
   dispose(): void {
     if (this.dead) return;
+    this.invalidateEnd();
     this.dead = true;
     this.feedback.dispose();
     clearTimeout(this.saveTimer);

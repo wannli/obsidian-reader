@@ -1703,6 +1703,370 @@ describe('article keyboard boundaries', () => {
     );
   });
 
+  describe('confirmed paged endpoint', () => {
+    // Chromium measurements, not a claim about the physical Boox's scale.
+    const clamps = [
+      { zoom: 0.25, width: 366, extent: 2356, end: 1988 },
+      { zoom: 0.33, width: 366, extent: 2356, end: 1987.878662109375 },
+      { zoom: 0.4, width: 341, extent: 2206, end: 1862.5 },
+      { zoom: 0.6, width: 276, extent: 2124, end: 1846.6666259765625 },
+    ];
+    let f: Awaited<ReturnType<typeof measuredFixture>> | undefined;
+    let restoreFonts: (() => void) | undefined;
+    async function measuredFixture(sample = clamps[3]) {
+      const actual = await vi.importActual<typeof surfaceModule>('../src/reader/surface');
+      const render = await import('../src/reader/render');
+      vi.spyOn(render, 'textBookmark').mockReturnValue('');
+      const geometry = {
+        ...sample,
+        height: 600,
+        renderedWidth: sample.width * sample.zoom,
+        defer: false,
+        probeMoves: false,
+        onWrite: undefined as (() => void) | undefined,
+      };
+      const writes: { requested: number; before: number; after: number; behavior: string }[] = [];
+      let resize = () => {};
+      vi.stubGlobal(
+        'ResizeObserver',
+        class {
+          constructor(callback: ResizeObserverCallback) {
+            resize = () => callback([], this as unknown as ResizeObserver);
+          }
+          observe() {}
+          disconnect() {}
+        },
+      );
+      const fonts = new window.EventTarget();
+      const descriptor = Object.getOwnPropertyDescriptor(document, 'fonts');
+      Object.defineProperty(document, 'fonts', { configurable: true, value: fonts });
+      restoreFonts = () => {
+        if (descriptor) Object.defineProperty(document, 'fonts', descriptor);
+        else delete (document as any).fonts;
+      };
+      vi.spyOn(surfaceModule, 'ReadingSurface').mockImplementation(function (...args) {
+        const surface = new actual.ReadingSurface(...args);
+        let left = 0;
+        surface.viewport.style.scrollSnapType = 'none';
+        surface.viewport.style.direction = 'ltr';
+        surface.flow.style.direction = 'ltr';
+        Object.defineProperties(surface.viewport, {
+          clientWidth: { get: () => geometry.width },
+          clientHeight: { get: () => geometry.height },
+          offsetWidth: { get: () => geometry.width },
+          scrollWidth: { get: () => geometry.extent },
+          scrollHeight: { get: () => geometry.height },
+          scrollLeft: {
+            configurable: true,
+            get: () => left,
+            set: (requested: number) => {
+              const before = left;
+              const stride = geometry.width + 32;
+              const last = (Math.ceil((geometry.extent + 32) / stride) - 1) * stride;
+              if (!geometry.defer) {
+                const end = geometry.probeMoves && requested > last ? last + 4 : geometry.end;
+                left = Math.max(0, Math.min(end, requested));
+              }
+              writes.push({
+                requested,
+                before,
+                after: left,
+                behavior: getComputedStyle(surface.viewport).scrollBehavior,
+              });
+              geometry.onWrite?.();
+            },
+          },
+        });
+        Object.defineProperty(surface.flow, 'scrollWidth', { get: () => geometry.extent });
+        vi.spyOn(surface.viewport, 'getBoundingClientRect').mockImplementation(
+          () => new DOMRect(10, 20, geometry.renderedWidth, geometry.height * geometry.zoom),
+        );
+        return surface;
+      });
+      const result = hostFixture();
+      result.host.paged = true;
+      const a = await result.note('Reading/Inbox/A.md');
+      const b = await result.note('Reading/Inbox/B.md');
+      const c = await result.note('Reading/Inbox/C.md');
+      await result.view.onOpen();
+      await result.view.openArticle(b.path, true);
+      return {
+        ...result,
+        a,
+        b,
+        c,
+        geometry,
+        writes,
+        fonts,
+        resize: () => resize(),
+        surface: result.probe.surface as surfaceModule.ReadingSurface,
+      };
+    }
+    afterEach(() => {
+      f?.view.stopForUnload();
+      f = undefined;
+      restoreFonts?.();
+      restoreFonts = undefined;
+      vi.unstubAllGlobals();
+      vi.useRealTimers();
+    });
+    it.each(
+      clamps.flatMap((sample) => ['ArrowDown', 'PageDown'].map((key) => ({ ...sample, key }))),
+    )(
+      '$key aligns four reachable CSS pixels, then hands off once at zoom $zoom',
+      async (sample) => {
+        f = await measuredFixture(sample);
+        const { surface, view, probe, geometry, writes } = f;
+        surface.viewport.scrollLeft = geometry.end - 4;
+        expect(surface.atBoundary(1)).toBe(false);
+        view.key(new KeyboardEvent('keydown', { key: sample.key, cancelable: true }));
+        await probe.operations;
+        expect(surface.viewport.scrollLeft).toBe(geometry.end);
+        expect(view.file).toBe(f.b); // Neither the page nor its probe may navigate this press.
+        expect(surface.atBoundary(1)).toBe(true);
+        expect(writes.at(-1)?.after).toBe(writes.at(-1)?.before);
+        const stride = geometry.width + 32;
+        const last = (Math.ceil((geometry.extent + 32) / stride) - 1) * stride;
+        expect(writes.at(-1)!.requested - last).toBeGreaterThan(Math.ceil(1 / geometry.zoom));
+        expect(writes.at(-1)!.requested - last).toBeLessThanOrEqual(stride);
+        surface.viewport.scrollLeft = geometry.end - 1;
+        expect(surface.atBoundary(1)).toBe(true);
+        // Confirmed reachability never widens the ordinary one-CSS-pixel tolerance.
+        surface.viewport.scrollLeft = geometry.end - 4;
+        expect(surface.atBoundary(1)).toBe(false);
+        surface.viewport.scrollLeft = geometry.end;
+        view.key(new KeyboardEvent('keydown', { key: sample.key, repeat: true }));
+        await probe.operations;
+        expect(view.file).toBe(f.b);
+        const open = vi.spyOn(probe, 'openArticleNow');
+        view.key(new KeyboardEvent('keydown', { key: sample.key }));
+        view.key(new KeyboardEvent('keydown', { key: sample.key }));
+        await probe.operations;
+        expect(view.file).toBe(f.c);
+        expect(open).toHaveBeenCalledOnce();
+      },
+    );
+    it('retains the confirmed endpoint through actual position writes and delayed scroll capture', async () => {
+      f = await measuredFixture();
+      const render = await import('../src/reader/render');
+      vi.mocked(render.textBookmark).mockReturnValue('before words');
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      const { surface, geometry, view, probe, store } = f;
+      surface.viewport.scrollLeft = geometry.end - 4;
+      surface.page(1); // Capture dispatches the real View.persistPosition -> ArticleStore write.
+      await probe.positionWrite;
+      expect((await store.read(f.b.path)).properties.reading_position).toBe('before words');
+      expect(surface.atBoundary(1)).toBe(true);
+      const body = surface.body.firstChild;
+      surface.viewport.dispatchEvent(new Event('scroll'));
+      vi.advanceTimersByTime(300);
+      await probe.positionWrite;
+      expect(surface.body.firstChild).toBe(body);
+      expect(surface.atBoundary(1)).toBe(true);
+      await store.position(f.c.path, 'after');
+      // Supply only jsdom's missing Range box; bookmark lookup and restoration stay real.
+      const bounds = Object.getOwnPropertyDescriptor(Range.prototype, 'getBoundingClientRect');
+      Object.defineProperty(Range.prototype, 'getBoundingClientRect', {
+        configurable: true,
+        value: () => new DOMRect(10 + geometry.width + 32, 20, 40, 20),
+      });
+      try {
+        view.key(new KeyboardEvent('keydown', { key: 'ArrowDown' }));
+        await probe.operations;
+        expect(view.file).toBe(f.c);
+        expect(probe.surface.viewport.scrollLeft).toBe(geometry.width + 32);
+        expect((await store.read(f.c.path)).properties.reading_position).toBe('after');
+      } finally {
+        if (bounds) Object.defineProperty(Range.prototype, 'getBoundingClientRect', bounds);
+        else delete (Range.prototype as any).getBoundingClientRect;
+      }
+    });
+    it.each(['selection', 'pointer', 'input', 'modal'])(
+      'keeps the %s guard at a measured clamp',
+      async (guard) => {
+        f = await measuredFixture();
+        const { surface, view, geometry } = f;
+        surface.viewport.scrollLeft = geometry.end;
+        let target: HTMLElement = surface.body;
+        if (guard === 'selection') {
+          const range = document.createRange();
+          range.selectNodeContents(surface.body);
+          document.getSelection()!.addRange(range);
+        }
+        if (guard === 'pointer') {
+          const event = new MouseEvent('pointerdown', { bubbles: true, button: 0 });
+          Object.defineProperty(event, 'pointerId', { value: 17 });
+          surface.viewport.dispatchEvent(event);
+        }
+        if (guard === 'input') target = document.body.createEl('input');
+        if (guard === 'modal') document.body.createDiv({ cls: 'modal-container' });
+        const event = new KeyboardEvent('keydown', {
+          key: 'ArrowDown',
+          bubbles: true,
+          cancelable: true,
+        });
+        target.addEventListener('keydown', (event) => view.key(event), { once: true });
+        target.dispatchEvent(event);
+        await f.probe.operations;
+        expect(view.file).toBe(f.b);
+        expect(surface.atBoundary(1)).toBe(false);
+      },
+    );
+    it.each(['smooth', 'auto'])(
+      'forces instantaneous requests and restores inline %s priority',
+      async (behavior) => {
+        f = await measuredFixture();
+        const { surface, geometry, writes } = f;
+        surface.viewport.style.setProperty('scroll-behavior', behavior, 'important');
+        surface.viewport.scrollLeft = geometry.end;
+        writes.length = 0;
+        surface.page(1);
+        expect(writes.length).toBe(2);
+        expect(writes.every((write) => write.behavior === 'auto')).toBe(true);
+        expect(surface.viewport.style.getPropertyValue('scroll-behavior')).toBe(behavior);
+        expect(surface.viewport.style.getPropertyPriority('scroll-behavior')).toBe('important');
+        expect(surface.atBoundary(1)).toBe(true); // Restoring smooth must not invalidate the evidence.
+      },
+    );
+    it('restores the previous scroll behavior even when a request throws', async () => {
+      f = await measuredFixture();
+      const { surface } = f;
+      surface.viewport.style.setProperty('scroll-behavior', 'smooth', 'important');
+      vi.spyOn(surface.viewport, 'scrollLeft', 'set').mockImplementation(() => {
+        throw new Error('scroll failed');
+      });
+      expect(() => surface.page(1)).toThrow('scroll failed');
+      expect(surface.viewport.style.getPropertyValue('scroll-behavior')).toBe('smooth');
+      expect(surface.viewport.style.getPropertyPriority('scroll-behavior')).toBe('important');
+    });
+    it.each([
+      'middle',
+      'near-last-half-page',
+      'rtl',
+      'vertical',
+      'snap',
+      'unmeasured',
+      'forced-smooth',
+    ])('does not infer EOF from an ignored request with %s geometry', async (kind) => {
+      f = await measuredFixture();
+      const { surface, geometry } = f;
+      if (kind !== 'middle' && kind !== 'rtl') surface.viewport.scrollLeft = geometry.end;
+      if (kind === 'near-last-half-page') {
+        surface.viewport.scrollLeft = geometry.end - (geometry.width + 32) * 0.4;
+        expect(surface.canPage(1)).toBe(false);
+      }
+      geometry.defer = true;
+      if (kind === 'rtl') surface.viewport.style.direction = 'rtl';
+      if (kind === 'vertical') surface.flow.style.writingMode = 'vertical-rl';
+      if (kind === 'snap') surface.viewport.style.scrollSnapType = 'x mandatory';
+      if (kind === 'unmeasured') geometry.renderedWidth = 0;
+      if (kind === 'forced-smooth') {
+        const computed = window.getComputedStyle.bind(window);
+        vi.spyOn(window, 'getComputedStyle').mockImplementation((element, pseudo) => {
+          const style = computed(element, pseudo);
+          if (element === surface.viewport)
+            Object.defineProperty(style, 'scrollBehavior', { value: 'smooth' });
+          return style;
+        });
+      }
+      surface.page(1);
+      expect(surface.atBoundary(1)).toBe(false);
+    });
+    it.each(['restoring', 'layoutPending', 'restorePending', 'index', 'next'])(
+      'cannot learn while %s is unsettled',
+      async (state) => {
+        f = await measuredFixture();
+        const { surface, geometry } = f;
+        surface.viewport.scrollLeft = geometry.end;
+        (surface as any)[state] =
+          state === 'index' ? undefined : state === 'next' ? { body: 'pending', url: '' } : true;
+        surface.page(1);
+        expect(surface.atBoundary(1)).toBe(false);
+        expect((surface as any).reachableEnd).toBeUndefined();
+      },
+    );
+    it.each(['geometry', 'font'])(
+      'does not learn when %s changes during the probe',
+      async (change) => {
+        f = await measuredFixture();
+        const { surface, geometry, writes, fonts } = f;
+        surface.viewport.scrollLeft = geometry.end;
+        writes.length = 0;
+        geometry.onWrite = () => {
+          if (writes.length !== 2) return;
+          if (change === 'geometry') geometry.renderedWidth += 1;
+          else fonts.dispatchEvent(new Event('loadingdone'));
+        };
+        surface.page(1);
+        expect(writes).toHaveLength(2);
+        expect(surface.atBoundary(1)).toBe(false);
+      },
+    );
+    it('does not learn an endpoint when the forward probe moves farther', async () => {
+      f = await measuredFixture();
+      const { surface, geometry, view, writes } = f;
+      surface.viewport.scrollLeft = geometry.end - 4;
+      geometry.probeMoves = true;
+      view.key(new KeyboardEvent('keydown', { key: 'ArrowDown' }));
+      await f.probe.operations;
+      expect(view.file).toBe(f.b);
+      expect(writes.at(-1)!.after).toBeGreaterThan(writes.at(-1)!.before);
+      expect((surface as any).reachableEnd).toBeUndefined();
+    });
+    it('rechecks DPR without waiting for a resize observer', async () => {
+      f = await measuredFixture();
+      const { surface, geometry } = f;
+      surface.viewport.scrollLeft = geometry.end;
+      surface.page(1);
+      expect(surface.atBoundary(1)).toBe(true);
+      const descriptor = Object.getOwnPropertyDescriptor(window, 'devicePixelRatio')!;
+      try {
+        Object.defineProperty(window, 'devicePixelRatio', { configurable: true, value: 2 });
+        expect(surface.atBoundary(1)).toBe(false);
+      } finally {
+        Object.defineProperty(window, 'devicePixelRatio', descriptor);
+      }
+    });
+    it.each([
+      'resize',
+      'image',
+      'font',
+      'font-error',
+      'body',
+      'url',
+      'title',
+      'restore',
+      'scale',
+      'css-zoom',
+      'extent',
+      'snap',
+      'dispose',
+    ])('invalidates confirmed reachability after %s', async (change) => {
+      f = await measuredFixture();
+      const { surface, geometry } = f;
+      surface.viewport.scrollLeft = geometry.end;
+      surface.page(1);
+      expect(surface.atBoundary(1)).toBe(true);
+      if (change === 'resize') f.resize();
+      if (change === 'image')
+        surface.body.appendChild(document.createElement('img')).dispatchEvent(new Event('load'));
+      if (change === 'font') f.fonts.dispatchEvent(new Event('loadingdone'));
+      if (change === 'font-error') f.fonts.dispatchEvent(new Event('loadingerror'));
+      if (change === 'body') surface.setBody('A different article body.', '');
+      if (change === 'url')
+        surface.setBody(surface.displayedBody!, 'https://example.invalid/changed');
+      if (change === 'title') surface.setTitle('A different title');
+      if (change === 'restore') surface.restore('missing marker');
+      if (change === 'scale') geometry.renderedWidth += 1;
+      if (change === 'css-zoom')
+        Object.defineProperty(surface.viewport, 'currentCSSZoom', { value: geometry.zoom + 0.1 });
+      if (change === 'extent') geometry.extent += geometry.width + 32;
+      if (change === 'snap') surface.viewport.style.scrollSnapType = 'x mandatory';
+      if (change === 'dispose') surface.dispose();
+      expect(surface.atBoundary(1)).toBe(false);
+    });
+  });
+
   it.each(['ArrowDown', 'PageDown', 'ArrowUp', 'PageUp'])(
     'uses the existing navigation pipeline once at %s boundary, and ignores repeats',
     async (key) => {
