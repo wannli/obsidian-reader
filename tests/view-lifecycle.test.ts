@@ -366,6 +366,7 @@ async function pluginFixture() {
 function actionName(button: Element): string {
   const label = button.getAttribute('aria-label') ?? button.textContent ?? '';
   if (label === 'Trash article and advance') return 'Delete';
+  if (label === 'Save to Treasury and advance') return 'Save to Treasury';
   return label.replace(/ (?:page or article|article(?: and advance)?)$/, '');
 }
 function menu(view: ReaderView, title: string) {
@@ -586,13 +587,14 @@ describe('automatic selection event ownership', () => {
     vi.useRealTimers();
     vi.unstubAllGlobals();
   });
-  it('mounts one aligned article column with exactly five persistent actions outside the scroller', () => {
+  it('mounts one aligned article column with exactly six persistent actions outside the scroller', () => {
     const column = f.view.contentEl.querySelector('.reader-article')!;
     const actions = column.querySelector('.reader-actions')!;
     expect([...actions.querySelectorAll('button')].map(actionName)).toEqual([
       'Previous',
       'Next',
-      'Keep',
+      'Read later',
+      'Save to Treasury',
       'Delete',
       'List',
     ]);
@@ -913,7 +915,7 @@ describe('automatic selection event ownership', () => {
     },
   );
 
-  it.each(['Keep', 'Delete', 'Next'])(
+  it.each(['Save to Treasury', 'Delete', 'Next'])(
     'uses the real bottom %s action to advance, retaining recoverable trash semantics',
     async (label) => {
       const next = await f.note('Reading/Inbox/Z next.md');
@@ -931,7 +933,7 @@ describe('automatic selection event ownership', () => {
       if (label !== 'Delete') {
         expect(await f.vault.read(f.article)).toBe(original);
         expect(f.article.path).toBe(
-          label === 'Keep' ? 'Reading/Treasury/Selection.md' : originalPath,
+          label === 'Save to Treasury' ? 'Reading/Treasury/Selection.md' : originalPath,
         );
       }
       click('Next');
@@ -2440,7 +2442,7 @@ describe('bounded Reader UI', () => {
     },
   );
 
-  it('shares the library action treatment with five uniform article icons, without hiding authored hr or modal controls', async () => {
+  it('shares the library action treatment with six uniform article icons, without hiding authored hr or modal controls', async () => {
     const f = hostFixture();
     const style = document.head.appendChild(document.createElement('style'));
     style.textContent = readFileSync(new URL('../src/reader/styles.css', import.meta.url), 'utf8');
@@ -2463,14 +2465,17 @@ describe('bounded Reader UI', () => {
       ];
       expect(
         buttons.map((button) => button.querySelector('svg')?.getAttribute('data-icon')),
-      ).toEqual(['chevron-left', 'chevron-right', 'bookmark', 'trash-2', 'list']);
+      ).toEqual(['chevron-left', 'chevron-right', 'clock', 'bookmark', 'trash-2', 'list']);
       expect(buttons.map((button) => button.getAttribute('aria-label'))).toEqual([
         'Previous article',
         'Next article',
-        'Keep article and advance',
+        'Read later',
+        'Save to Treasury and advance',
         'Trash article and advance',
         'List',
       ]);
+      expect(setTooltip).toHaveBeenCalledWith(buttons[2], 'Read later');
+      expect(setTooltip).toHaveBeenCalledWith(buttons[3], 'Save to Treasury');
       expect(buttons[0].disabled).toBe(true);
       for (const button of buttons) {
         const css = window.getComputedStyle(button);
@@ -2598,7 +2603,7 @@ describe('Reader mobile control styling', () => {
       await f.view.openArticle(article.path, true);
       const actions =
         f.view.contentEl.querySelectorAll<HTMLButtonElement>('.reader-actions button');
-      expect(actions).toHaveLength(5);
+      expect(actions).toHaveLength(6);
       for (const button of actions) checkIcon(button, '100%');
       expect(actions[0].disabled).toBe(true);
       expect(window.getComputedStyle(actions[0]).opacity).toBe('0.45');
@@ -2627,7 +2632,7 @@ describe('Reader mobile control styling', () => {
 
 describe('leaf-scoped floating Reader layout', () => {
   it.each([390, 1280].flatMap((width) => [false, true].map((paged) => ({ width, paged }))))(
-    'uses full-pane CSS with compact 4/5-action overlays (width=$width, paged=$paged)',
+    'uses full-pane CSS with compact 4/6-action overlays (width=$width, paged=$paged)',
     async ({ width, paged }) => {
       const f = hostFixture();
       const file = await f.note('Reading/Inbox/Title.md');
@@ -2659,7 +2664,7 @@ describe('leaf-scoped floating Reader layout', () => {
         await f.view.openArticle(file.path, true);
         const column = f.view.contentEl.querySelector('.reader-article')!;
         const actions = column.querySelector('.reader-bottom-controls')!;
-        expect(actions.querySelectorAll('button')).toHaveLength(5);
+        expect(actions.querySelectorAll('button')).toHaveLength(6);
         expect(actions.parentElement).toBe(column);
         expect(column.firstElementChild).toBe(f.probe.status);
         expect(window.getComputedStyle(column).position).toBe('relative');
@@ -3006,7 +3011,58 @@ describe('native title-only presentation', () => {
 });
 
 describe('browsing context and presentation', () => {
-  it('uses independent folder context for Stream promotion, browsing and explicit Keep', async () => {
+  it.each(['Inbox', 'Stream', 'Later', 'Treasury'] as const)(
+    'Read later moves from %s without advancing or losing the original browsing context',
+    async (queue) => {
+      const folders = { ...defaultFolders, later: 'Queues/Read later' };
+      const f = hostFixture(folders);
+      const folder = folders[queue.toLowerCase() as keyof ReaderFolders];
+      const article = await f.note(`${folder}/A.md`, 'Article A'),
+        next = await f.note(`${folder}/B.md`, 'Article B');
+      f.view.showList(queue);
+      await f.view.openArticle(article.path, true);
+      const surface = f.probe.surface;
+      surface.marker = 'Article A';
+      const move = vi.spyOn(f.store, 'move');
+      f.host.ingestion.acquire.mockClear();
+      const clickLater = () =>
+        f.view.contentEl.querySelector<HTMLButtonElement>('[aria-label="Read later"]')!.click();
+      clickLater();
+      await f.probe.operations;
+      expect(mocks.choose).not.toHaveBeenCalled();
+      expect(move).toHaveBeenCalledWith(expect.anything(), 'Later');
+      expect(article.path).toBe('Queues/Read later/A.md');
+      expect(f.view.file).toBe(article);
+      expect(f.probe.surface).toBe(surface);
+      expect(f.view.getState()).toEqual({ file: article.path, queue });
+      const saved = readDocument(await f.vault.read(article));
+      expect(saved.body).toBe('Article A');
+      expect(saved.properties.reading_position).toBe('Article A');
+      expect(f.host.ingestion.acquire).toHaveBeenCalledWith(article.path);
+      clickLater();
+      await f.probe.operations;
+      expect(article.path).toBe('Queues/Read later/A.md');
+      await f.view.navigate(1);
+      expect(f.view.file).toBe(next);
+      await f.view.readingList();
+      expect(f.view.getState().queue).toBe(queue);
+    },
+  );
+
+  it('rejects Read later when the displayed source has changed', async () => {
+    const f = hostFixture();
+    const article = await f.note('Reading/Inbox/A.md');
+    await f.view.openArticle(article.path, true);
+    const external = createDocument({ type: 'article' }, 'External edit');
+    f.vault.bytes.set(article, external);
+    f.view.contentEl.querySelector<HTMLButtonElement>('[aria-label="Read later"]')!.click();
+    await expect(f.probe.operations).rejects.toThrow();
+    expect(article.path).toBe('Reading/Inbox/A.md');
+    expect(await f.vault.read(article)).toBe(external);
+    expect(f.view.file).toBe(article);
+  });
+
+  it('uses independent folder context for Stream promotion, browsing and explicit Save to Treasury', async () => {
     const folders: ReaderFolders = {
       inbox: 'Queues/Inbox',
       stream: 'Cache/Stream',
@@ -3780,7 +3836,8 @@ describe('Nodes v2 linked creation', () => {
     ['before', 'after'].flatMap((phase) =>
       [
         ['footer', 'Next'],
-        ['footer', 'Keep'],
+        ['footer', 'Read later'],
+        ['footer', 'Save to Treasury'],
         ['footer', 'Delete'],
         ['footer', 'List'],
         ['footer', 'Previous'],
@@ -3831,15 +3888,19 @@ describe('Nodes v2 linked creation', () => {
         await creation;
         await f.probe.operations;
         // Reach the destination before releasing the uncooperative provider.
-        if (['Next', 'Previous', 'Keep', 'Delete'].includes(label))
+        if (['Next', 'Previous', 'Save to Treasury', 'Delete'].includes(label))
           expect(f.view.file?.path).toBe(neighbour);
+        if (label === 'Read later') {
+          expect(f.article.path).toBe('Reading/Later/A.md');
+          expect(f.view.file).toBe(f.article);
+        }
         if (label === 'List') expect(f.view.file).toBeUndefined();
         if (label === 'Move…') expect(mocks.choose).toHaveBeenCalled();
         if (label === 'Topics…') expect(mocks.topics).toHaveBeenCalled();
         if (label === 'Change link…') expect(mocks.choose).toHaveBeenCalled();
         if (route === 'menu-class') expect(mocks.pickNode).toHaveBeenCalled();
         if (label === 'Create note…') expect(calls).toBe(2);
-        if (label === 'Keep') expect(f.article.path).toBe('Reading/Treasury/A.md');
+        if (label === 'Save to Treasury') expect(f.article.path).toBe('Reading/Treasury/A.md');
         if (label === 'Open Markdown')
           await vi.waitFor(
             () =>

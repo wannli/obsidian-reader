@@ -755,10 +755,13 @@ export class ReaderView extends ItemView {
         this.host.paged ? `${label} page or article` : `${label} article`,
       );
     }
-    this.button(this.actions, 'Keep', () => this.finish('keep'), 'bookmark').setAttribute(
-      'aria-label',
-      'Keep article and advance',
-    );
+    this.button(this.actions, 'Read later', () => this.move('Later'), 'clock');
+    this.button(
+      this.actions,
+      'Save to Treasury',
+      () => this.finish('keep'),
+      'bookmark',
+    ).setAttribute('aria-label', 'Save to Treasury and advance');
     this.button(this.actions, 'Delete', () => this.finish('delete'), 'trash-2').setAttribute(
       'aria-label',
       'Trash article and advance',
@@ -1078,7 +1081,7 @@ export class ReaderView extends ItemView {
       else this.showList();
     });
   }
-  private move(): Promise<void> {
+  private move(destination?: Queue): Promise<void> {
     this.cancelNodeCreation();
     return this.operation(async () => {
       await this.prepareToLeave();
@@ -1086,13 +1089,9 @@ export class ReaderView extends ItemView {
         generation = this.generation;
       if (!snapshot || this.stopping) return;
       const signal = this.articleLifetime.signal;
-      const target = await choose(
-        this.app,
-        'Move article to…',
-        [...queues],
-        (queue) => queue,
-        signal,
-      );
+      const target =
+        destination ??
+        (await choose(this.app, 'Move article to…', [...queues], (queue) => queue, signal));
       if (!target || signal.aborted || !this.current(snapshot, generation)) return;
       this.assertDisplayed(snapshot, true);
       const moved = await this.host.store.move(snapshot, target);

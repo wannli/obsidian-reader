@@ -86,7 +86,7 @@ Final overall backup audit: 43 → 43, no additions/deletions; only `reading_pos
 
 See [recorded evidence and phone checklist](mobile-smoke.md) (`reader-redesign-audit.json`, `native-folder-apply.json`, `native-resume.json`, `routing.json`, `uri.json`) and the [historical/current report](rebuild-report.html). That installed build's recorded validation: 1042 unit + 72 tooling = 1114; test-only 8.258s, full check 12.361s. Automated geometry and the four-width production Surface browser checks are not physical-device evidence.
 
-The merged source additionally preserves image enlargement, web-link capture, transient highlight acknowledgement and tracked native-title refresh. Its regression checks do not extend the earlier native acceptance; this Git-only merge does not install or reload it.
+The merged source additionally preserves image enlargement, web-link capture, transient highlight acknowledgement and tracked native-title refresh. The approved article toolbar now has six actions: Read later (clock) moves to Later without advancing, and Save to Treasury (bookmark, formerly Keep) retains its advance behavior. Its regression checks do not extend the earlier native acceptance; this Git-only merge does not install or reload it.
 
 Remaining checks require a future authorized window; the current native hold remains true:
 
