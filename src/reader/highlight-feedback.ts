@@ -23,7 +23,7 @@ export class HighlightFeedback {
     viewport.parentElement!.append(this.status);
     const dismiss = () => this.dismiss();
     doc.addEventListener('scroll', dismiss, { ...options, capture: true, passive: true });
-    doc.addEventListener('pointerdown', dismiss, options);
+    doc.addEventListener('pointerdown', dismiss, { ...options, capture: true });
     doc.addEventListener('selectionchange', dismiss, options);
     doc.addEventListener('keydown', dismiss, options);
     doc.addEventListener('visibilitychange', dismiss, options);

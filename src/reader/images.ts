@@ -19,15 +19,20 @@ export function imageViewer(root: HTMLElement): () => void {
     dialog = doc.createElement('dialog');
     dialog.className = 'reader-image-viewer modal-container';
     dialog.setAttribute('aria-label', image.alt || 'Enlarged image');
-    const close = doc.createElement('button');
-    close.type = 'button';
-    close.textContent = 'Close image';
-    close.addEventListener('click', () => dismiss());
     const enlarged = doc.createElement('img');
     enlarged.alt = image.alt;
+    enlarged.tabIndex = 0;
+    enlarged.setAttribute('role', 'button');
+    enlarged.setAttribute('aria-label', `Close image${image.alt ? `: ${image.alt}` : ''}`);
     enlarged.referrerPolicy = 'no-referrer';
     enlarged.src = src;
-    dialog.append(close, enlarged);
+    dialog.append(enlarged);
+    dialog.addEventListener('click', (event) => {
+      if (event.target !== enlarged && event.target !== dialog) return;
+      event.preventDefault();
+      event.stopPropagation();
+      dismiss();
+    });
     dialog.addEventListener('cancel', (event) => {
       event.preventDefault();
       dismiss();
@@ -37,14 +42,17 @@ export function imageViewer(root: HTMLElement): () => void {
       if (event.key === 'Escape') {
         event.preventDefault();
         dismiss();
+      } else if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        if (!event.repeat) dismiss();
       } else if (event.key === 'Tab') {
         event.preventDefault();
-        close.focus({ preventScroll: true });
+        enlarged.focus({ preventScroll: true });
       }
     });
     doc.body.append(dialog);
     dialog.showModal();
-    close.focus({ preventScroll: true });
+    enlarged.focus({ preventScroll: true });
   };
   for (const image of root.querySelectorAll('img')) {
     image.tabIndex = 0;
@@ -59,6 +67,7 @@ export function imageViewer(root: HTMLElement): () => void {
       return;
     event.preventDefault();
     event.stopPropagation();
+    if (event instanceof doc.defaultView!.KeyboardEvent && event.repeat) return;
     open(image as HTMLImageElement);
   };
   root.addEventListener('click', activate, { capture: true, signal: events.signal });

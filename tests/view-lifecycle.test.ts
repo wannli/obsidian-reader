@@ -603,7 +603,229 @@ describe('automatic selection event ownership', () => {
     expect(f.view.contentEl.textContent).not.toContain('End of article');
   });
 
-  it('saves 250ms after the last pointer releases, shows one transient acknowledgement, then paints without clearing native selection', async () => {
+  function gesture(
+    type: string,
+    target: EventTarget = f.surface.body,
+    pointerType = 'touch',
+    pointerId = 1,
+  ): Event {
+    const event = new Event(type, { bubbles: true, cancelable: true });
+    Object.assign(event, {
+      button: 0,
+      pointerId,
+      pointerType,
+      changedTouches: [{ identifier: pointerId }],
+    });
+    target.dispatchEvent(event);
+    return event;
+  }
+
+  it.each(['article', 'list', 'controls', 'margin'] as const)(
+    'isolates the whole mobile gesture throughout Reader %s without cancelling defaults or same-element handlers',
+    async (area) => {
+      if (area === 'list') await f.view.readingList();
+      const target =
+        area === 'list'
+          ? f.view.contentEl.querySelector('.reader-list-item')!
+          : area === 'controls'
+            ? f.view.contentEl.querySelector('.reader-actions button')!
+            : area === 'margin'
+              ? f.view.contentEl
+              : f.surface.body;
+      const workspace = vi.fn(),
+        reader = vi.fn(),
+        capture = vi.fn();
+      const types = [
+        'pointerdown',
+        'touchstart',
+        'pointermove',
+        'touchmove',
+        'pointerup',
+        'pointercancel',
+        'touchend',
+        'touchcancel',
+      ];
+      for (const type of types) {
+        f.view.containerEl.addEventListener(type, workspace);
+        f.view.containerEl.addEventListener(type, capture, { capture: true });
+        f.view.contentEl.addEventListener(type, reader);
+        expect(gesture(type, target).defaultPrevented).toBe(false);
+      }
+      expect(workspace).not.toHaveBeenCalled();
+      expect(reader).toHaveBeenCalledTimes(types.length);
+      expect(capture).toHaveBeenCalledTimes(types.length); // Not a capture-phase barrier.
+      expect(f.probe.selecting).toBe(false);
+    },
+  );
+
+  it.each(
+    ['touch', 'pen'].flatMap((kind) =>
+      ['pointerup', 'pointercancel'].map((release) => ({ kind, release })),
+    ),
+  )(
+    'preserves selection and saves exactly once 900ms after isolated $kind $release',
+    async ({ kind, release }) => {
+      const annotate = vi.spyOn(f.store, 'annotate'),
+        workspace = vi.fn();
+      for (const type of ['pointerdown', 'pointerup', 'pointercancel', 'touchstart', 'touchend'])
+        f.view.containerEl.addEventListener(type, workspace);
+      gesture('pointerdown', f.surface.body, kind);
+      if (kind === 'touch') gesture('touchstart');
+      expect(f.surface.pointerActive).toBe(true);
+      f.select(0);
+      vi.advanceTimersByTime(1200);
+      await f.probe.operations;
+      expect(annotate).not.toHaveBeenCalled();
+      gesture(release, f.surface.body, kind);
+      expect(f.surface.pointerActive).toBe(false);
+      if (kind === 'touch') {
+        vi.advanceTimersByTime(1200); // A known touch remains even after pointer release/cancel.
+        await f.probe.operations;
+        expect(annotate).not.toHaveBeenCalled();
+        gesture('touchend');
+      }
+      vi.advanceTimersByTime(899);
+      await f.probe.operations;
+      expect(annotate).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(1);
+      await f.probe.operations;
+      expect(annotate).toHaveBeenCalledOnce();
+      expect((await f.store.read(f.article.path)).body).toBe('==Alpha== phrase.\n\nBeta phrase.');
+      expect(document.getSelection()!.toString()).toBe('Alpha');
+      expect(workspace).not.toHaveBeenCalled();
+    },
+  );
+
+  it('restarts the full 900ms quiet period for every adjustment, including repeated text', async () => {
+    const annotate = vi.spyOn(f.store, 'annotate');
+    f.select(0);
+    vi.advanceTimersByTime(899);
+    f.select(1);
+    vi.advanceTimersByTime(899);
+    f.select(1);
+    vi.advanceTimersByTime(899);
+    await f.probe.operations;
+    expect(annotate).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1);
+    await f.probe.operations;
+    expect(annotate).toHaveBeenCalledOnce();
+    expect((await f.store.read(f.article.path)).body).toBe('Alpha phrase.\n\n==Beta== phrase.');
+    expect(document.getSelection()!.toString()).toBe('Beta');
+  });
+
+  it.each(['pointerup', 'pointercancel', 'touchend', 'touchcancel'])(
+    'retains the outside-Reader %s fallback and its full quiet period',
+    async (release) => {
+      const annotate = vi.spyOn(f.store, 'annotate');
+      gesture(release.startsWith('touch') ? 'touchstart' : 'pointerdown');
+      f.select(0);
+      vi.advanceTimersByTime(1200);
+      await f.probe.operations;
+      expect(annotate).not.toHaveBeenCalled();
+      expect(gesture(release, document.body).defaultPrevented).toBe(false);
+      expect(f.surface.pointerActive).toBe(false);
+      expect(f.probe.selecting).toBe(false);
+      vi.advanceTimersByTime(899);
+      await f.probe.operations;
+      expect(annotate).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(1);
+      await f.probe.operations;
+      expect(annotate).toHaveBeenCalledOnce();
+      expect(document.getSelection()!.toString()).toBe('Alpha');
+    },
+  );
+
+  it('does not isolate mouse, click or keyboard events', () => {
+    const workspace = vi.fn();
+    for (const type of [
+      'pointerdown',
+      'pointermove',
+      'pointerup',
+      'pointercancel',
+      'click',
+      'keydown',
+    ]) {
+      f.view.containerEl.addEventListener(type, workspace);
+      expect(gesture(type, f.surface.body, 'mouse').defaultPrevented).toBe(false);
+    }
+    expect(workspace).toHaveBeenCalledTimes(6);
+  });
+
+  it('leaves native headers, other leaves and dialogs outside the mobile boundary', () => {
+    const header = document.createElement('button'),
+      other = document.createElement('div'),
+      dialog = document.createElement('dialog'),
+      outside = vi.fn(),
+      click = vi.fn(),
+      events = new AbortController();
+    f.view.containerEl.prepend(header);
+    document.body.append(other, dialog);
+    document.addEventListener('touchmove', outside, { signal: events.signal });
+    header.addEventListener('click', click);
+    try {
+      for (const target of [header, other, dialog])
+        expect(gesture('touchmove', target).defaultPrevented).toBe(false);
+      header.click();
+      expect(outside).toHaveBeenCalledTimes(3);
+      expect(click).toHaveBeenCalledOnce();
+    } finally {
+      events.abort();
+    }
+  });
+
+  it.each(['close', 'unload', 'host retirement'])(
+    'removes mobile interception after %s',
+    async (end) => {
+      const workspace = vi.fn(),
+        annotate = vi.spyOn(f.store, 'annotate');
+      f.view.containerEl.addEventListener('touchstart', workspace);
+      if (end === 'close') await f.view.onClose();
+      else if (end === 'unload') f.view.stopForUnload();
+      else f.signal.abort();
+      expect(gesture('touchstart', f.view.contentEl).defaultPrevented).toBe(false);
+      expect(workspace).toHaveBeenCalledOnce();
+      vi.advanceTimersByTime(1200);
+      await f.probe.operations;
+      expect(annotate).not.toHaveBeenCalled();
+    },
+  );
+
+  it('keeps a touch-only adjustment held until every known touch releases', async () => {
+    const annotate = vi.spyOn(f.store, 'annotate');
+    gesture('touchstart', f.surface.body, 'touch', 1);
+    gesture('touchstart', f.surface.body, 'touch', 2);
+    f.select(0);
+    gesture('touchend', f.surface.body, 'touch', 1);
+    vi.advanceTimersByTime(1200);
+    await f.probe.operations;
+    expect(annotate).not.toHaveBeenCalled();
+    gesture('touchcancel', f.surface.body, 'touch', 2);
+    vi.advanceTimersByTime(899);
+    await f.probe.operations;
+    expect(annotate).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1);
+    await f.probe.operations;
+    expect(annotate).toHaveBeenCalledOnce();
+    expect(document.getSelection()!.toString()).toBe('Alpha');
+  });
+
+  it('cancels a pending automatic save on host retirement without isolating later gestures', async () => {
+    const annotate = vi.spyOn(f.store, 'annotate'),
+      workspace = vi.fn();
+    f.view.containerEl.addEventListener('touchmove', workspace);
+    f.select(0);
+    vi.advanceTimersByTime(899);
+    f.signal.abort();
+    document.dispatchEvent(new Event('selectionchange'));
+    gesture('touchmove');
+    vi.advanceTimersByTime(1200);
+    await f.probe.operations;
+    expect(annotate).not.toHaveBeenCalled();
+    expect(workspace).toHaveBeenCalledOnce();
+    expect(document.getSelection()!.toString()).toBe('Alpha');
+  });
+
+  it('saves 900ms after the last pointer releases, shows one transient acknowledgement, then paints without clearing native selection', async () => {
     vi.spyOn(f.surface.viewport, 'getBoundingClientRect').mockReturnValue(
       new DOMRect(0, 0, 400, 300),
     );
@@ -634,7 +856,7 @@ describe('automatic selection event ownership', () => {
       await f.probe.operations;
       expect((await f.store.read(f.article.path)).body).toBe(f.body);
       pointer('pointerup', 2);
-      vi.advanceTimersByTime(249);
+      vi.advanceTimersByTime(899);
       await f.probe.operations;
       expect((await f.store.read(f.article.path)).body).toBe(f.body);
       vi.advanceTimersByTime(1);
@@ -682,7 +904,7 @@ describe('automatic selection event ownership', () => {
       document.dispatchEvent(new Event('selectionchange'));
       const before = await f.vault.read(f.article),
         annotate = vi.spyOn(f.store, 'annotate');
-      vi.advanceTimersByTime(250);
+      vi.advanceTimersByTime(900);
       await f.probe.operations;
       expect(await f.vault.read(f.article)).toBe(before);
       expect(annotate).not.toHaveBeenCalled();
@@ -739,7 +961,7 @@ describe('automatic selection event ownership', () => {
     );
     await f.view.changed({ path: f.article.path });
     f.select(0);
-    vi.advanceTimersByTime(250);
+    vi.advanceTimersByTime(900);
     await f.probe.operations;
     expect((await f.store.read(f.article.path)).body).toContain('==Alpha==');
     const status = f.view.contentEl.querySelector('.reader-status')!;
@@ -751,7 +973,7 @@ describe('automatic selection event ownership', () => {
   it('does not silence genuine passive write failures', async () => {
     vi.spyOn(f.vault, 'process').mockRejectedValueOnce(new Error('Disk write failed'));
     f.select(0);
-    vi.advanceTimersByTime(250);
+    vi.advanceTimersByTime(900);
     await expect(f.probe.operations).rejects.toThrow('Disk write failed');
     expect((await f.store.read(f.article.path)).body).toBe(f.body);
     expect(mocks.notice).toHaveBeenCalledWith('Disk write failed');
@@ -786,16 +1008,16 @@ describe('automatic selection event ownership', () => {
       }
       await entered.promise;
       f.select(0);
-      vi.advanceTimersByTime(250);
+      vi.advanceTimersByTime(900);
       const oldJob = f.probe.operations;
       // Let the automatic action enter its position wait, if that is the blocked path.
       await Promise.resolve();
       await Promise.resolve();
-      f.select(1); // B has not satisfied its own 250ms debounce.
+      f.select(1); // B has not satisfied its own 900ms debounce.
       release.resolve();
       await oldJob;
       expect((await f.store.read(f.article.path)).body).toBe(f.body);
-      vi.advanceTimersByTime(250);
+      vi.advanceTimersByTime(900);
       await f.probe.operations;
       expect((await f.store.read(f.article.path)).body).toBe('Alpha phrase.\n\n==Beta== phrase.');
       if (wait === 'position')
@@ -816,7 +1038,7 @@ describe('automatic selection event ownership', () => {
       });
       await entered.promise;
       f.select(0);
-      vi.advanceTimersByTime(250);
+      vi.advanceTimersByTime(900);
       const oldJob = f.probe.operations;
       if (kind === 'repeat') f.select(0); // Same text/context, but a new selection revision.
       if (kind === 'unreported') f.select(1, 4, false); // The native selectionchange task has not run yet.
@@ -831,7 +1053,7 @@ describe('automatic selection event ownership', () => {
       await oldJob;
       expect((await f.store.read(f.article.path)).body).toBe(f.body);
       if (kind === 'unreported') document.dispatchEvent(new Event('selectionchange'));
-      vi.advanceTimersByTime(250);
+      vi.advanceTimersByTime(900);
       await f.probe.operations;
       expect((await f.store.read(f.article.path)).body).toBe(
         kind === 'unreported'
@@ -851,7 +1073,7 @@ describe('automatic selection event ownership', () => {
       return process(file, update);
     });
     f.select(0);
-    vi.advanceTimersByTime(250);
+    vi.advanceTimersByTime(900);
     const oldJob = f.probe.operations;
     await entered.promise;
     f.select(1);
@@ -860,7 +1082,7 @@ describe('automatic selection event ownership', () => {
     expect((await f.store.read(f.article.path)).body).toBe(f.body);
     expect(document.getSelection()!.toString()).toBe('Beta');
     expect(mocks.notice).not.toHaveBeenCalled();
-    vi.advanceTimersByTime(250);
+    vi.advanceTimersByTime(900);
     await f.probe.operations;
     expect((await f.store.read(f.article.path)).body).toBe('Alpha phrase.\n\n==Beta== phrase.');
   });
@@ -881,7 +1103,7 @@ describe('automatic selection event ownership', () => {
       }
       await f.view.changed({ path: f.article.path });
       const before = await f.vault.read(f.vault.file(f.article.path)!);
-      vi.advanceTimersByTime(250);
+      vi.advanceTimersByTime(900);
       await f.probe.operations;
       expect(await f.vault.read(f.vault.file(f.article.path)!)).toBe(before);
     },
@@ -889,19 +1111,19 @@ describe('automatic selection event ownership', () => {
 
   it('allows keyboard-style selection changes, own deferred rendering and overlapping adjustment', async () => {
     f.select(0);
-    vi.advanceTimersByTime(250);
+    vi.advanceTimersByTime(900);
     await f.probe.operations;
     expect((await f.store.read(f.article.path)).body).toBe('==Alpha== phrase.\n\nBeta phrase.');
     expect(f.surface.displayedBody).toBe(f.body);
     expect(document.getSelection()!.toString()).toBe('Alpha');
     f.select(0, 12);
-    vi.advanceTimersByTime(250);
+    vi.advanceTimersByTime(900);
     await f.probe.operations;
     expect((await f.store.read(f.article.path)).body).toBe('==Alpha phrase==.\n\nBeta phrase.');
     document.getSelection()!.removeAllRanges();
     document.dispatchEvent(new Event('selectionchange'));
     expect(f.surface.displayedBody).toBe('==Alpha phrase==.\n\nBeta phrase.');
-    vi.advanceTimersByTime(250);
+    vi.advanceTimersByTime(900);
     await f.probe.operations;
     expect([...f.surface.body.querySelectorAll('mark')].map((mark) => mark.textContent)).toEqual([
       'Alpha phrase',
@@ -919,7 +1141,7 @@ describe('automatic selection event ownership', () => {
     range.setEnd(node, 5);
     document.getSelection()!.addRange(range);
     document.dispatchEvent(new Event('selectionchange'));
-    vi.advanceTimersByTime(250);
+    vi.advanceTimersByTime(900);
     await f.probe.operations;
     expect(f.article.path).toBe('Reading/Inbox/Selection.md');
     expect((await f.store.read(f.article.path)).body).toBe('==Alpha== phrase.\n\nBeta phrase.');
@@ -937,14 +1159,14 @@ describe('automatic selection event ownership', () => {
       return raw;
     });
     f.select(0);
-    vi.advanceTimersByTime(250);
+    vi.advanceTimersByTime(900);
     const oldJob = f.probe.operations;
     await dispatched.promise;
     f.select(1);
     release.resolve();
     await oldJob;
     expect((await f.store.read(f.article.path)).body).toBe('==Alpha== phrase.\n\nBeta phrase.');
-    vi.advanceTimersByTime(250);
+    vi.advanceTimersByTime(900);
     await f.probe.operations;
     expect((await f.store.read(f.article.path)).body).toBe('==Alpha== phrase.\n\n==Beta== phrase.');
     expect(mocks.notice).not.toHaveBeenCalled();
@@ -959,7 +1181,7 @@ describe('automatic selection event ownership', () => {
     });
     await entered.promise;
     f.select(0);
-    vi.advanceTimersByTime(250);
+    vi.advanceTimersByTime(900);
     f.select(1);
     const closing = f.view.onClose();
     document.getSelection()!.removeAllRanges();
@@ -1343,6 +1565,144 @@ describe('article keyboard boundaries', () => {
     f.probe.surface.atBoundary.mockReturnValue(true);
     return { ...f, a, b, c };
   }
+  describe('real Surface arrow handoff', () => {
+    let f: Awaited<ReturnType<typeof realFixture>>;
+    const width = 366,
+      height = 600,
+      columns = 18,
+      gap = 32;
+    const extent = columns * width + (columns - 1) * gap;
+    const maxLeft = extent - width; // 6766: the browser reproduction's reachable endpoint.
+    async function realFixture() {
+      const actual = await vi.importActual<typeof surfaceModule>('../src/reader/surface');
+      const render = await import('../src/reader/render');
+      // Only absent jsdom geometry/position capture is stubbed. Paging, boundaries,
+      // rendering and the Reader key/navigation path remain production code.
+      vi.spyOn(render, 'textBookmark').mockReturnValue('');
+      vi.stubGlobal(
+        'ResizeObserver',
+        class {
+          observe() {}
+          disconnect() {}
+        },
+      );
+      vi.spyOn(surfaceModule, 'ReadingSurface').mockImplementation(function (...args) {
+        const surface = new actual.ReadingSurface(...args);
+        let left = 0;
+        Object.defineProperties(surface.viewport, {
+          clientWidth: { get: () => width },
+          clientHeight: { get: () => height },
+          scrollWidth: { get: () => extent },
+          scrollHeight: { get: () => 1800 },
+          scrollLeft: {
+            get: () => left,
+            set: (value: number) => {
+              left = Math.max(0, Math.min(maxLeft, value));
+            },
+          },
+        });
+        Object.defineProperty(surface.flow, 'scrollWidth', { get: () => extent });
+        return surface;
+      });
+      const f = hostFixture();
+      f.host.paged = true;
+      const a = await f.note('Reading/Inbox/A.md'),
+        b = await f.note('Reading/Inbox/B.md'),
+        c = await f.note('Reading/Inbox/C.md');
+      await f.view.onOpen();
+      await f.view.openArticle(b.path, true);
+      return { ...f, a, b, c };
+    }
+    beforeEach(async () => {
+      f = await realFixture();
+    });
+    afterEach(() => {
+      f?.view.stopForUnload();
+      vi.unstubAllGlobals();
+    });
+
+    it.each(['ArrowDown', 'ArrowUp'])(
+      'aligns %s from four pixels short, rejects held-repeat handoff, then navigates once on a fresh press',
+      async (key) => {
+        const surface = f.probe.surface as surfaceModule.ReadingSurface;
+        const direction = key === 'ArrowDown' ? 1 : -1;
+        const end = direction === 1 ? maxLeft : 0;
+        surface.viewport.scrollLeft = direction === 1 ? maxLeft - 4 : 4;
+        expect(surface.atBoundary(direction)).toBe(false);
+        expect(surface.canPage(direction)).toBe(false); // Buttons can already navigate here.
+        const step = new KeyboardEvent('keydown', { key, cancelable: true });
+        f.view.key(step);
+        await f.probe.operations;
+        expect(surface.viewport.scrollLeft).toBe(end);
+        expect(step.defaultPrevented).toBe(true);
+        expect(f.view.file).toBe(f.b);
+        expect(surface.atBoundary(direction)).toBe(true);
+        f.view.key(new KeyboardEvent('keydown', { key, repeat: true }));
+        await f.probe.operations;
+        expect(f.view.file).toBe(f.b);
+        const open = vi.spyOn(f.probe, 'openArticleNow');
+        f.view.key(new KeyboardEvent('keydown', { key }));
+        f.view.key(new KeyboardEvent('keydown', { key })); // No overlapping handoffs.
+        await f.probe.operations;
+        expect(f.view.file).toBe(direction === 1 ? f.c : f.a);
+        expect(open).toHaveBeenCalledOnce();
+        expect(f.vault.trashed).toEqual([]);
+      },
+    );
+
+    it('preserves immediate Previous for ArrowUp already at the true boundary', async () => {
+      const surface = f.probe.surface as surfaceModule.ReadingSurface;
+      expect(surface.atBoundary(-1)).toBe(true);
+      const page = vi.spyOn(surface, 'page');
+      f.view.key(new KeyboardEvent('keydown', { key: 'ArrowUp' }));
+      await f.probe.operations;
+      expect(f.view.file).toBe(f.a);
+      expect(page).not.toHaveBeenCalled();
+    });
+
+    it.each(['ArrowDown', 'ArrowUp'])('leaves flow-mode %s scrolling native', async (key) => {
+      f.host.paged = false;
+      await f.view.openArticle(f.b.path, true);
+      const surface = f.probe.surface as surfaceModule.ReadingSurface;
+      surface.viewport.scrollTop = 200;
+      const page = vi.spyOn(surface, 'page');
+      const event = new KeyboardEvent('keydown', { key, cancelable: true });
+      f.view.key(event);
+      await f.probe.operations;
+      expect(event.defaultPrevented).toBe(false);
+      expect(page).not.toHaveBeenCalled();
+      expect(f.view.file).toBe(f.b);
+    });
+
+    it.each(
+      ['ArrowDown', 'ArrowUp'].flatMap((key) =>
+        ['input', 'modal', 'selection'].map((context) => ({ key, context })),
+      ),
+    )(
+      'keeps $key paging behind the $context guard four pixels before the boundary',
+      ({ key, context }) => {
+        const surface = f.probe.surface as surfaceModule.ReadingSurface;
+        const start = key === 'ArrowDown' ? maxLeft - 4 : 4;
+        surface.viewport.scrollLeft = start;
+        let target: HTMLElement = surface.body;
+        if (context === 'input')
+          target = document.body.appendChild(document.createElement('input'));
+        if (context === 'modal') document.body.createDiv({ cls: 'modal-container' });
+        if (context === 'selection') {
+          const range = document.createRange();
+          range.selectNodeContents(surface.body);
+          document.getSelection()!.addRange(range);
+        }
+        const event = new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true });
+        target.addEventListener('keydown', (event) => f.view.key(event), { once: true });
+        target.dispatchEvent(event);
+        expect(event.defaultPrevented).toBe(false);
+        expect(surface.viewport.scrollLeft).toBe(start);
+        expect(f.view.file).toBe(f.b);
+      },
+    );
+  });
+
   it.each(['ArrowDown', 'PageDown', 'ArrowUp', 'PageUp'])(
     'uses the existing navigation pipeline once at %s boundary, and ignores repeats',
     async (key) => {
@@ -1369,9 +1729,7 @@ describe('article keyboard boundaries', () => {
       expect(event.defaultPrevented).toBe(false);
       f.host.paged = true;
       f.view.key(new KeyboardEvent('keydown', { key, cancelable: true }));
-      if (key.startsWith('Page'))
-        expect(surface.page).toHaveBeenCalledWith(key.endsWith('Down') ? 1 : -1);
-      else expect(surface.page).not.toHaveBeenCalled();
+      expect(surface.page).toHaveBeenCalledWith(key.endsWith('Down') ? 1 : -1);
       await f.probe.operations;
       expect(f.view.file).toBe(f.b);
     },
@@ -1956,6 +2314,9 @@ describe('leaf-scoped floating Reader layout', () => {
           entry.style?.getPropertyValue('--reader-controls-clearance'),
         )!.style;
         expect(root.getPropertyValue('--reader-controls-clearance')).toContain(
+          'var(--reader-controls-bottom)',
+        );
+        expect(root.getPropertyValue('--reader-controls-bottom')).toContain(
           'safe-area-inset-bottom',
         );
         expect(root.getPropertyValue('--reader-scrollbar-clearance')).toBe('16px');
