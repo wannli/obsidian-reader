@@ -219,6 +219,9 @@ body.is-mobile.reader-mobile-active .mobile-navbar {
   width: auto;
   height: auto;
   margin-inline: auto;
+  /* Images can share a Markdown paragraph with the following prose. Their
+     block layout needs the theme's paragraph gap inside that paragraph too. */
+  margin-block-end: var(--p-spacing, 1em);
   object-fit: contain;
   cursor: zoom-in;
 }
