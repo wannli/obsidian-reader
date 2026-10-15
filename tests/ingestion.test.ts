@@ -861,6 +861,36 @@ describe('exact excerpt ownership and stale acquisition', () => {
     expect(extraction).toHaveBeenCalledOnce();
   });
 
+  it('acquires a native-created empty article without a capture receipt or renaming its file', async () => {
+    const h = host();
+    const path = 'Reading/Inbox/Native Quick Capture.md';
+    const properties = { type: 'article', url: item(1).url };
+    const file = await h.vault.create(path, createDocument(properties));
+    h.store.catalog.update(path, properties);
+    serve(() => response());
+    await h.ingestion.acquire(path);
+    expect(await h.store.read(path)).toMatchObject({
+      body: `\n${FULL}\n`,
+      properties: { type: 'article', url: item(1).url, title: 'Extracted title' },
+    });
+    expect(file.path).toBe(path);
+    await h.ingestion.acquire(path);
+    expect(request).toHaveBeenCalledTimes(1);
+  });
+
+  it('protects native share-sheet content appended after the article frontmatter', async () => {
+    const h = host();
+    const path = 'Reading/Inbox/Shared.md';
+    const properties = { type: 'article', url: item(1).url };
+    const raw = createDocument(properties, `\n${item(1).url}\n`);
+    const file = await h.vault.create(path, raw);
+    h.store.catalog.update(path, properties);
+    await h.ingestion.acquire(path);
+    expect(await h.vault.read(file)).toBe(raw);
+    expect(extraction).not.toHaveBeenCalled();
+    expect(request).not.toHaveBeenCalled();
+  });
+
   it('acquires an empty URL capture, fills a missing title, and then protects the saved body', async () => {
     const h = host(),
       file = await h.store.capture({ url: item(1).url });

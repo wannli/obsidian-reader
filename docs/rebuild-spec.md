@@ -39,9 +39,9 @@
 - Approved 15 October: subscription `deleted_urls` remembers future explicit Reader deletions of feed-associated articles across queues. Refresh skips these normalized URLs; manual Add URL remains allowed. Native/external and past deletions are not recorded; expiry does not add history.
 - Unsubscribing stops imports and leaves existing articles untouched.
 - Failed extraction preserves the URL and available text, reports failure, and offers Retry.
-- Never overwrite authored text or annotations to repair extraction.
+- Automatic acquisition and Retry never overwrite authored text or annotations to repair extraction. Approved 15 October follow-up: native Share Sheet singleton Markdown source links matching the article URL are acquisition placeholders; extra content stays protected. An explicit **Download article again (replace content)** command may replace any existing article body after confirmation, including highlights and inline links, while preserving unknown frontmatter, explicit titles and all revision/editor/lifetime guards. Failed extraction preserves the current body.
 - Remote images load only as needed; no permanent offline image downloads.
-- No capture URI or QuickAdd adapter. A reading-list navigation URI and iPhone Home Screen shortcut are approved; they do not capture content.
+- No capture URI, QuickAdd dependency/adapter, Reader setup command or template installer. Native iOS capture locations, templates, widgets and Shortcuts are configured directly in Obsidian; existing vault templates remain untouched. Reader retains foreground/online extraction for empty native captures and the approved singleton source-link placeholder, plus confirmed re-download. Native Full Text and authored content stay protected from automatic acquisition. No note-schema change or native-settings modification. The existing reading-list URI remains navigation-only.
 
 ## Approved organization and reading
 

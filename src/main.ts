@@ -16,7 +16,7 @@ import { loadFolders, saveFolderSettings } from './host/folder-settings';
 import { Network } from './host/network';
 import { readDocument } from './core/document';
 import { ArticleStore } from './core/store';
-import { input } from './host/dialogs';
+import { confirmArticleReplacement, input } from './host/dialogs';
 import { Ingestion } from './host/ingestion';
 import { ReaderSettings, showFeeds } from './host/settings';
 import { ObsidianVault, watchLibrary, type LibraryChange } from './host/vault';
@@ -41,6 +41,8 @@ export default class ReaderPlugin extends Plugin {
   private refreshing = false;
   private referencesReady = false;
   private referencesRecovered = false;
+  private startupCaptureRecoveryPending = true;
+  private deferredCaptureSeeds = new Set<TFile>();
   private stopIndex?: () => void;
   get signal(): AbortSignal {
     return this.lifetime.signal;
@@ -101,6 +103,22 @@ export default class ReaderPlugin extends Plugin {
       },
     });
     this.addCommand({ id: 'add-url', name: 'Add URL', callback: () => this.capture() });
+    this.addCommand({
+      id: 'redownload-article',
+      name: 'Download article again (replace content)',
+      checkCallback: (checking) => {
+        const view = this.app.workspace.getActiveViewOfType(ReaderView),
+          native = this.app.workspace.getActiveViewOfType(MarkdownView),
+          file = view?.file ?? native?.file;
+        // Source/live-preview editors remain protected, even when apparently clean.
+        if (!view && native?.getMode() !== 'preview') return false;
+        if (this.signal.aborted || !file || !this.store.catalog.article(file.path)?.url)
+          return false;
+        if (!checking)
+          void this.redownloadArticle(file, view ?? undefined).catch((error) => this.notice(error));
+        return true;
+      },
+    });
     this.addCommand({ id: 'manage-feeds', name: 'Manage feeds', callback: () => this.feeds() });
     this.addCommand({
       id: 'refresh-feeds',
@@ -187,7 +205,12 @@ export default class ReaderPlugin extends Plugin {
     );
     this.registerEvent(
       this.app.metadataCache.on('resolve', (file) => {
-        if (!this.signal.aborted) this.keepReferences(file);
+        if (!this.signal.aborted) {
+          this.indexCapture(file);
+          this.keepReferences(file);
+          // Native Quick Capture may publish its body sections after `changed`.
+          this.recover(file);
+        }
         if (this.app.workspace.getActiveViewOfType(MarkdownView)?.file === file)
           this.routeArticle(file);
       }),
@@ -198,6 +221,11 @@ export default class ReaderPlugin extends Plugin {
         const first = !this.referencesRecovered;
         if (first && !this.recoverReferences()) return;
         this.referencesReady = true;
+        if (this.startupCaptureRecoveryPending) {
+          this.startupCaptureRecoveryPending = false;
+          // recoverReferences indexed notes whose frontmatter arrived late.
+          this.recoverCaptures();
+        }
         if (first) void this.expire().catch((error) => this.notice(error));
       }),
     );
@@ -208,6 +236,10 @@ export default class ReaderPlugin extends Plugin {
       // Late plugin loads may never see the initial resolved event. Complete per-file
       // metadata lets us reconstruct native references directly, without resolvedLinks.
       if (!this.referencesRecovered && this.recoverReferences()) this.referencesReady = true;
+      if (this.referencesReady && this.startupCaptureRecoveryPending) {
+        this.startupCaptureRecoveryPending = false;
+        this.recoverCaptures();
+      }
       void this.tick(false, true).catch((error) => this.notice(error));
     });
   }
@@ -333,6 +365,11 @@ export default class ReaderPlugin extends Plugin {
       this.refreshing = false;
       this.referencesReady = this.referencesRecovered = false;
       this.lifetime = new AbortController();
+      // Applying folders is not a new startup and must not acquire existing notes.
+      this.startupCaptureRecoveryPending = false;
+      // Metadata replay after Apply is not a request to acquire existing files.
+      // New native captures have new identities and remain eligible immediately.
+      this.deferredCaptureSeeds = new Set(this.app.vault.getMarkdownFiles());
       this.startFolders(folders);
       const signal = this.signal;
       // Metadata-only reseed above: never recover/acquire/promote or reopen articles here.
@@ -538,7 +575,10 @@ export default class ReaderPlugin extends Plugin {
     }
     // Aggregated resolvedLinks loses provenance (e.g. #TOC self-links). Resolve the
     // cached source links themselves, preserving native targets before enabling expiry.
-    for (const { file, cache } of entries) this.keepReferences(file, cache);
+    for (const { file, cache } of entries) {
+      if (this.startupCaptureRecoveryPending) this.indexCapture(file);
+      this.keepReferences(file, cache);
+    }
     this.referencesRecovered = true;
     return true;
   }
@@ -567,18 +607,48 @@ export default class ReaderPlugin extends Plugin {
       this.signal.aborted ||
       !navigator.onLine ||
       document.visibilityState !== 'visible' ||
-      this.attempted.has(file.path)
+      this.attempted.has(file.path) ||
+      this.deferredCaptureSeeds.has(file)
     )
       return;
     const article = this.store.catalog.article(file.path);
     if (!article?.url || !['Inbox', 'Later'].includes(article.queue ?? '')) return;
     const cache = this.app.metadataCache.getFileCache(file);
-    if (!cache?.sections || cache.sections.some((section) => section.type !== 'yaml')) return;
+    if (!cache?.sections) return;
+    const bodySections = cache.sections.filter((section) => section.type !== 'yaml');
+    if (bodySections.length) {
+      // Metadata-only shortlist. The acquisition queue bounds actual body reads,
+      // then the shared byte predicate proves the standalone source link again.
+      if (
+        bodySections.length !== 1 ||
+        bodySections[0]!.type !== 'paragraph' ||
+        cache.links?.length !== 1 ||
+        cache.links[0]!.link !== cache.frontmatter?.url
+      )
+        return;
+    }
     this.attempted.add(file.path);
     const signal = this.signal;
     void this.ingestion.acquire(file.path).catch((error) => {
       if (!signal.aborted) this.notice(error);
     });
+  }
+  private indexCapture(file: TFile): void {
+    if (this.signal.aborted || file.extension !== 'md' || this.store.vault.file(file.path) !== file)
+      return;
+    const cache = this.app.metadataCache.getFileCache(file);
+    if (cache?.frontmatter) this.store.catalog.update(file.path, cache.frontmatter);
+  }
+  private recoverCaptures(): void {
+    if (this.signal.aborted) return;
+    // Explicit foreground/online recovery releases Apply's metadata-replay hold.
+    this.deferredCaptureSeeds.clear();
+    // Metadata-only enumeration. recover() shortlists empty/source-link notes and bounds
+    // each path to one attempt per generation (reset when connectivity returns).
+    for (const article of this.store.catalog.values()) {
+      const file = this.store.vault.file(article.path);
+      if (file) this.recover(file);
+    }
   }
   private async tick(syncFeeds = false, recover = false, forceMaintenance = false): Promise<void> {
     const signal = this.signal,
@@ -595,11 +665,7 @@ export default class ReaderPlugin extends Plugin {
       return;
     }
     if (!this.referencesRecovered && this.recoverReferences()) this.referencesReady = true;
-    if (recover)
-      for (const article of this.store.catalog.values()) {
-        const file = this.store.vault.file(article.path);
-        if (file) this.recover(file);
-      }
+    if (recover) this.recoverCaptures();
     if (!syncFeeds && !forceMaintenance && Date.now() - this.lastMaintenance < 4 * 60 * 60 * 1000)
       return;
     this.refreshing = true;
@@ -690,6 +756,28 @@ export default class ReaderPlugin extends Plugin {
           await this.app.workspace.revealLeaf(view.leaf);
         // openArticle starts acquisition only after its final cancellation check.
         // Cancellation cannot roll back a note/native host operation already committed.
+      },
+      signal,
+    );
+  }
+  private async redownloadArticle(file: TFile, view?: ReaderView): Promise<void> {
+    const signal = this.signal,
+      store = this.store,
+      ingestion = this.ingestion;
+    if (signal.aborted) return;
+    // Settle Reader-owned edits first, then bind confirmation to exact durable bytes.
+    if (view) await view.flush();
+    if (signal.aborted || store.vault.file(file.path) !== file) return;
+    const snapshot = await store.read(file.path);
+    if (signal.aborted || snapshot.file !== file) return;
+    await store.validate(snapshot);
+    if (signal.aborted) return;
+    confirmArticleReplacement(
+      this.app,
+      snapshot.path,
+      async (modalSignal) => {
+        if (signal.aborted) throw new Error('Reader has stopped.');
+        await ingestion.redownload(snapshot, modalSignal);
       },
       signal,
     );

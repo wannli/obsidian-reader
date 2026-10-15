@@ -1,5 +1,33 @@
 # Changelog
 
+## [0.7.2](https://github.com/wannli/obsidian-reader/compare/0.7.1...0.7.2) (2026-10-15)
+
+
+### Fixed
+
+* **release:** build exact tags and retry draft publication ([3b8123e](https://github.com/wannli/obsidian-reader/commit/3b8123ec427c1a81664662d1be01f849d1f1e089))
+
+## [0.7.1](https://github.com/wannli/obsidian-reader/compare/0.7.0...0.7.1) (2026-10-15)
+
+
+### Fixed
+
+* **capture:** enable native source-link extraction and article redownload ([3c337cd](https://github.com/wannli/obsidian-reader/commit/3c337cd969ede4f0d023be51f37e0c5c3c88b0a0))
+
+## [0.7.0](https://github.com/wannli/obsidian-reader/compare/0.6.2...0.7.0) (2026-10-15)
+
+
+### Added
+
+* **reader:** clarify later and treasury article actions ([#17](https://github.com/wannli/obsidian-reader/issues/17)) ([e27afff](https://github.com/wannli/obsidian-reader/commit/e27afffcdee977152a3372fde93980cd23d3cfd7))
+* **reader:** delegate note actions to shared inline picker ([a45b879](https://github.com/wannli/obsidian-reader/commit/a45b879ad5eaa40436ec160af1b7f4d126c9e05e))
+* **reader:** merge shared picker with current toolbar ([183f5eb](https://github.com/wannli/obsidian-reader/commit/183f5eb301e24757306408e30346bc5759e65458))
+
+
+### Fixed
+
+* **highlights:** map selections through markdown containers ([665ece4](https://github.com/wannli/obsidian-reader/commit/665ece45302159aee23e16d615126fa3eb9098ac))
+
 ## [0.6.2](https://github.com/wannli/obsidian-reader/compare/0.6.1...0.6.2) (2026-10-15)
 
 

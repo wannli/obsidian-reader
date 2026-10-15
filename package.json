@@ -1,6 +1,6 @@
 {
   "name": "obsidian-reader",
-  "version": "0.6.2",
+  "version": "0.7.2",
   "private": true,
   "type": "module",
   "description": "A Markdown-first article and RSS reader for Obsidian desktop, mobile and e-ink",

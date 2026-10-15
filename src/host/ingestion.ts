@@ -13,7 +13,8 @@ import {
   webUrl,
   type Subscription,
 } from '../core/model';
-import { ArticleStore } from '../core/store';
+import { ArticleStore, type Snapshot } from '../core/store';
+import { isSourceLinkPlaceholder } from '../core/capture-placeholder';
 import { SerialWrites, WorkQueue } from '../core/work';
 import { assertSafeExternalText } from '../content/security';
 import { Network } from './network';
@@ -34,6 +35,7 @@ export class Ingestion {
   private work = new WorkQueue(2);
   private feedCreates = new SerialWrites<string>();
   private active = true;
+  private replacements = 0;
   private feedCache = new Map<string, { at: number; data: ParsedFeed }>();
   // Session-only invalidation: re-enabling never revives an old queued import.
   private feedVersions = new WeakMap<TFile, number>();
@@ -296,6 +298,33 @@ export class Ingestion {
     });
     this.store.catalog.update(file.path, readDocument(raw).properties);
   }
+  /** A distinct job for the exact snapshot the user confirmed, never a Retry override. */
+  redownload(snapshot: Snapshot<TFile>, signal: AbortSignal): Promise<void> {
+    const guard = () => {
+      this.assert();
+      if (signal.aborted) throw new Error('Article download was cancelled.');
+    };
+    return this.work.enqueue(
+      `replace:${++this.replacements}`,
+      async () => {
+        guard();
+        await this.store.validate(snapshot);
+        guard();
+        const url = webUrl(text(snapshot.properties.url));
+        const result = await extract(url, async (source, accept) => {
+          guard();
+          const response = await this.network.get(source, accept, guard);
+          guard();
+          return response;
+        });
+        guard();
+        assertSafeExternalText(result.title);
+        assertSafeExternalText(result.markdown);
+        await this.store.replaceArticle(snapshot, result.markdown, result.title, guard);
+      },
+      true,
+    );
+  }
   acquire(path: string, foreground = false): Promise<void> {
     return this.work.enqueue(
       `article:${path}`,
@@ -307,7 +336,10 @@ export class Ingestion {
         try {
           const url = webUrl(text(snapshot.properties.url));
           let proof: string | undefined;
-          if (snapshot.body.trim()) {
+          if (
+            snapshot.body.trim() &&
+            !isSourceLinkPlaceholder(snapshot.body, snapshot.properties.url)
+          ) {
             const feedPath = linkPath(text(snapshot.properties.feed));
             const feed = feedPath
               ? (this.store.catalog.feed(feedPath) ?? this.store.catalog.feed(`${feedPath}.md`))

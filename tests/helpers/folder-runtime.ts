@@ -63,7 +63,7 @@ vi.mock('../../src/host/network', () => ({
   },
 }));
 vi.mock('../../src/host/settings', () => ({ ReaderSettings: class {}, showFeeds: vi.fn() }));
-vi.mock('../../src/host/dialogs', () => ({ input: vi.fn() }));
+vi.mock('../../src/host/dialogs', () => ({ input: vi.fn(), confirmArticleReplacement: vi.fn() }));
 vi.mock('../../src/host/ingestion', () => ({
   Ingestion: class {
     stop = vi.fn();
@@ -120,6 +120,7 @@ export async function runtimeFixture(data: unknown = {}) {
   const leaves: any[] = [];
   const app: any = {
     notes: new Map(),
+    vault: { getMarkdownFiles: () => [...app.notes.values()].map((note: any) => note.file) },
     workspace: {
       getLeavesOfType: (type: string) => leaves.filter((leaf) => leaf.view.getViewType() === type),
       iterateAllLeaves: (visit: any) => leaves.forEach(visit),

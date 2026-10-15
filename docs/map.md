@@ -19,16 +19,17 @@ src/main.ts                         Obsidian lifecycle, commands, routing
 
 ## Core: data and guarded writes
 
-| File in `src/core/` | Responsibility                                                             |
-| ------------------- | -------------------------------------------------------------------------- |
-| `model.ts`          | Article/feed types, paths, URLs, safe filenames, calendar-month age        |
-| `folders.ts`        | Two creation destinations, portable validation; root/shared/nested allowed |
-| `document.ts`       | YAML AST updates and exact-revision Markdown snapshots                     |
-| `catalog.ts`        | Metadata-only queue/search/URL index and stable browsing snapshots         |
-| `store.ts`          | Serialized capture, acquisition, annotations, bookmark, status and trash   |
-| `annotations.ts`    | Inline highlight/link operations, annotation detection, import escaping    |
-| `projection.ts`     | Conservative mapping from rendered words to original Markdown ranges       |
-| `work.ts`           | Small keyed work queue and file-identity write serialization               |
+| File in `src/core/`      | Responsibility                                                             |
+| ------------------------ | -------------------------------------------------------------------------- |
+| `model.ts`               | Article/feed types, paths, URLs, safe filenames, calendar-month age        |
+| `folders.ts`             | Two creation destinations, portable validation; root/shared/nested allowed |
+| `document.ts`            | YAML AST updates and exact-revision Markdown snapshots                     |
+| `capture-placeholder.ts` | Exact singleton native source-link eligibility; no authored-body override  |
+| `catalog.ts`             | Metadata-only queue/search/URL index and stable browsing snapshots         |
+| `store.ts`               | Serialized capture, acquisition, annotations, bookmark, status and trash   |
+| `annotations.ts`         | Inline highlight/link operations, annotation detection, import escaping    |
+| `projection.ts`          | Conservative mapping from rendered words to original Markdown ranges       |
+| `work.ts`                | Small keyed work queue and file-identity write serialization               |
 
 `store.ts` is the mutation boundary. It rechecks current identity/revision, promotes Feed/missing status to Later before annotation, writes queue changes in YAML without moving files, and uses guarded native moves only for capture retitling. Session-only capture receipts permit safe filename retitling; they never become persisted ownership stamps. Explicit Reader deletion records feed-associated URLs in subscription `deleted_urls` before trash; RSS import rechecks suppression under a shared local import/delete lane. Expiry does not record suppression: it requires explicit `status: feed` in metadata and fresh bytes, protects active work/backlinks, then reads only candidate bodies. Missing status displays in Feed but never expires; invalid statuses remain unqueued/protected.
 
@@ -46,7 +47,7 @@ Runtime libraries: `yaml`, `marked`, `entities`, `dompurify`, `defuddle`. No UI 
 
 - `host/vault.ts`: public vault/metadata/editor APIs, dirty-buffer protection, folder/case collisions, recoverable trash, link-aware moves, change subscriptions.
 - `host/network.ts`: bounded request slots and delivery timeouts. An uncancellable timed-out request retains its slot until the host settles it.
-- `host/ingestion.ts`: local-only subscription creation (editable hostname title/prefix), explicit latest-20 Sync/Refresh feeds imports, dedupe, cancellation, and acquisition proof against current excerpt bytes. No automatic feed polling or add-time fetch/import.
+- `host/ingestion.ts`: local-only subscription creation (editable hostname title/prefix), explicit latest-20 Sync/Refresh feeds imports, dedupe, cancellation, and acquisition proof against current excerpt/standalone native source-link bytes. Explicit confirmed re-download is separate from conservative acquisition/Retry and retains snapshot/editor/lifetime guards. No automatic feed polling or add-time fetch/import.
 - `host/dialogs.ts` / `settings.ts`: native input/dialogs, staged independent-folder settings and subscription controls.
 - `host/folder-settings.ts` / `folder-picker.ts`: two creation destinations in `captureFolders`, native suggestions including vault root. Existing folder settings stay inert/preserved; no conversion or organization moves. Applying destinations drains old work and creates fresh list views without acquisition or promotion. Exact article/feed types are indexed anywhere in the vault.
 - `host/nodes.ts`: optional public `fileclass-inline.api` v2. Link/Change and Create note require `pickNodeForLink` and delegate to Fileclass Inline’s shared picker. No Reader picker, All notes route, standalone fallback, private Fileclass calls or migration.
@@ -74,7 +75,7 @@ Displayed text must match the write snapshot before a selection action. Position
 - `hot-reload.mjs`: explicit pinned development-plugin installation; never a build-time download.
 - `sandbox.mjs` / `safety-hold.mjs`: fixed owned paths, link checks and fail-closed holds. Historical **Reader2** names are safety identities, not legacy runtime compatibility.
 - `artifacts.mjs`: artifact hash/build-identity verification before installation.
-- `validate-release.mjs`, root metadata, `.github/`: validation and the existing Release Please publication path. No new release/tag mechanism.
+- `validate-release.mjs`, root metadata, `.github/`: validation and the existing Release Please publication path. The serialized workflow builds the exact release tag and can retry existing drafts without overwriting mismatched assets; it never creates or moves tags outside Release Please.
 
 `mise exec -- npm run benchmark:scale` is an opt-in 10,000-article/100-feed core and filesystem benchmark, not native UI/E2E automation. Its synthetic corpus and measurements stay ignored.
 

@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { afterAll, beforeEach, expect, it, vi } from 'vitest';
 import type { App } from 'obsidian';
-import { confirmWebLink } from '../src/host/dialogs';
+import { confirmArticleReplacement, confirmWebLink } from '../src/host/dialogs';
 
 const dom = await vi.hoisted(async () => {
   const { builtinEnvironments } = await import('vitest/runtime');
@@ -50,6 +50,9 @@ vi.mock('obsidian', () => ({
         setCta() {
           return button;
         },
+        setWarning() {
+          return button;
+        },
         setDisabled(value: boolean) {
           element.disabled = value;
           return button;
@@ -69,6 +72,43 @@ const click = (label: string) =>
 beforeEach(() => {
   document.body.replaceChildren();
   vi.restoreAllMocks();
+});
+
+it('warns about destructive article replacement, names the target, and Cancel does nothing', () => {
+  const replace = vi.fn();
+  confirmArticleReplacement(
+    {} as App,
+    'Reading/Inbox/Target.md',
+    replace,
+    new AbortController().signal,
+  );
+  expect(document.body.textContent).toContain('Reading/Inbox/Target.md');
+  expect(document.body.textContent).toContain('including all highlights and inline links');
+  click('Cancel');
+  expect(replace).not.toHaveBeenCalled();
+});
+
+it('only confirms replacement once and cancellation aborts an in-flight download', () => {
+  const replace = vi.fn((_signal: AbortSignal) => new Promise<void>(() => {}));
+  confirmArticleReplacement({} as App, 'Target.md', replace, new AbortController().signal);
+  click('Replace content');
+  click('Replace content');
+  expect(replace).toHaveBeenCalledOnce();
+  click('Cancel');
+  expect(replace.mock.calls[0]![0].aborted).toBe(true);
+});
+
+it('closes replacement confirmation on generation retirement and disables stale buttons', () => {
+  const generation = new AbortController(),
+    replace = vi.fn();
+  confirmArticleReplacement({} as App, 'Target.md', replace, generation.signal);
+  const button = [...document.querySelectorAll('button')].find(
+    (button) => button.textContent === 'Replace content',
+  )!;
+  generation.abort();
+  button.click();
+  expect(replace).not.toHaveBeenCalled();
+  expect(document.querySelector('button')).toBeNull();
 });
 
 it('offers Save to Inbox, Open link, Cancel; Cancel performs no action', () => {

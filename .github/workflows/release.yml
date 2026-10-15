@@ -4,6 +4,15 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      existing_tag:
+        description: 'Retry an existing draft (for example 0.7.1), without running Release Please'
+        required: false
+        type: string
+
+concurrency:
+  group: reader-release
+  cancel-in-progress: false
 
 permissions:
   contents: write
@@ -33,26 +42,81 @@ jobs:
           mise exec -- npm run build
 
       - name: Prepare release
+        if: ${{ !inputs.existing_tag }}
         id: release
         uses: googleapis/release-please-action@v5
 
-      - name: Upload and publish Obsidian release
-        if: ${{ steps.release.outputs.release_created }}
+      - name: Select existing draft
+        id: draft
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ steps.release.outputs.tag_name }}
+          GH_REPO: ${{ github.repository }}
+          MANUAL_TAG: ${{ inputs.existing_tag }}
+          CREATED_TAG: ${{ steps.release.outputs.tag_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="$MANUAL_TAG"
+          if [[ -z "$TAG" ]]; then TAG="$CREATED_TAG"; fi
+          if [[ -z "$TAG" ]]; then
+            TAG=$(mise exec -- node -p "JSON.parse(require('fs').readFileSync('manifest.json')).version")
+          fi
+          [[ "$TAG" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          DRAFT=$(gh release view "$TAG" --json isDraft --jq .isDraft)
+          if [[ "$DRAFT" = true ]]; then echo "tag=$TAG" >> "$GITHUB_OUTPUT"; fi
+
+      # Release Please may have observed a merge newer than this workflow's SHA.
+      # Always rebuild the actual tag; never upload the trigger checkout's dist/.
+      - name: Check out release tag
+        if: ${{ steps.draft.outputs.tag }}
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: refs/tags/${{ steps.draft.outputs.tag }}
+          path: release-build
+          persist-credentials: false
+
+      - name: Build and verify release tag
+        if: ${{ steps.draft.outputs.tag }}
+        working-directory: release-build
+        env:
+          TAG: ${{ steps.draft.outputs.tag }}
+        run: |
+          mise trust .mise.toml
+          mise install
+          mise exec -- npm ci
+          GITHUB_REF_TYPE=tag GITHUB_REF_NAME="$TAG" mise exec -- npm run check
+
+      - name: Upload and publish Obsidian release
+        if: ${{ steps.draft.outputs.tag }}
+        working-directory: release-build
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ steps.draft.outputs.tag }}
         shell: bash
         run: |
           set -euo pipefail
           VERSION=$(mise exec -- node -p "JSON.parse(require('fs').readFileSync('dist/manifest.json')).version")
           test "$VERSION" = "$TAG"
-          test -s dist/main.js
-          test -s dist/manifest.json
-
-          files=(dist/main.js dist/manifest.json)
-          if [[ -f dist/styles.css ]]; then
-            files+=(dist/styles.css)
-          fi
-
-          gh release upload "$TAG" "${files[@]}"
+          test "$(gh release view "$TAG" --json isDraft --jq .isDraft)" = true
+          work=$(mktemp -d)
+          trap 'rm -rf "$work"' EXIT
+          mkdir "$work/existing" "$work/verified"
+          assets=$(gh release view "$TAG" --json assets --jq '.assets[].name')
+          for name in main.js manifest.json styles.css; do
+            test -s "dist/$name"
+            if grep -Fxq "$name" <<< "$assets"; then
+              gh release download "$TAG" --pattern "$name" --dir "$work/existing"
+              cmp "dist/$name" "$work/existing/$name"
+            fi
+          done
+          for name in main.js manifest.json styles.css; do
+            if ! grep -Fxq "$name" <<< "$assets"; then
+              gh release upload "$TAG" "dist/$name"
+            fi
+          done
+          gh release download "$TAG" --pattern main.js --pattern manifest.json --pattern styles.css --dir "$work/verified"
+          for name in main.js manifest.json styles.css; do
+            cmp "dist/$name" "$work/verified/$name"
+          done
           gh release edit "$TAG" --draft=false

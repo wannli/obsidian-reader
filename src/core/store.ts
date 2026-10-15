@@ -7,6 +7,7 @@ import {
   readDocument,
   rememberDeletedUrl,
   requireArticle,
+  replaceArticleBody,
   savePosition,
 } from './document';
 import { hasAnnotations } from './annotations';
@@ -108,6 +109,12 @@ export class ArticleStore<File extends NoteFile> {
       doc = requireArticle(raw);
     if (this.vault.file(path) !== file || file.path !== path) throw new ChangedNote();
     return { file, path, raw, body: doc.body, properties: doc.properties };
+  }
+  async validate(snapshot: Snapshot<File>): Promise<void> {
+    this.assert(snapshot.file, snapshot.path);
+    const raw = await this.vault.read(snapshot.file);
+    this.assert(snapshot.file, snapshot.path);
+    if (raw !== snapshot.raw) throw new ChangedNote();
   }
   private async unique(folder: string, name: string, ownPath?: string): Promise<string> {
     for (let i = 0; i < 1_000; i++) {
@@ -365,6 +372,20 @@ export class ArticleStore<File extends NoteFile> {
         this.captures.delete(snapshot.file); // One successful acquisition, one chance.
       }
     });
+  }
+  /** Only the explicit confirmed command calls this; no retitle or promotion. */
+  replaceArticle(
+    snapshot: Snapshot<File>,
+    markdown: string,
+    title: string,
+    guard: () => void,
+  ): Promise<Snapshot<File>> {
+    return this.writes.run(snapshot.file, () =>
+      this.commit(snapshot, (raw) => {
+        guard();
+        return replaceArticleBody(raw, snapshot.raw, markdown, title);
+      }),
+    );
   }
   error(snapshot: Snapshot<File>, message?: string): Promise<Snapshot<File>> {
     return this.writes.run(snapshot.file, () =>

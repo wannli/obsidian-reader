@@ -76,15 +76,17 @@ Articles deleted outside Reader or before suppression was recorded can return wh
 ## Acquisition and safety
 
 - Offline Add URL immediately creates an article with `status: inbox`; unfinished acquisition may resume while Reader is active and online. Duplicate capture opens the existing article without resetting its status, bookmark or placement.
-- Save feed-provided text first. Replace a body only if empty or exactly equal to an independently retrieved current feed excerpt, and only if the entire raw revision still matches. Missing/unprovable excerpts keep nonempty text protected; Retry never overrides this.
+- Save feed-provided text first. Automatic acquisition replaces a body only if it is empty, exactly equals an independently retrieved current feed excerpt, or consists solely of a native Share Sheet Markdown source-link placeholder matching the article URL (approved in the 15 October capture follow-up). Extra text, annotations, other destinations and full-text captures remain protected. The entire raw note revision must still match.
+- If the excerpt/placeholder cannot be proved, nonempty content stays protected. Retry must not become permission to overwrite it.
+- Explicit **Download article again (replace content)** is separately authorized on 15 October: after confirmation, replace the selected article body, including highlights and inline links, with newly extracted content. Preserve unknown frontmatter and explicit titles. Failure/cancellation leaves the existing body intact; confirmation never bypasses file identity, exact-revision, dirty-editor or generation guards. Automatic acquisition and Retry never inherit this override.
 - Explicit titles (including empty ones), authored headings/comments, unknown YAML, and links are not regenerated from publisher content.
 - A new untitled manual capture may be retitled from its provisional hostname filename after acquisition using a session-only receipt and guarded native move. Explicit titles, duplicate capture, user moves/renames or restart prevent automatic retitle. This filename correction is not queue organization.
-- Filenames use the original publication instant's UTC date before local-minute formatting, otherwise the local capture day. Names contain `YYMMDD`, a safe bounded title, optional feed prefix, and collision suffix; never overwrite. A receipt retitle reuses its capture instant.
+- Filenames use the original publication instant's UTC date before local-minute formatting, otherwise the local capture day. Feed ordering and age filtering use the full-precision incoming publication value before writing. Names contain `YYMMDD`, a safe UTF-8-bounded title, optional feed prefix, and collision suffix; never overwrite. A receipt retitle reuses its capture instant.
 - Writes serialize by file identity and compare current bytes. Dirty native editors, uncertain buffers and source revisions are protected.
 - Publisher content is sanitized and bounded. Executable fence labels are removed; default Dataview/Templater expressions fail capture, including in titles. Reader is not a sandbox for arbitrary third-party processors.
 - Promotion must succeed before annotation commit. A failure may leave a retained Later note, never a successfully annotated disposable Feed note. Browsing context and bookmark survive status changes.
 - Native/synced annotations and authored vault links must also be protected before expiry. Publisher web/section links do not protect feed articles.
-- Deletion and expiry use recoverable Obsidian trash only. No automatic file moves or bulk note rewrites.
+- Deletion and expiry use recoverable Obsidian trash only. No automatic organization moves or bulk note rewrites; guarded native retitling preserves references.
 
 ## Expiry and settings
 
