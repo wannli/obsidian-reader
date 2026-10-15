@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.6.2](https://github.com/wannli/obsidian-reader/compare/0.6.1...0.6.2) (2026-10-15)
+
+
+### Fixed
+
+* **reader:** keep saved highlights visible without color ([a062637](https://github.com/wannli/obsidian-reader/commit/a062637a57573508b842f42bbea41729ca4b4733))
+* **reader:** recognize confirmed paged scroll limits ([59420a9](https://github.com/wannli/obsidian-reader/commit/59420a93c4bc306b5fbfa3f2bfb580186c786314))
+* **reader:** restore fileclass inline discovery ([d807e16](https://github.com/wannli/obsidian-reader/commit/d807e16f40828bb51068af6f652b110aec0cb95e))
+
 ## [0.6.1](https://github.com/wannli/obsidian-reader/compare/0.6.0...0.6.1) (2026-10-15)
 
 
