@@ -5,7 +5,7 @@ Start with the [codebase map](docs/map.md), [approved scope](docs/rebuild-spec.m
 ## Identity and compatibility
 
 - Product: Reader. Obsidian plugin ID: `obsidian-reader`; GitHub repository: `wannli/obsidian-reader`.
-- Reader alone requires Obsidian ≥1.8.0. Combined Nodes/Fileclass integration requires Obsidian ≥1.12.7 and public Nodes API v2.
+- Reader alone requires Obsidian ≥1.8.0. Combined integration requires Obsidian ≥1.12.7 and public `fileclass-inline.api` v2 with `pickNodeForLink` for Link/Change and Create note. No old plugin-ID fallback or migration.
 - This is a standalone plugin. Do not import or migrate settings, hotkeys, workspace views, plugin enablement, or vault data from another plugin without Wannes's explicit migration plan.
 - Preserve unknown Markdown/frontmatter and user-authored content. Before changing persisted note schemas or data structure, present the proposal and wait for approval. Do not add `created-by` properties to Markdown files.
 - Keep documentation under 200 lines unless approved otherwise.
@@ -16,7 +16,7 @@ Start with the [codebase map](docs/map.md), [approved scope](docs/rebuild-spec.m
 - `src/core/` owns Markdown snapshots, metadata indexing, folder validation and guarded writes. Recheck source bytes, file identity and dirty-editor safety at mutation boundaries.
 - `src/content/` bounds and sanitizes external content. `src/host/` adapts native vault, network, dialogs/settings and optional Nodes APIs; keep uncancellable native requests in their occupied slots until settlement.
 - `src/reader/` renders the list/articles. `src/reader/styles.css` is the sole source stylesheet: leaf-owned floating controls, ≥44px targets, scrollbar/final-content clearance and aligned paged column geometry.
-- Use Notes, not a separate Reader node entity. Nodes creation links the source before required completion through API v2 when available; cancellation must not delete a created note or block navigation on an uncooperative provider.
+- Use Notes, not a separate Reader node entity. Both note actions delegate to Fileclass Inline’s shared picker, linking the source before required completion. No custom picker, All notes route or standalone creation fallback; without the capability highlights remain usable. Cancellation must not delete a created note or block navigation on an uncooperative provider.
 - All article entry resumes the destination's saved position. Preserve explicit Open Markdown, dirty/uncertain editors, selection/modal/input guards and held-key protection.
 
 ## Development and release
