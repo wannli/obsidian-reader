@@ -5,6 +5,7 @@ A small Markdown-first article and RSS reader for Obsidian desktop, iPhone/iPad,
 ## Read and keep
 
 - **Add URL** saves a note immediately, including offline; available article text is acquired while Reader is active and online. Clicking a web link offers **Save to Inbox**, **Open link** or **Cancel**; saving keeps the current article open and reuses existing-URL deduplication.
+- **Download article again (replace content)** re-fetches the current article after a destructive-action confirmation. It replaces the body, including highlights and inline links, but preserves unknown frontmatter and explicit titles. A download/extraction failure leaves the existing body intact; concurrent edits and dirty editors remain protected. Use it in Reader or native Reading view; source/live-preview editors stay protected. Ordinary Retry never overrides authored text.
 - **Add feed** saves an RSS/Atom subscription without importing articles, so you can edit its parameters first. **Sync feeds explicitly** when ready; startup and periodic timers do not refresh feeds. Each Sync considers at most the **latest 20 entries**, before age filtering and deduplication. There is no backlog/history service.
 - Browse **Inbox, Later and Stream** in a flat, titles-only list; use **Open Treasury** and **Manage feeds** commands for those views. Search through native Obsidian rather than an embedded search bar. Source URLs remain stored in the notes.
 - Right-side indicators show **Opened before** from an existing saved reading position and **Has highlights** from Markdown. No extra metadata, completion flag or persisted history is added.
@@ -19,6 +20,14 @@ The combined integration requires Obsidian **1.12.7 or newer** and `fileclass-in
 Markdown is the only article store. Reader preserves authored text, unknown YAML, and existing links; it does not maintain sidecars, copied highlights, custom sync, or migration code. Images remain remote; inline images fit the reading area and open a larger view when clicked or tapped.
 
 **Stream is disposable:** annotations and vault links promote articles to Inbox; unprotected entries older than one clamped UTC calendar month go to vault-local recoverable trash. Unknown-age and in-use notes are retained. See the [approved storage contract](docs/storage-contract.md).
+
+## Native iOS capture
+
+Configure capture locations, templates and shortcuts directly in [Obsidian](https://help.obsidian.md/mobile/ios); Reader does not install templates or provide a setup command. Existing vault templates are left untouched.
+
+Native captures in Inbox use the existing `type: article` and `url` properties. Reader starts Defuddle while Obsidian is active and online when the body is empty or contains only a single Markdown source link matching that URL. Extra text, annotations and native Full Text captures remain protected; a plain URL body is not a supported placeholder. Offline captures retain their URL for foreground recovery.
+
+Native capture keeps its own filenames and creates a note per capture, without Reader’s deduplication. Use **Add URL** when those features are needed. Physical-device acceptance remains manual.
 
 ## Markdown structure
 

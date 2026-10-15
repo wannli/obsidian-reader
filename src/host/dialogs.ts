@@ -101,6 +101,57 @@ export function input(
   signal?.addEventListener('abort', abort, { once: true });
   modal.open();
 }
+export function confirmArticleReplacement(
+  app: App,
+  path: string,
+  replace: (signal: AbortSignal) => Promise<void>,
+  signal: AbortSignal,
+): void {
+  const lifetime = new AbortController();
+  class Replacement extends Modal {
+    onOpen(): void {
+      this.setTitle('Download article again (replace content)');
+      this.contentEl.createEl('p', { text: path });
+      this.contentEl.createEl('p', {
+        text: 'Replace this article’s entire body, including all highlights and inline links, with newly downloaded content? Existing content is kept if downloading or extraction fails. This cannot be undone by Reader.',
+      });
+      const error = this.contentEl.createEl('p', { attr: { role: 'alert' } });
+      let pending = false;
+      new Setting(this.contentEl)
+        .addButton((button) => button.setButtonText('Cancel').onClick(() => this.close()))
+        .addButton((button) =>
+          button
+            .setButtonText('Replace content')
+            .setWarning()
+            .onClick(async () => {
+              if (pending || lifetime.signal.aborted || signal.aborted) return;
+              pending = true;
+              button.setDisabled(true);
+              try {
+                await replace(lifetime.signal);
+                this.close();
+              } catch (failure) {
+                if (lifetime.signal.aborted) return;
+                error.textContent = failure instanceof Error ? failure.message : String(failure);
+                pending = false;
+                button.setDisabled(false);
+              }
+            }),
+        );
+    }
+    onClose(): void {
+      lifetime.abort();
+      signal.removeEventListener('abort', abort);
+      this.contentEl.empty();
+    }
+  }
+  const modal = new Replacement(app),
+    abort = () => modal.close();
+  if (signal.aborted) return;
+  signal.addEventListener('abort', abort, { once: true });
+  modal.open();
+}
+
 export function confirmWebLink(
   app: App,
   url: string,

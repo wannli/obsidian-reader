@@ -1,5 +1,6 @@
 import { isMap, isNode, isScalar, isSeq, parseDocument, Scalar, type Document } from 'yaml';
 import { deletedUrls, formatPublished, webUrl, type Properties } from './model';
+import { isSourceLinkPlaceholder } from './capture-placeholder';
 
 interface ArticleDocument {
   raw: string;
@@ -161,11 +162,26 @@ export function acquireBody(
 ): string {
   if (raw !== expectedRaw) throw new ChangedNote();
   const doc = requireArticle(raw);
-  if (doc.body.trim() && (provenExcerpt === undefined || doc.body !== provenExcerpt)) {
+  if (
+    doc.body.trim() &&
+    !isSourceLinkPlaceholder(doc.body, doc.properties.url) &&
+    (provenExcerpt === undefined || doc.body !== provenExcerpt)
+  ) {
     throw new Error(
       'Existing text is protected. Reader will not replace an unverified article body.',
     );
   }
+  return replaceArticleBody(raw, expectedRaw, markdown, title);
+}
+/** Explicit confirmed replacement; revision safety is never optional. */
+export function replaceArticleBody(
+  raw: string,
+  expectedRaw: string,
+  markdown: string,
+  title: string,
+): string {
+  if (raw !== expectedRaw) throw new ChangedNote();
+  const doc = requireArticle(raw);
   if (!markdown.trim()) throw new Error('No readable article text found.');
   const replaced = replaceBody(raw, doc.body, `\n${markdown.trim()}\n`);
   return patchProperties(replaced, {

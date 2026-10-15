@@ -33,6 +33,7 @@ async function fixture() {
   };
   return {
     ...f,
+    commands,
     expire,
     flushViews,
     async ready() {
@@ -171,6 +172,197 @@ it.each(['startup', 'foreground', 'metadata'])(
     expect(f.plugin.ingestion.refreshAll).not.toHaveBeenCalled();
   },
 );
+
+it('omits native capture setup while retaining explicit article re-download', async () => {
+  const f = await fixture();
+  const commands = f.commands.mock.calls.map(([command]) => command);
+  expect(commands.some((command) => command.id === 'setup-ios-read-later')).toBe(false);
+  expect(commands).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        id: 'redownload-article',
+        name: 'Download article again (replace content)',
+        checkCallback: expect.any(Function),
+      }),
+    ]),
+  );
+  expect(f.plugin.ingestion.acquire).not.toHaveBeenCalled();
+  expect(f.plugin.ingestion.refreshAll).not.toHaveBeenCalled();
+});
+
+it.each(['foreground', 'changed', 'resolve', 'resolved'])(
+  'shortlists a native single source-link capture after %s without body scans',
+  async (trigger) => {
+    const f = await fixture();
+    const file = { path: 'Reading/Inbox/Source link.md', extension: 'md' };
+    const properties = {
+      type: 'article',
+      url: 'https://example.com/native',
+      reading_position: 'Native title',
+    };
+    f.app.notes.set(file.path, { file, properties });
+    f.plugin.store.catalog.update(file.path, properties);
+    f.app.metadataCache.getFileCache = () => ({
+      frontmatter: properties,
+      sections: [{ type: 'yaml' }, { type: 'paragraph' }],
+      links: [{ link: properties.url }],
+    });
+    if (trigger === 'foreground') await f.event('visibilitychange');
+    else if (trigger === 'changed') f.runtime.watchers[0].changed({ path: file.path });
+    else await f.metadata(trigger, file);
+    expect(f.plugin.ingestion.acquire).toHaveBeenCalledExactlyOnceWith(file.path);
+    await f.metadata('resolve', file);
+    expect(f.plugin.ingestion.acquire).toHaveBeenCalledOnce();
+    expect(f.plugin.ingestion.refreshAll).not.toHaveBeenCalled();
+  },
+);
+
+it.each([
+  { sections: ['paragraph'], links: [] },
+  { sections: ['paragraph'], links: ['https://example.com/different'] },
+  { sections: ['paragraph'], links: ['https://example.com/native#different'] },
+  { sections: ['paragraph'], links: ['https://example.com/native', 'https://example.com/native'] },
+  { sections: ['heading', 'paragraph'], links: ['https://example.com/native'] },
+  { sections: ['paragraph', 'paragraph'], links: ['https://example.com/native'] },
+  { sections: ['paragraph', 'comment'], links: ['https://example.com/native'] },
+])('does not enqueue body reads for metadata non-candidates %j', async ({ sections, links }) => {
+  const f = await fixture();
+  const file = { path: 'Reading/Inbox/Protected.md', extension: 'md' };
+  const properties = { type: 'article', url: 'https://example.com/native' };
+  f.app.notes.set(file.path, { file, properties });
+  f.plugin.store.catalog.update(file.path, properties);
+  f.app.metadataCache.getFileCache = () => ({
+    frontmatter: properties,
+    sections: [{ type: 'yaml' }, ...sections.map((type) => ({ type }))],
+    links: links.map((link) => ({ link })),
+  });
+  await f.event('visibilitychange');
+  await f.metadata('resolve', file);
+  expect(f.plugin.ingestion.acquire).not.toHaveBeenCalled();
+});
+
+it.each(['foreground', 'changed', 'resolve', 'resolved'])(
+  'recovers an externally created empty native capture after %s without polling feeds',
+  async (trigger) => {
+    const f = await fixture();
+    const file = { path: 'Reading/Inbox/Native capture.md' };
+    const properties = { type: 'article', url: 'https://example.com/native?x=1&y=2' };
+    f.app.notes.set(file.path, { file, properties });
+    f.plugin.store.catalog.update(file.path, properties);
+    const cache = f.app.metadataCache.getFileCache(file);
+    f.app.metadataCache.getFileCache = () => ({ ...cache, sections: undefined });
+    f.runtime.watchers[0].changed({ path: file.path });
+    expect(f.plugin.ingestion.acquire).not.toHaveBeenCalled();
+    f.app.metadataCache.getFileCache = () => cache;
+    if (trigger === 'foreground') await f.event('visibilitychange');
+    else if (trigger === 'changed') f.runtime.watchers[0].changed({ path: file.path });
+    else await f.metadata(trigger, file);
+    expect(f.plugin.ingestion.acquire).toHaveBeenCalledExactlyOnceWith(file.path);
+    // Repeated native cache events cannot create a recovery loop.
+    f.runtime.watchers[0].changed({ path: file.path });
+    await f.metadata('resolve', file);
+    await f.event('visibilitychange');
+    expect(f.plugin.ingestion.acquire).toHaveBeenCalledOnce();
+    expect(f.plugin.ingestion.refreshAll).not.toHaveBeenCalled();
+  },
+);
+
+it.each([
+  { path: 'Native capture.md', properties: { type: 'article', url: 'https://example.com/a' } },
+  { path: 'Reading/Inbox/Invalid.md', properties: { type: 'article', url: '{{content}}' } },
+  { path: 'Reading/Inbox/Note.md', properties: { url: 'https://example.com/a' } },
+  {
+    path: 'Reading/Inbox/Body.md',
+    properties: { type: 'article', url: 'https://example.com/a' },
+    body: true,
+  },
+])('does not recover ineligible native capture $path', async ({ path, properties, body }) => {
+  const f = await fixture();
+  const file = { path };
+  f.app.notes.set(path, { file, properties });
+  f.plugin.store.catalog.update(path, properties);
+  if (body)
+    f.app.metadataCache.getFileCache = () => ({
+      frontmatter: properties,
+      sections: [{ type: 'yaml' }, { type: 'paragraph' }],
+    });
+  f.runtime.watchers[0].changed({ path });
+  await f.metadata('resolve', file);
+  await f.event('visibilitychange');
+  expect(f.plugin.ingestion.acquire).not.toHaveBeenCalled();
+  expect(f.plugin.ingestion.refreshAll).not.toHaveBeenCalled();
+});
+
+it('does not recover native captures while hidden or after generation retirement', async () => {
+  const f = await fixture();
+  const file = { path: 'Reading/Inbox/Native.md' };
+  const properties = { type: 'article', url: 'https://example.com/a' };
+  f.app.notes.set(file.path, { file, properties });
+  f.plugin.store.catalog.update(file.path, properties);
+  vi.stubGlobal('document', {
+    visibilityState: 'hidden',
+    body: { classList: { remove: vi.fn() } },
+  });
+  await f.metadata('resolve', file);
+  expect(f.plugin.ingestion.acquire).not.toHaveBeenCalled();
+  f.plugin.stopFolders();
+  await f.event('visibilitychange');
+  await f.metadata('resolve', file);
+  expect(f.plugin.ingestion.acquire).not.toHaveBeenCalled();
+});
+
+it.each(['resolve', 'resolved'])(
+  'indexes native capture missing startup frontmatter when %s arrives',
+  async (event) => {
+    const f = await fixture();
+    const file = { path: 'Reading/Inbox/Late native.md', extension: 'md' };
+    const properties = { type: 'article', url: 'https://example.com/late-native' };
+    f.app.notes.set(file.path, { file, properties });
+    let ready = false;
+    f.app.metadataCache.getFileCache = () =>
+      ready ? { frontmatter: properties, sections: [{ type: 'yaml' }] } : undefined;
+    await f.ready();
+    expect(f.plugin.store.catalog.article(file.path)).toBeUndefined();
+    expect(f.plugin.ingestion.acquire).not.toHaveBeenCalled();
+    ready = true;
+    await f.metadata(event, file);
+    expect(f.plugin.store.catalog.article(file.path)?.url).toBe(properties.url);
+    expect(f.plugin.ingestion.acquire).toHaveBeenCalledExactlyOnceWith(file.path);
+    await f.metadata(event, file);
+    expect(f.plugin.ingestion.acquire).toHaveBeenCalledOnce();
+  },
+);
+
+it('does not treat resolved after folder Apply as startup capture recovery', async () => {
+  const f = await fixture();
+  const file = { path: 'Capture/Native.md', extension: 'md' };
+  const properties = { type: 'article', url: 'https://example.com/configured' };
+  f.app.notes.set(file.path, { file, properties });
+  // Also cover Apply before startup metadata ever became complete.
+  await f.plugin.applyFolders({
+    inbox: 'Capture',
+    stream: 'Disposable',
+    later: 'Plans',
+    treasury: 'Kept',
+    feeds: 'Subscriptions',
+  });
+  expect(f.plugin.store.catalog.article(file.path)?.queue).toBe('Inbox');
+  await f.metadata('resolved');
+  await f.metadata('resolved');
+  await f.metadata('resolve', file);
+  f.runtime.watchers.at(-1).changed({ path: file.path });
+  expect(f.plugin.ingestion.acquire).not.toHaveBeenCalled();
+  expect(f.plugin.ingestion.refreshAll).not.toHaveBeenCalled();
+  const fresh = { path: 'Capture/New native.md', extension: 'md' };
+  const freshProperties = { type: 'article', url: 'https://example.com/new-native' };
+  f.app.notes.set(fresh.path, { file: fresh, properties: freshProperties });
+  await f.metadata('resolve', fresh);
+  expect(f.plugin.ingestion.acquire).toHaveBeenCalledExactlyOnceWith(fresh.path);
+  f.plugin.ingestion.acquire.mockClear();
+  // Normal explicit foreground recovery still works in the new generation.
+  await f.event('visibilitychange');
+  expect(f.plugin.ingestion.acquire).toHaveBeenCalledExactlyOnceWith(file.path);
+});
 
 it('feed creation, enablement and metadata resolution never start imports', async () => {
   const f = await fixture();
