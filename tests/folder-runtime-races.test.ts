@@ -3,10 +3,7 @@ import { runtimeFixture } from './helpers/folder-runtime';
 import { gate } from './helpers/memory-vault';
 
 const folders = {
-  inbox: 'Capture',
-  stream: 'Disposable',
-  later: 'Plans',
-  treasury: 'Kept',
+  articles: 'Capture',
   feeds: 'Subscriptions',
 };
 afterEach(() => {
@@ -32,7 +29,7 @@ it('does not let an old refresh expire notes or clear the new generation refresh
 it('never promotes into new paths after an old generation read settles', async () => {
   const f = await runtimeFixture(),
     release = gate();
-  const file = { path: 'Reading/Stream/Old.md' },
+  const file = { path: 'Reading/Articles/Old.md' },
     store = f.plugin.store;
   f.app.notes.set(file.path, { file, properties: { type: 'article' } });
   store.catalog.update(file.path, { type: 'article' });
@@ -122,7 +119,7 @@ it('stays paused if native Reader-tab clearing fails, allowing an explicit retry
 });
 
 it('leaves malformed fresh saved configuration paused, but allows explicit repair', async () => {
-  const f = await runtimeFixture({ folders: { inbox: 'Only one' } });
+  const f = await runtimeFixture({ captureFolders: { articles: 'Only one' } });
   expect(f.plugin.signal.aborted).toBe(true);
   expect(f.plugin.ingestion.stop).toHaveBeenCalledOnce();
   expect(f.runtime.notices[0]).toMatch(/paused/);
@@ -130,3 +127,32 @@ it('leaves malformed fresh saved configuration paused, but allows explicit repai
   expect(f.plugin.signal.aborted).toBe(false);
   expect(f.plugin.store.folders).toEqual(folders);
 });
+
+it.each([
+  [undefined, 'Later'],
+  ['feed', 'Later'],
+  ['inbox', undefined],
+  ['later', undefined],
+  ['archive', undefined],
+  ['', undefined],
+  [null, undefined],
+  ['Feed', undefined],
+])(
+  'rechecks fresh status %j before native annotation/backlink promotion',
+  async (status, destination) => {
+    const f = await runtimeFixture();
+    const file = { path: 'Elsewhere/Story.md' },
+      store = f.plugin.store;
+    f.app.notes.set(file.path, { file });
+    // The index is stale: the source bytes below are authoritative.
+    store.catalog.update(file.path, { type: 'article', status: 'feed' });
+    const properties = status === undefined ? { type: 'article' } : { type: 'article', status };
+    const snapshot = { file, path: file.path, body: '==Keep==', properties } as any;
+    vi.spyOn(store, 'read').mockResolvedValue(snapshot);
+    const move = vi.spyOn(store, 'move').mockResolvedValue(snapshot);
+    f.plugin.promotions.set(file, true);
+    await f.plugin.promote(file);
+    if (destination) expect(move).toHaveBeenCalledExactlyOnceWith(snapshot, destination);
+    else expect(move).not.toHaveBeenCalled();
+  },
+);

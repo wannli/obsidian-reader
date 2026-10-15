@@ -3,10 +3,7 @@ import { runtimeFixture } from './helpers/folder-runtime';
 import { gate } from './helpers/memory-vault';
 
 const folders = {
-  inbox: 'Capture',
-  stream: 'Disposable',
-  later: 'Plans',
-  treasury: 'Kept',
+  articles: 'Capture',
   feeds: 'Subscriptions',
 };
 afterEach(() => {

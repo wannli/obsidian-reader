@@ -8,7 +8,7 @@ function record(value: unknown): Record<string, unknown> {
 
 /** Only the fresh group is active; old root/flat settings remain inert. */
 export function loadFolders(data: unknown): ReaderFolders {
-  const folders = record(data).folders;
+  const folders = record(data).captureFolders;
   return folders === undefined ? defaultFolders : validateFolders(folders);
 }
 
@@ -16,5 +16,5 @@ export function loadFolders(data: unknown): ReaderFolders {
 export function saveFolderSettings(data: unknown, candidate: unknown): Record<string, unknown> {
   const folders = validateFolders(candidate);
   const previous = record(data);
-  return { ...previous, folders: { ...record(previous.folders), ...folders } };
+  return { ...previous, captureFolders: { ...record(previous.captureFolders), ...folders } };
 }

@@ -9,7 +9,7 @@ import {
   type WorkspaceLeaf,
 } from 'obsidian';
 import { hasAnnotations, hasPropertyAnnotations, isAnnotationProperty } from './core/annotations';
-import { type Queue } from './core/model';
+import { queueAt, type Queue } from './core/model';
 import { defaultFolders, validateFolders, type ReaderFolders } from './core/folders';
 import { SerialWrites } from './core/work';
 import { loadFolders, saveFolderSettings } from './host/folder-settings';
@@ -94,10 +94,10 @@ export default class ReaderPlugin extends Plugin {
       callback: () => this.copyReadingListLink(),
     });
     this.addCommand({
-      id: 'open-treasury',
-      name: 'Open Treasury',
+      id: 'open-archive',
+      name: 'Open Archive',
       callback: () => {
-        void this.openList('Treasury').catch((error) => this.notice(error));
+        void this.openList('Archive').catch((error) => this.notice(error));
       },
     });
     this.addCommand({ id: 'add-url', name: 'Add URL', callback: () => this.capture() });
@@ -110,7 +110,7 @@ export default class ReaderPlugin extends Plugin {
       },
     });
     for (const [id, name] of [
-      ['move', 'Move article…'],
+      ['move', 'Change article status…'],
       ['topics', 'Edit article topics…'],
       ['open-markdown', 'Open article as Markdown'],
     ] as const) {
@@ -457,7 +457,7 @@ export default class ReaderPlugin extends Plugin {
     const file = this.store.vault.file(change.path);
     if (!file) return;
     this.recover(file);
-    if (change.annotations && this.store.catalog.article(file.path)?.queue === 'Stream') {
+    if (change.annotations && this.store.catalog.article(file.path)?.queue === 'Feed') {
       if (!this.promotions.has(file)) this.promotions.set(file, false);
       void this.promote(file);
     }
@@ -471,13 +471,13 @@ export default class ReaderPlugin extends Plugin {
     }
     const properties = cache.frontmatter ?? {};
     if (
-      this.store.catalog.article(file.path)?.queue === 'Stream' &&
+      this.store.catalog.article(file.path)?.queue === 'Feed' &&
       hasPropertyAnnotations(properties)
     ) {
       if (!this.promotions.has(file)) this.promotions.set(file, false);
       void this.promote(file); // Revalidate the authored properties against current bytes.
     }
-    // Reader source/state values (especially feed and reading_position) are not
+    // Reader source/state values (especially feed and bookmark) are not
     // authored backlinks. The same keys on ordinary notes remain native references.
     const frontmatterLinks = (cache.frontmatterLinks ?? []).filter((link) =>
       isAnnotationProperty(properties, link.key),
@@ -491,7 +491,7 @@ export default class ReaderPlugin extends Plugin {
       const path = parseLinktext(decoded).path;
       if (!path) continue;
       const target = this.app.metadataCache.getFirstLinkpathDest(path, file.path);
-      if (target && this.store.catalog.article(target.path)?.queue === 'Stream') {
+      if (target && this.store.catalog.article(target.path)?.queue === 'Feed') {
         this.promotions.set(target, true);
         void this.promote(target);
       }
@@ -499,7 +499,7 @@ export default class ReaderPlugin extends Plugin {
   }
   private async promote(file: TFile): Promise<void> {
     if (this.promoting.has(file) || this.signal.aborted) return;
-    if (this.store.catalog.article(file.path)?.queue !== 'Stream') {
+    if (this.store.catalog.article(file.path)?.queue !== 'Feed') {
       this.promotions.delete(file);
       return;
     }
@@ -512,8 +512,13 @@ export default class ReaderPlugin extends Plugin {
     try {
       const snapshot = await store.read(file.path);
       if (signal.aborted) return;
-      if (promotions.get(file) || hasAnnotations(snapshot.body, snapshot.properties))
-        await store.move(snapshot, 'Inbox');
+      // Metadata can lag native/synced edits. Only current feed/missing status
+      // permits promotion; invalid and retained statuses are never rewritten.
+      if (
+        queueAt(snapshot.properties) === 'Feed' &&
+        (promotions.get(file) || hasAnnotations(snapshot.body, snapshot.properties))
+      )
+        await store.move(snapshot, 'Later');
       promotions.delete(file);
     } catch {
       /* A native editor or a concurrent edit can defer the move; retry on layout/save. */
@@ -601,7 +606,7 @@ export default class ReaderPlugin extends Plugin {
     this.lastMaintenance = Date.now();
     try {
       // Only the explicit Refresh feeds command sets syncFeeds. Online/startup/
-      // visibility/timer callbacks may recover captures and expire Stream notes.
+      // visibility/timer callbacks may recover captures and expire Feed notes.
       if (syncFeeds && navigator.onLine) await ingestion.refreshAll();
       if (!signal.aborted) await this.expire();
     } catch (error) {

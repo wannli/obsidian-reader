@@ -2,6 +2,8 @@
 
 One runtime, one Markdown store. Start with the [approved scope](rebuild-spec.md) and [storage contract](storage-contract.md); neither a cache nor UI state is write authority.
 
+The YAML-status/bookmark update is source-only and has not received native/device acceptance. Earlier folder-queue evidence below is historical, not validation of the new schema.
+
 The last native build verified by this rebuild is `f4bf22574068b7605753cced90af11dc018602804b238c6dad71f53b2041224d`, Reader-only reloaded 2026-10-14T14:46:50.332Z. Bounded Mac acceptance and the final audit are complete; actual iPhone/Boox tests remain pending. The native lane is **returned to Wannes / hold true**: he can use the window now; agents must not access native Obsidian without fresh clearance.
 
 ## Entry and flow
@@ -17,18 +19,18 @@ src/main.ts                         Obsidian lifecycle, commands, routing
 
 ## Core: data and guarded writes
 
-| File in `src/core/` | Responsibility                                                          |
-| ------------------- | ----------------------------------------------------------------------- |
-| `model.ts`          | Article/feed types, paths, URLs, safe filenames, calendar-month age     |
-| `folders.ts`        | Five independent role paths, portable validation and overlap rejection  |
-| `document.ts`       | YAML AST updates and exact-revision Markdown snapshots                  |
-| `catalog.ts`        | Metadata-only queue/search/URL index and stable browsing snapshots      |
-| `store.ts`          | Serialized capture, acquisition, annotations, position, moves and trash |
-| `annotations.ts`    | Inline highlight/link operations, annotation detection, import escaping |
-| `projection.ts`     | Conservative mapping from rendered words to original Markdown ranges    |
-| `work.ts`           | Small keyed work queue and file-identity write serialization            |
+| File in `src/core/` | Responsibility                                                             |
+| ------------------- | -------------------------------------------------------------------------- |
+| `model.ts`          | Article/feed types, paths, URLs, safe filenames, calendar-month age        |
+| `folders.ts`        | Two creation destinations, portable validation; root/shared/nested allowed |
+| `document.ts`       | YAML AST updates and exact-revision Markdown snapshots                     |
+| `catalog.ts`        | Metadata-only queue/search/URL index and stable browsing snapshots         |
+| `store.ts`          | Serialized capture, acquisition, annotations, bookmark, status and trash   |
+| `annotations.ts`    | Inline highlight/link operations, annotation detection, import escaping    |
+| `projection.ts`     | Conservative mapping from rendered words to original Markdown ranges       |
+| `work.ts`           | Small keyed work queue and file-identity write serialization               |
 
-`store.ts` is the mutation boundary. It rechecks current identity/revision, promotes before annotation, and uses guarded native moves. Session-only capture receipts permit safe filename retitling; they never become persisted ownership stamps. Explicit Reader deletion records feed-associated URLs in subscription `deleted_urls` before trash; RSS import rechecks suppression under a shared local import/delete lane. Expiry does not record suppression: it prefilters metadata, protects active work/backlinks, then reads only candidate bodies.
+`store.ts` is the mutation boundary. It rechecks current identity/revision, promotes Feed/missing status to Later before annotation, writes queue changes in YAML without moving files, and uses guarded native moves only for capture retitling. Session-only capture receipts permit safe filename retitling; they never become persisted ownership stamps. Explicit Reader deletion records feed-associated URLs in subscription `deleted_urls` before trash; RSS import rechecks suppression under a shared local import/delete lane. Expiry does not record suppression: it requires explicit `status: feed` in metadata and fresh bytes, protects active work/backlinks, then reads only candidate bodies. Missing status displays in Feed but never expires; invalid statuses remain unqueued/protected.
 
 ## Content: untrusted publisher input
 
@@ -46,12 +48,12 @@ Runtime libraries: `yaml`, `marked`, `entities`, `dompurify`, `defuddle`. No UI 
 - `host/network.ts`: bounded request slots and delivery timeouts. An uncancellable timed-out request retains its slot until the host settles it.
 - `host/ingestion.ts`: local-only subscription creation (editable hostname title/prefix), explicit latest-20 Sync/Refresh feeds imports, dedupe, cancellation, and acquisition proof against current excerpt bytes. No automatic feed polling or add-time fetch/import.
 - `host/dialogs.ts` / `settings.ts`: native input/dialogs, staged independent-folder settings and subscription controls.
-- `host/folder-settings.ts` / `folder-picker.ts`: explicit five-role folder-group persistence and native suggestions. Native Apply at the same current locations persisted `folders` in Reader `data.json`, preserving all three legacy keys/values; it aborted the old generation and opened a fresh list. All 43 Markdown/Base files were byte-identical across Apply: no automatic migration. Legacy keys stay inert; unknown settings remain preserved.
+- `host/folder-settings.ts` / `folder-picker.ts`: two creation destinations in `captureFolders`, native suggestions including vault root. Existing folder settings stay inert/preserved; no conversion or organization moves. Applying destinations drains old work and creates fresh list views without acquisition or promotion. Exact article/feed types are indexed anywhere in the vault.
 - `host/nodes.ts`: optional public `fileclass-inline.api` v2. Link/Change and Create note require `pickNodeForLink` and delegate to Fileclass Inline’s shared picker. No Reader picker, All notes route, standalone fallback, private Fileclass calls or migration.
 
 ## Reader: presentation and transient state
 
-- `reader/view.ts`: flat library/article UI, original browsing context, selection operations, guarded async lifetimes, native menus and Markdown escape. Opened-before (not finished) and highlight indicators use existing `reading_position` + Markdown highlights only; no new metadata/YAML/history.
+- `reader/view.ts`: flat library/article UI, original browsing context, selection operations, guarded async lifetimes, native menus and Markdown escape. Opened-before (not finished) and highlight indicators use existing `bookmark` + Markdown highlights only; no new metadata/YAML/history.
 - `reader/render.ts`: sanitized Markdown rendering and lazy remote images with failure cooldown.
 - `reader/images.ts`: disposable click/tap/keyboard image enlargement; inline image height remains bounded by the reading viewport.
 - `reader/highlight-feedback.ts`: transient save acknowledgement, distinct from the immutable text/revision write snapshot and cleared with its surface lifetime.
@@ -86,7 +88,7 @@ Final overall backup audit: 43 → 43, no additions/deletions; only `reading_pos
 
 See [recorded evidence and phone checklist](mobile-smoke.md) (`reader-redesign-audit.json`, `native-folder-apply.json`, `native-resume.json`, `routing.json`, `uri.json`) and the [historical/current report](rebuild-report.html). That installed build's recorded validation: 1042 unit + 72 tooling = 1114; test-only 8.258s, full check 12.361s. Automated geometry and the four-width production Surface browser checks are not physical-device evidence.
 
-The merged source additionally preserves image enlargement, web-link capture, transient highlight acknowledgement and tracked native-title refresh. The approved article toolbar now has six actions: Read later (clock) moves to Later without advancing, and Save to Treasury (bookmark, formerly Keep) retains its advance behavior. Its regression checks do not extend the earlier native acceptance; this Git-only merge does not install or reload it.
+The source additionally preserves image enlargement, web-link capture, transient highlight acknowledgement and tracked native-title refresh. The six-action toolbar sets Later (clock) without advancing, or Archive (archive icon) and advances; queue changes write YAML and leave paths unchanged. Reading state is now `bookmark`, with legacy position values preserved/inert. Source regressions do not extend earlier native acceptance; implementation does not install, convert or reload a vault.
 
 Remaining checks require a future authorized window; the current native hold remains true:
 

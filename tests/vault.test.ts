@@ -49,7 +49,7 @@ const SOURCE = 'Reading/Inbox/Story.md',
   RAW = 'Original article.\n';
 it('resolves subscription links natively with source context and rejects ambiguous short names', () => {
   const f = fixture();
-  const subscription = f.note('Reading/Wires/Example.md');
+  const subscription = f.note('Reading/Feeds/Example.md');
   const resolve = vi.fn(() => subscription);
   Object.assign(f.app, { metadataCache: { getFirstLinkpathDest: resolve } });
   f.vault.getMarkdownFiles.mockImplementation(() =>
@@ -57,10 +57,10 @@ it('resolves subscription links natively with source context and rejects ambiguo
   );
   expect(f.adapter.resolveLink('Example', SOURCE)).toBe(subscription);
   expect(resolve).toHaveBeenCalledWith('Example', SOURCE);
-  expect(f.adapter.resolveLink('../Wires/Example', SOURCE)).toBe(subscription);
+  expect(f.adapter.resolveLink('../Feeds/Example', SOURCE)).toBe(subscription);
   f.note('Other/Example.md');
   expect(f.adapter.resolveLink('Example', SOURCE)).toBeUndefined();
-  expect(f.adapter.resolveLink('Reading/Wires/Example.md', SOURCE)).toBe(subscription);
+  expect(f.adapter.resolveLink('Reading/Feeds/Example.md', SOURCE)).toBe(subscription);
   resolve.mockReturnValue(undefined as unknown as TFile);
   expect(f.adapter.resolveLink('Missing', SOURCE)).toBeUndefined();
 });
@@ -335,9 +335,14 @@ describe('final native trash validation', () => {
   it('retains an expired article annotated during the final native read', async () => {
     const f = fixture(),
       store = new ArticleStore(f.adapter);
-    const properties = { type: 'article', published: '2026-08-01', url: 'https://example.com/one' };
+    const properties = {
+      type: 'article',
+      status: 'feed',
+      published: '2026-08-01',
+      url: 'https://example.com/one',
+    };
     const file = f.note(
-      'Reading/Stream/260801 Story.md',
+      'Reading/Feed/260801 Story.md',
       createDocument(properties, 'Publisher text.'),
     );
     store.catalog.update(file.path, properties);
@@ -361,9 +366,9 @@ describe('final native trash validation', () => {
     async (reason) => {
       const f = fixture(),
         store = new ArticleStore(f.adapter);
-      const properties = { type: 'article', published: '2026-08-01' };
+      const properties = { type: 'article', status: 'feed', published: '2026-08-01' };
       const file = f.note(
-        'Reading/Stream/260801 Story.md',
+        'Reading/Feed/260801 Story.md',
         createDocument(properties, 'Publisher text.'),
       );
       store.catalog.update(file.path, properties);
@@ -422,7 +427,7 @@ describe('final native trash validation', () => {
         store = new ArticleStore(f.adapter),
         ingestion = new Ingestion(store, () => {});
       const properties = { type: 'feed', url: 'https://example.com/feed' };
-      const file = f.note('Reading/Wires/Example.md', createDocument(properties, 'My notes.'));
+      const file = f.note('Reading/Feeds/Example.md', createDocument(properties, 'My notes.'));
       store.catalog.update(file.path, properties);
       const feed = store.catalog.feed(file.path)!;
       let reads = 0;
@@ -451,7 +456,7 @@ describe('final native trash validation', () => {
       store = new ArticleStore(f.adapter),
       ingestion = new Ingestion(store, () => {});
     const properties = { type: 'feed', url: 'https://example.com/feed' };
-    const file = f.note('Reading/Wires/Example.md', createDocument(properties, ''));
+    const file = f.note('Reading/Feeds/Example.md', createDocument(properties, ''));
     store.catalog.update(file.path, properties);
     await ingestion.unsubscribe(store.catalog.feed(file.path)!);
     expect(f.vault.trash).toHaveBeenCalledWith(file, false);
@@ -761,7 +766,7 @@ describe('native YAML-link annotation events', () => {
     { topics: ['Research'] },
   ])('signals an authored property annotation without another body read: %j', (properties) => {
     const f = libraryFixture(),
-      file = f.add('Reading/Stream/260801 Article.md', { type: 'article' });
+      file = f.add('Reading/Feed/260801 Article.md', { type: 'article' });
     const raw = patchProperties(f.bytes.get(file)!, properties),
       cache = { frontmatter: readDocument(raw).properties };
     f.caches.set(file, cache);
@@ -777,13 +782,13 @@ describe('native YAML-link annotation events', () => {
     const f = libraryFixture(),
       properties = {
         type: 'article',
-        feed: '[[Reading/Wires/Feed.md]]',
-        reading_position: 'anchor:[[Topics/X.md]]',
+        feed: '[[Reading/Feeds/Feed.md]]',
+        bookmark: 'anchor:[[Topics/X.md]]',
         title: '[[Literal title]]',
         error: '[[Literal error]]',
         related: '==not a vault link==',
       };
-    const file = f.add('Reading/Stream/260801 Article.md', properties);
+    const file = f.add('Reading/Feed/260801 Article.md', properties);
     f.events.get('changed')!(file, f.bytes.get(file), f.caches.get(file));
     expect(f.changes[0]).toMatchObject({ path: file.path, annotations: false });
     expect(f.vault.read).not.toHaveBeenCalled();
@@ -791,50 +796,53 @@ describe('native YAML-link annotation events', () => {
 });
 
 describe('folder-only library events', () => {
-  it('reclassifies queue articles while excluding feeds moved outside their configured folder', () => {
+  it('preserves YAML queue and feed membership after native folder moves', () => {
     const f = libraryFixture();
-    const article = f.add('Reading/Inbox/Group/Article.md', { type: 'article' });
+    const article = f.add('Reading/Inbox/Group/Article.md', { type: 'article', status: 'later' });
     f.renameFolder(f.folder('Reading/Inbox/Group'), 'Reading/Later/Group');
     expect(f.store.catalog.article(article.path)?.queue).toBe('Later');
-    const feed = f.add('Reading/Wires/Group/Feed.md', {
+    const feed = f.add('Reading/Feeds/Group/Feed.md', {
       type: 'feed',
       url: 'https://example.com/feed',
     });
     expect(f.store.catalog.feed(feed.path)).toBeDefined();
-    f.renameFolder(f.folder('Reading/Wires/Group'), 'Elsewhere/Group');
-    expect(f.store.catalog.feed(feed.path)).toBeUndefined();
-    expect(f.store.catalog.feeds()).toEqual([]);
-    f.renameFolder(f.folder('Elsewhere/Group'), 'Reading/Wires/Group');
+    f.renameFolder(f.folder('Reading/Feeds/Group'), 'Elsewhere/Group');
+    expect(f.store.catalog.feed(feed.path)).toBeDefined();
+    expect(f.store.catalog.feeds()).toHaveLength(1);
+    f.renameFolder(f.folder('Elsewhere/Group'), 'Reading/Feeds/Group');
     expect(f.store.catalog.feed(feed.path)).toBeDefined();
   });
   it.each([false, true])(
     'reindexes article/feed descendants after a folder-only rename (omitted children: %s)',
     (omitChildren) => {
       const f = libraryFixture();
-      const article = f.add('Reading/Wires/Group/Story.md', {
+      const article = f.add('Reading/Feeds/Group/Story.md', {
         type: 'article',
         url: 'https://example.com/story',
       });
-      const nested = f.add('Reading/Wires/Group/Nested/Other.md', { type: 'article' });
-      const feed = f.add('Reading/Wires/Group/Nested/Feed.md', {
+      const nested = f.add('Reading/Feeds/Group/Nested/Other.md', { type: 'article' });
+      const feed = f.add('Reading/Feeds/Group/Nested/Feed.md', {
         type: 'feed',
         url: 'https://example.com/feed',
       });
-      const sibling = f.add('Reading/Inbox/Grouped/Untouched.md', { type: 'article' });
+      const sibling = f.add('Reading/Inbox/Grouped/Untouched.md', {
+        type: 'article',
+        status: 'inbox',
+      });
       const old = [article.path, nested.path, feed.path],
         revoked = vi.spyOn(f.store, 'noteRenamed');
-      f.renameFolder(f.folder('Reading/Wires/Group'), 'Reading/Wires/Renamed', omitChildren);
+      f.renameFolder(f.folder('Reading/Feeds/Group'), 'Reading/Feeds/Renamed', omitChildren);
       for (const path of old) {
         expect(f.store.catalog.article(path)).toBeUndefined();
         expect(f.store.catalog.feed(path)).toBeUndefined();
       }
       expect(f.store.catalog.article(article.path)).toMatchObject({
         path: article.path,
-        queue: undefined,
+        queue: 'Feed',
       });
       expect(f.store.catalog.article(nested.path)).toMatchObject({
         path: nested.path,
-        queue: undefined,
+        queue: 'Feed',
       });
       expect(f.store.catalog.feed(feed.path)).toBeDefined();
       expect(f.store.catalog.findUrl('https://example.com/story')?.path).toBe(article.path);
@@ -861,9 +869,9 @@ describe('folder-only library events', () => {
     const file = await f.store.capture({ url: 'https://example.com/capture' });
     const original = file.path;
     f.caches.set(file, { frontmatter: readDocument(f.bytes.get(file)!).properties });
-    const folder = f.folder('Reading/Inbox');
-    f.renameFolder(folder, 'Reading/Later/Temporary');
-    f.renameFolder(folder, 'Reading/Inbox');
+    const folder = f.folder('Reading/Articles');
+    f.renameFolder(folder, 'Elsewhere/Temporary');
+    f.renameFolder(folder, 'Reading/Articles');
     expect(f.vault.read).not.toHaveBeenCalled();
     const saved = await f.store.acquire(
       await f.store.read(original),
@@ -878,17 +886,20 @@ describe('folder-only library events', () => {
     'removes article/feed index descendants on folder deletion (omitted children: %s)',
     (omitChildren) => {
       const f = libraryFixture();
-      const article = f.add('Reading/Wires/Group/Story.md', {
+      const article = f.add('Reading/Feeds/Group/Story.md', {
         type: 'article',
         url: 'https://example.com/story',
       });
-      const feed = f.add('Reading/Wires/Group/Nested/Feed.md', {
+      const feed = f.add('Reading/Feeds/Group/Nested/Feed.md', {
         type: 'feed',
         url: 'https://example.com/feed',
       });
-      const sibling = f.add('Reading/Inbox/Grouped/Untouched.md', { type: 'article' });
+      const sibling = f.add('Reading/Inbox/Grouped/Untouched.md', {
+        type: 'article',
+        status: 'inbox',
+      });
       const revoked = vi.spyOn(f.store, 'noteRenamed');
-      f.deleteFolder(f.folder('Reading/Wires/Group'), omitChildren);
+      f.deleteFolder(f.folder('Reading/Feeds/Group'), omitChildren);
       expect(f.store.catalog.article(article.path)).toBeUndefined();
       expect(f.store.catalog.feed(feed.path)).toBeUndefined();
       expect(f.store.catalog.findUrl('https://example.com/story')).toBeUndefined();
@@ -979,4 +990,12 @@ describe('portable collision lookup without body or vault scans', () => {
       expect(f.vault.create).not.toHaveBeenCalled();
     },
   );
+});
+
+it('creates a root-level note without treating its filename as a parent folder', async () => {
+  const f = fixture();
+  const file = await f.adapter.create('Root article.md', RAW);
+  expect(file.path).toBe('Root article.md');
+  expect(f.vault.createFolder).not.toHaveBeenCalled();
+  expect(f.bytes.get(file)).toBe(RAW);
 });

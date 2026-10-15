@@ -11,10 +11,7 @@ import {
 import { loadFolders, saveFolderSettings } from '../src/host/folder-settings';
 
 export const separateFolders: ReaderFolders = {
-  inbox: 'Capture',
-  stream: 'Disposable/Articles',
-  later: 'Reading plans/Someday',
-  treasury: 'Knowledge/Kept',
+  articles: 'Capture',
   feeds: 'Subscriptions',
 };
 
@@ -24,52 +21,53 @@ describe('fresh folder settings only', () => {
     expect(loadFolders(legacy)).toEqual(defaultFolders);
     expect(saveFolderSettings(legacy, separateFolders)).toEqual({
       ...legacy,
-      folders: separateFolders,
+      captureFolders: separateFolders,
     });
-    expect(legacy).not.toHaveProperty('folders');
+    expect(legacy).not.toHaveProperty('captureFolders');
   });
 
   it('preserves unknown settings both outside and inside the fresh group', () => {
     const previous = {
       future: { enabled: true },
-      folders: { ...defaultFolders, extra: ['unchanged'] },
+      captureFolders: { ...defaultFolders, extra: ['unchanged'] },
     };
     const next = saveFolderSettings(previous, separateFolders);
     expect(next).toEqual({
       future: previous.future,
-      folders: { ...separateFolders, extra: ['unchanged'] },
+      captureFolders: { ...separateFolders, extra: ['unchanged'] },
     });
     expect(loadFolders(next)).toEqual(separateFolders);
-    expect(previous.folders.inbox).toBe('Reading/Inbox');
+    expect(previous.captureFolders.articles).toBe('Reading/Articles');
   });
 
   it('rejects malformed groups atomically instead of silently applying partial defaults', () => {
-    const previous = { folders: { ...defaultFolders } };
+    const previous = { captureFolders: { ...defaultFolders } };
     expect(() =>
-      saveFolderSettings(previous, { ...separateFolders, feeds: 'Capture/nested' }),
+      saveFolderSettings(previous, { ...separateFolders, feeds: '../unsafe' }),
     ).toThrow();
-    expect(previous).toEqual({ folders: defaultFolders });
-    for (const folders of [null, {}, { inbox: 'Capture' }, { ...separateFolders, later: '' }])
-      expect(() => loadFolders({ folders })).toThrow();
+    expect(previous).toEqual({ captureFolders: defaultFolders });
+    for (const folders of [
+      null,
+      {},
+      { articles: 'Capture' },
+      { ...separateFolders, articles: null },
+    ])
+      expect(() => loadFolders({ captureFolders: folders })).toThrow();
     for (const data of [null, undefined, {}, []]) expect(loadFolders(data)).toEqual(defaultFolders);
   });
 });
 
 describe('independent Reader folders', () => {
-  it('keeps the five current default locations without requiring a common parent', () => {
+  it('keeps the two creation destinations without requiring a common parent', () => {
     expect(validateFolders(defaultFolders)).toEqual({
-      inbox: 'Reading/Inbox',
-      stream: 'Reading/Stream',
-      later: 'Reading/Later',
-      treasury: 'Reading/Treasury',
-      feeds: 'Reading/Wires',
+      articles: 'Reading/Articles',
+      feeds: 'Reading/Feeds',
     });
     expect(validateFolders(separateFolders)).toEqual(separateFolders);
-    expect(validateFolders({ ...separateFolders, inbox: '収集/Été' }).inbox).toBe('収集/Été');
+    expect(validateFolders({ ...separateFolders, articles: '収集/Été' }).articles).toBe('収集/Été');
   });
 
   it.each([
-    '',
     '/',
     '/Absolute',
     '../Outside',
@@ -116,12 +114,12 @@ describe('independent Reader folders', () => {
   it('validates every field before producing a new immutable group', () => {
     const draft = { ...separateFolders };
     const accepted = validateFolders(draft);
-    draft.inbox = 'Changed';
-    expect(accepted.inbox).toBe('Capture');
+    draft.articles = 'Changed';
+    expect(accepted.articles).toBe('Capture');
     expect(Object.isFrozen(accepted)).toBe(true);
     expect(() => validateFolders({ ...separateFolders, feeds: '../unsafe' })).toThrow();
     expect(accepted).toEqual(separateFolders);
-    for (const bad of [null, undefined, [], 'Reading', {}, { ...separateFolders, later: 4 }])
+    for (const bad of [null, undefined, [], 'Reading', {}, { ...separateFolders, articles: 4 }])
       expect(() => validateFolders(bad)).toThrow();
   });
 
@@ -129,7 +127,7 @@ describe('independent Reader folders', () => {
     for (let j = i + 1; j < folderKeys.length; j++) {
       const a = folderKeys[i],
         b = folderKeys[j];
-      it(`rejects duplicate and ancestor overlap between ${a} and ${b}`, () => {
+      it(`accepts duplicate and ancestor overlap between ${a} and ${b}`, () => {
         for (const [left, right] of [
           ['Same', 'Same'],
           ['Parent', 'Parent/Child'],
@@ -138,16 +136,17 @@ describe('independent Reader folders', () => {
           ['Parent', 'parent/Child'],
           ['Café', 'Cafe\u0301/Child'],
         ]) {
-          expect(() => validateFolders({ ...separateFolders, [a]: left, [b]: right })).toThrow(
-            /overlap/,
-          );
+          expect(validateFolders({ ...separateFolders, [a]: left, [b]: right })).toMatchObject({
+            [a]: left,
+            [b]: right,
+          });
         }
       });
     }
   }
 
   it('uses a segment boundary, allowing siblings with shared prefixes', () => {
-    expect(validateFolders({ ...separateFolders, inbox: 'Capture later' }).inbox).toBe(
+    expect(validateFolders({ ...separateFolders, articles: 'Capture later' }).articles).toBe(
       'Capture later',
     );
     expect(isWithinFolder('Capture/a.md', 'Capture')).toBe(true);

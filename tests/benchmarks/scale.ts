@@ -6,14 +6,14 @@ import { Catalog, ReadingQueue } from '../../src/core/catalog';
 import { ArticleStore, type NoteFile } from '../../src/core/store';
 import { createDocument, readDocument, replaceBody } from '../../src/core/document';
 import { addHighlight, locateSelection, passages } from '../../src/core/annotations';
-import { filename, type Properties, type Queue } from '../../src/core/model';
+import { filename, queueStatus, type Properties, type Queue } from '../../src/core/model';
 import { FileVault, type PathGuard } from './fs-vault';
 import { difference, measure, type Measurement } from './measure';
 
 export const ARTICLE_COUNT = 10_000,
   FEED_COUNT = 100,
   BODY_BYTES = 10 * 1024;
-const queues: Queue[] = ['Inbox', 'Later', 'Treasury', 'Stream'];
+const queues: Queue[] = ['Inbox', 'Later', 'Archive', 'Feed'];
 export const articleUrl = (feed: number, sequence: number) =>
   `https://source-${String(feed).padStart(3, '0')}.invalid/articles/${sequence}`;
 export const feedUrl = (feed: number) =>
@@ -57,19 +57,20 @@ export async function runCore(options: {
           const queue = queues[Math.floor(id / (ARTICLE_COUNT / queues.length))];
           const properties = {
             type: 'article',
+            status: queueStatus(queue),
             title,
             url: articleUrl(feed, sequence),
             published: options.now,
-            feed: `[[Reading/Wires/Wire ${String(feed).padStart(3, '0')}.md]]`,
+            feed: `[[Reading/Feeds/Wire ${String(feed).padStart(3, '0')}.md]]`,
           };
           articles[id] = await port.create(
-            `Reading/${queue}/${filename(title, now, '', true)}`,
+            `Reading/Articles/${filename(title, now, '', true)}`,
             createDocument(properties, bodyFor(id)),
           );
         } else {
           const feed = id - ARTICLE_COUNT;
           feeds[feed] = await port.create(
-            `Reading/Wires/Wire ${String(feed).padStart(3, '0')}.md`,
+            `Reading/Feeds/Wire ${String(feed).padStart(3, '0')}.md`,
             createDocument(
               {
                 type: 'feed',
@@ -206,13 +207,13 @@ export async function runCore(options: {
   );
   noReads(
     await measure(
-      'fresh-stream-expiry',
+      'fresh-feed-expiry',
       10,
       counts,
       () => store.expire(now),
       (result) => {
         assert.deepEqual(result, { deleted: 0, retained: 0, promoted: 0 });
-        assert.equal(store.catalog.paths('Stream').length, 2500);
+        assert.equal(store.catalog.paths('Feed').length, 2500);
       },
     ),
   );
@@ -224,7 +225,7 @@ export async function runCore(options: {
   };
   for (const [name, offset] of [
     ['inbox-annotation', 0],
-    ['stream-promotion-and-annotation', 7500],
+    ['feed-promotion-and-annotation', 7500],
   ] as const) {
     measurements.push(
       await measure(
@@ -233,7 +234,9 @@ export async function runCore(options: {
         counts,
         (i) => annotate(offset + i),
         (saved, i) => {
-          assert(saved.path.startsWith('Reading/Inbox/'));
+          assert.equal(saved.path, articles[offset + i].path);
+          assert(saved.path.startsWith('Reading/Articles/'));
+          assert.equal(saved.properties.status, offset === 7500 ? 'later' : 'inbox');
           assert.equal(passages(saved.body)[0]?.text, quote(offset + i));
           assert.equal(Buffer.byteLength(saved.body), BODY_BYTES + 4);
           expected.set(saved.file, saved.raw);
@@ -243,18 +246,32 @@ export async function runCore(options: {
   }
   measurements.push(
     await measure(
-      'position-write',
+      'status-only-queue-change',
+      30,
+      counts,
+      async (i) => store.move(await store.read(articles[2500 + i].path), 'Archive'),
+      (saved, i) => {
+        assert.equal(saved.path, articles[2500 + i].path);
+        assert.equal(saved.properties.status, 'archive');
+        assert.equal(saved.body, bodyFor(2500 + i));
+        expected.set(saved.file, saved.raw);
+      },
+    ),
+  );
+  measurements.push(
+    await measure(
+      'bookmark-write',
       30,
       counts,
       (i) => store.position(articles[i].path, `anchor ${i}`),
       (saved, i) => {
-        assert.equal(saved.properties.reading_position, `anchor ${i}`);
+        assert.equal(saved.properties.bookmark, `anchor ${i}`);
         expected.set(saved.file, saved.raw);
       },
     ),
   );
   assert.equal(store.catalog.size, ARTICLE_COUNT);
-  assert.equal(counts().moves, 30);
+  assert.equal(counts().moves, 0);
   assert.equal(counts().trashes, 0);
   return {
     port,
@@ -272,7 +289,7 @@ export async function runCore(options: {
         initialArticleBodyBytes: ARTICLE_COUNT * BODY_BYTES,
         initialMarkdownBytes: initialBytes,
         initialQueues: Object.fromEntries(queues.map((queue) => [queue, 2500])),
-        freshStreamExpiryCandidates: 2500,
+        freshFeedExpiryCandidates: 2500,
       },
       measurements,
     },

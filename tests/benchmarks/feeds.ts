@@ -85,11 +85,13 @@ export async function runFeeds(context: Context, now: string) {
         assert.equal(store.catalog.size, ARTICLE_COUNT + FEED_COUNT * 20);
         for (let feed = 0; feed < FEED_COUNT; feed++) {
           for (let sequence = 100; sequence < 125; sequence++) {
-            assert.equal(
-              !!store.catalog.findUrl(articleUrl(feed, sequence)),
-              sequence >= 105,
-              'Latest20 bound violated',
-            );
+            const article = store.catalog.findUrl(articleUrl(feed, sequence));
+            assert.equal(!!article, sequence >= 105, 'Latest20 bound violated');
+            if (article) {
+              assert.equal(article.status, 'feed');
+              assert.equal(article.queue, 'Feed');
+              assert(article.path.startsWith('Reading/Articles/'));
+            }
           }
         }
       },

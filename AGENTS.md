@@ -13,7 +13,7 @@ Start with the [codebase map](docs/map.md), [approved scope](docs/rebuild-spec.m
 ## Rebuilt architecture
 
 - `src/main.ts` owns commands, routing and generation-bound services. Folder reconfiguration stops old views/work, drains dispatched writes and creates fresh Reader list views; it must not reopen/acquire/promote articles as a side effect.
-- `src/core/` owns Markdown snapshots, metadata indexing, folder validation and guarded writes. Recheck source bytes, file identity and dirty-editor safety at mutation boundaries.
+- `src/core/` owns Markdown snapshots, metadata indexing, capture-destination validation and guarded writes. Recheck source bytes, file identity and dirty-editor safety at mutation boundaries.
 - `src/content/` bounds and sanitizes external content. `src/host/` adapts native vault, network, dialogs/settings and optional Nodes APIs; keep uncancellable native requests in their occupied slots until settlement.
 - `src/reader/` renders the list/articles. `src/reader/styles.css` is the sole source stylesheet: leaf-owned floating controls, ≥44px targets, scrollbar/final-content clearance and aligned paged column geometry.
 - Use Notes, not a separate Reader node entity. Both note actions delegate to Fileclass Inline’s shared picker, linking the source before required completion. No custom picker, All notes route or standalone creation fallback; without the capability highlights remain usable. Cancellation must not delete a created note or block navigation on an uncooperative provider.
@@ -35,8 +35,8 @@ Start with the [codebase map](docs/map.md), [approved scope](docs/rebuild-spec.m
 ## Storage principles
 
 - Markdown is authoritative. Article body and inline highlights use ordinary Markdown; operational reading state is YAML. Keep the article/feed examples in README and the storage contract consistent with implementation.
-- Inbox, Stream, Later, Treasury and subscriptions are five independent settings. Reject duplicate/overlapping paths; no legacy-root import, automatic note moves or note-schema rewrites. Preserve unknown settings inert.
-- Opened-before indicators derive from existing usable `reading_position`; highlight indicators derive from Markdown. Reads stay bounded/cancellable for visible rows and never persist extra flags or trigger promotion.
+- Discover articles/subscriptions anywhere by exact `type`. Article YAML `status` controls Inbox/Feed/Later/Archive, never folder location. Missing status displays in Feed but never expires; invalid statuses remain unqueued/protected. Only explicit fresh `status: feed` can expire. Capture destinations (`captureFolders.articles`/`feeds`) affect creation only; same/nested/root paths are allowed. No automatic conversion/moves; old settings remain inert.
+- Opened-before indicators derive from existing usable `bookmark` text anchors; highlight indicators derive from Markdown. Legacy `reading_position` remains untouched and inert. Feed/missing-status annotations promote to Later before commit; other statuses do not change. Reads stay bounded/cancellable for visible rows and never persist extra flags or trigger promotion.
 - Preserve unknown properties, explicit titles, authored headings/comments, user text, journals, and backlinks. Do not introduce sidecars or generated synchronized copies.
 - Follow the approved [storage contract](docs/storage-contract.md), `src/core/model.ts`, and `src/core/document.ts`. New notes must not persist IDs, cursor/history state, or acquisition metadata; unknown nonempty text remains protected unless ownership is proven from its current bytes.
 - Every feed refresh is limited to the latest 20 entries before deduplication/age filtering. Do not revive superseded implementations, migrations, QuickAdd assets, or old settings.

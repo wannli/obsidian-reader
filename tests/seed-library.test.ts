@@ -41,12 +41,13 @@ describe('synthetic seed library with the current ArticleStore', () => {
   it('discovers all four queues and the disabled offline feed without indexing the journal as an article', async () => {
     const { files, vault, store } = await library();
     expect(store.catalog.size).toBe(4);
-    for (const queue of ['Inbox', 'Stream', 'Later', 'Treasury'] as const) {
+    for (const queue of ['Inbox', 'Feed', 'Later', 'Archive'] as const) {
       const articles = store.catalog.list(queue);
       expect(articles, queue).toHaveLength(1);
-      expect(articles[0].path.startsWith(`Reading/${queue}/`)).toBe(true);
+      expect(articles[0].path.startsWith('Reading/Articles/')).toBe(true);
       const snapshot = await store.read(articles[0].path);
       expect(snapshot.properties.type).toBe('article');
+      expect(snapshot.properties.status).toBe(queue.toLowerCase());
       expect(snapshot.body.trim()).not.toBe('');
       expect(snapshot.raw).toBe(files[snapshot.path]);
     }
@@ -67,8 +68,8 @@ describe('synthetic seed library with the current ArticleStore', () => {
       false,
     );
     expect(store.catalog.feeds().filter((feed) => feed.enabled)).toEqual([]);
-    const stream = await store.read(store.catalog.list('Stream')[0].path);
-    const linkedFeed = linkPath(String(stream.properties.feed));
+    const feedArticle = await store.read(store.catalog.list('Feed')[0].path);
+    const linkedFeed = linkPath(String(feedArticle.properties.feed));
     expect(store.catalog.feed(linkedFeed ?? '') ?? store.catalog.feed(`${linkedFeed}.md`)).toEqual(
       feeds[0],
     );
@@ -77,7 +78,37 @@ describe('synthetic seed library with the current ArticleStore', () => {
     expect(await vault.read(vault.file(`Daily/${DAY}.md`)!)).toBe(files[`Daily/${DAY}.md`]);
   });
 
-  it('preserves unknown seed YAML and every unrelated byte while highlighting and moving an article', async () => {
+  it('discovers typed notes anywhere and promotes missing-status Feed annotations in place', async () => {
+    const { vault, store } = await library();
+    const raw =
+      '---\ntype: article\npublished: 2001-01-01\nreading_position: legacy anchor\ncustom: keep\n---\nA synthetic passage.\n';
+    const path = 'Elsewhere/Loose article.md';
+    await vault.create(path, raw);
+    store.catalog.update(path, readDocument(raw).properties);
+    expect(store.catalog.article(path)?.queue).toBe('Feed');
+    expect(store.catalog.article(path)?.status).toBeUndefined();
+    await store.expire(new Date(`${DAY}T12:00:00Z`));
+    expect(await vault.read(vault.file(path)!)).toBe(raw);
+    expect(vault.trashed).toEqual([]);
+    const snapshot = await store.read(path);
+    expect(snapshot.properties.bookmark).toBeUndefined();
+    const range = locateSelection(snapshot.body, 'synthetic passage');
+    const saved = await store.annotate(snapshot, (current) =>
+      replaceBody(current, snapshot.body, addHighlight(snapshot.body, range.from, range.to)),
+    );
+    expect(saved.path).toBe(path);
+    expect(saved.properties.status).toBe('later');
+    expect(saved.properties.reading_position).toBe('legacy anchor');
+    expect(saved.properties.custom).toBe('keep');
+    expect(saved.body).toBe('A ==synthetic passage==.\n');
+    store.catalog.update('Loose feed.md', { type: 'feed', url: 'https://example.invalid/rss' });
+    expect(store.catalog.feed('Loose feed.md')).toBeDefined();
+    store.catalog.update('Invalid status.md', { type: 'article', status: 'Stream' });
+    expect(store.catalog.article('Invalid status.md')).toBeDefined();
+    expect(store.catalog.article('Invalid status.md')?.queue).toBeUndefined();
+  });
+
+  it('preserves unknown seed YAML and every unrelated byte while highlighting and changing status', async () => {
     const { vault, store } = await library();
     const unrelatedDaily = 'Daily/Unrelated.md';
     const unrelatedBytes =
@@ -104,19 +135,16 @@ describe('synthetic seed library with the current ArticleStore', () => {
     );
     const moved = await store.move(highlighted, 'Later');
     expect(moved.file).toBe(original.file);
-    expect(moved.path.startsWith('Reading/Later/')).toBe(true);
-    expect(moved.raw).toBe(highlighted.raw);
+    expect(moved.path).toBe(original.path);
+    expect(moved.body).toBe(highlighted.body);
+    expect(moved.raw).toBe(highlighted.raw.replace('status: "inbox"', 'status: "later"'));
+    expect(moved.properties.status).toBe('later');
     expect(moved.properties['test-note']).toBe('Preserve this unknown property');
     expect(store.catalog.list('Inbox')).toEqual([]);
     expect(store.catalog.list('Later')).toHaveLength(2);
-    expect(vault.file(original.path)).toBeUndefined();
-    expect(store.catalog.article(original.path)).toBeUndefined();
-    expect([...vault.files.keys()].sort()).toEqual(
-      [...beforeBytes.keys()]
-        .filter((path) => path !== original.path)
-        .concat(moved.path)
-        .sort(),
-    );
+    expect(vault.file(original.path)).toBe(original.file);
+    expect(store.catalog.article(original.path)?.queue).toBe('Later');
+    expect([...vault.files.keys()].sort()).toEqual([...beforeBytes.keys()].sort());
     for (const [path, raw] of beforeBytes) {
       if (path !== original.path) expect(await vault.read(vault.file(path)!), path).toBe(raw);
     }

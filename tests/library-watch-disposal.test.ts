@@ -53,7 +53,7 @@ it('keeps emitter and plugin-owned reference counts bounded across generation re
     expect(vault.refs.size).toBe(2);
     expect(ownedEvents.size + ownedCleanup.size).toBe(0);
     const ref = [...metadata.refs][0];
-    const file = { path: `Reading/Inbox/${generation}.md`, extension: 'md' };
+    const file = { path: `Reading/Articles/${generation}.md`, extension: 'md' };
     const cache = { frontmatter: { type: 'article' } };
     metadata.emit('changed', file, 'Body', cache);
     expect(changed).toHaveBeenCalledOnce();

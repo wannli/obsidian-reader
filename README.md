@@ -6,11 +6,11 @@ A small Markdown-first article and RSS reader for Obsidian desktop, iPhone/iPad,
 
 - **Add URL** saves a note immediately, including offline; available article text is acquired while Reader is active and online. Clicking a web link offers **Save to Inbox**, **Open link** or **Cancel**; saving keeps the current article open and reuses existing-URL deduplication.
 - **Add feed** saves an RSS/Atom subscription without importing articles, so you can edit its parameters first. **Sync feeds explicitly** when ready; startup and periodic timers do not refresh feeds. Each Sync considers at most the **latest 20 entries**, before age filtering and deduplication. There is no backlog/history service.
-- Browse **Inbox, Later and Stream** in a flat, titles-only list; use **Open Treasury** and **Manage feeds** commands for those views. Search through native Obsidian rather than an embedded search bar. Source URLs remain stored in the notes.
+- Browse **Inbox, Later and Feed** in a flat, titles-only list; use **Open Archive** and **Manage feeds** commands for those views. Search through native Obsidian rather than an embedded search bar. Source URLs remain stored in the notes.
 - Right-side indicators show **Opened before** from an existing saved reading position and **Has highlights** from Markdown. No extra metadata, completion flag or persisted history is added.
 - Select text to highlight it or add topic links. Link/Change and Create note use Fileclass Inline’s shared picker for existing notes or inline creation through the optional public **Nodes API v2** integration.
-- Both views use compact, leaf-owned **floating bottom controls**, accessible labels and 44px targets. Articles use the pane width, one title and scrollbar/final-text clearance. **Previous, Next, Read later, Save to Treasury, Delete, List** have no action divider. Read later (clock) moves to Later and keeps the article open; Save to Treasury (bookmark) and recoverable Delete advance within the original browsing context.
-- Exact `type: article` notes open in Reader; **Open Markdown** preserves an explicit native-editor escape, and dirty editors are protected. **Topics** and **Move article** remain commands. Reading position travels with the note; pagination is device-local.
+- Both views use compact, leaf-owned **floating bottom controls**, accessible labels and 44px targets. Articles use the pane width, one title and scrollbar/final-text clearance. **Previous, Next, Read later, Archive, Delete, List** have no action divider. Read later (clock) sets Later and keeps the article open; Archive and recoverable Delete advance within the original browsing context. Queue changes update YAML, never move the file.
+- Exact `type: article` notes open in Reader; **Open Markdown** preserves an explicit native-editor escape, and dirty editors are protected. **Topics** and **Change article status** remain commands. Reading position travels with the note; pagination is device-local.
 - Obsidian’s separate floating mobile navigation bar hides only while Reader is active. At article boundaries, **Up/PageUp** opens the previous article and **Down/PageDown** the next, without held-key skipping or interfering with editing. Every article entry still resumes its own saved position.
 - **Open reading list** forces the library. On iPhone, **Copy reading-list link** supplies a vault-aware `obsidian://obsidian-reader` URL for a Shortcuts **URL → Open URLs → Add to Home Screen** shortcut; no extra plugin is needed.
 
@@ -18,33 +18,35 @@ The combined integration requires Obsidian **1.12.7 or newer** and `fileclass-in
 
 Markdown is the only article store. Reader preserves authored text, unknown YAML, and existing links; it does not maintain sidecars, copied highlights, custom sync, or migration code. Images remain remote; inline images fit the reading area and open a larger view when clicked or tapped.
 
-**Stream is disposable:** annotations and vault links promote articles to Inbox; unprotected entries older than one clamped UTC calendar month go to vault-local recoverable trash. Unknown-age and in-use notes are retained. See the [approved storage contract](docs/storage-contract.md).
+**Explicit `status: feed` is disposable:** annotations and authored vault links promote these articles to Later; unprotected entries older than one clamped UTC calendar month go to recoverable trash. Missing status appears in Feed but never expires. Unknown-age and in-use notes are retained. See the [approved storage contract](docs/storage-contract.md).
 
 ## Markdown structure
 
-The default layout below is only a starting point: all five folders can live independently anywhere in the vault. A note's folder determines its queue; there is no queue property.
+Reader discovers articles and subscriptions anywhere by their `type`. Folders control only where new notes are created; users may arrange existing files freely. The two capture destinations default to `Reading/Articles` and `Reading/Feeds`; they may be the same, nested, or the vault root.
 
-```text
-Reading/
-  Inbox/     # captured and protected articles
-  Stream/    # disposable feed articles
-  Later/     # articles saved for later
-  Treasury/  # retained articles
-  Wires/     # feed-subscription notes
-```
+| Article `status` | Queue                                     | Automatic expiry                             |
+| ---------------- | ----------------------------------------- | -------------------------------------------- |
+| `inbox`          | Inbox: manually captured                  | No                                           |
+| `feed`           | Feed: not explicitly retained             | After one calendar month, with safety checks |
+| `later`          | Later: saved for further attention        | No                                           |
+| `archive`        | Archive: kept without requiring attention | No                                           |
+| Missing          | Feed                                      | Never                                        |
 
-An article such as `Reading/Inbox/261014 A useful article.md`:
+Invalid statuses remain readable but unqueued and never expire. Highlighting/linking a Feed article, including one without status, sets `later` before saving the annotation. Other statuses remain unchanged. Reading and saving a bookmark do not change status. Archive does not imply finished; users can return an archived article to Later. Removing highlights does not undo retention.
+
+An article such as `Reading/Articles/261014 A useful article.md`:
 
 ```markdown
 ---
 type: article
+status: inbox
 url: https://example.com/article
 title: A useful article
 published: 2026-10-14T08:00
-feed: '[[Reading/Wires/Example feed.md]]'
+feed: '[[Reading/Feeds/Example feed.md]]'
 topics:
   - '[[Topics/Reading.md]]'
-reading_position: An important passage remains ordinary Markdown
+bookmark: An important passage remains ordinary Markdown
 ---
 
 An ==important passage== remains ordinary Markdown.
@@ -52,11 +54,11 @@ An ==important passage== remains ordinary Markdown.
 A ==[[Notes/A useful idea.md|linked passage]]== links directly to a note.
 ```
 
-`type: article` identifies the note. Capture/acquisition uses `url`; local articles can be read without it. `title`, `published`, `feed`, `topics` and `reading_position` are optional; `error` can describe an acquisition failure. The position is a text anchor, not a page number or completion flag. Inline highlights and passage links live in the body; feed and topic links are frontmatter properties.
+`type: article` identifies the note. Capture/acquisition uses `url`; local articles can be read without it. `title`, `published`, `feed`, `topics` and `bookmark` are optional; `error` can describe an acquisition failure. The position is a text anchor, not a page number or completion flag. Inline highlights and passage links live in the body; feed and topic links are frontmatter properties.
 
 New captures write `published` as an unquoted **local wall-clock minute** in Obsidian’s `YYYY-MM-DDTHH:mm` format, without seconds or a timezone suffix. Zone-free values follow the current device’s timezone and native date/DST interpretation; they do not preserve a unique instant across timezones or repeated DST hours. Existing date-only, offset and full ISO values remain readable and are not rewritten or migrated. UTC filename dates still come from the original parsed publication instant, before local formatting.
 
-A subscription such as `Reading/Wires/Example feed.md`:
+A subscription such as `Reading/Feeds/Example feed.md`:
 
 ```yaml
 ---
@@ -80,7 +82,7 @@ This checkout contains the rebuilt implementation; it has **not been published a
 
 For an available release, use BRAT with `wannli/obsidian-reader`, or download `main.js`, `manifest.json`, and `styles.css` from the same release into `<vault>/.obsidian/plugins/obsidian-reader/`, then enable Reader in Community plugins. Installing a released version does not install uncommitted work from this checkout.
 
-Choose **Inbox, Stream, Later, Treasury and feed-subscription folders independently** in Reader settings. No shared parent is required; duplicate/overlapping paths are rejected. Defaults are `Reading/{Inbox,Stream,Later,Treasury,Wires}`. Applying the validated group returns Reader panes to the list without moving or rewriting notes; old root/flat setting keys remain inert.
+Choose **article and subscription capture folders** in Reader settings. These affect only new notes, never queue membership or discovery. Settings use the new `captureFolders` group; older folder/root settings remain preserved but inert. Applying destinations does not move or rewrite notes. Existing `reading_position` properties remain untouched and are not used as bookmarks; no automatic conversion is performed.
 
 ## Develop safely
 

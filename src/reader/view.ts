@@ -13,7 +13,6 @@ import {
 import {
   addHighlight,
   changePassage,
-  hasAnnotations,
   locateSelection,
   passages,
   UnmappableSelection,
@@ -22,7 +21,7 @@ import {
 import { ReadingQueue } from '../core/catalog';
 import { patchProperties, readDocument, readingMarker, replaceBody } from '../core/document';
 import { renderedHighlight } from '../core/markdown';
-import { articleInfo, linkPath, queueAt, queues, text, vaultLink, type Queue } from '../core/model';
+import { articleInfo, linkPath, queues, text, vaultLink, type Queue } from '../core/model';
 import { type ArticleStore, type Snapshot } from '../core/store';
 import { choose, chooseTopics, confirmWebLink } from '../host/dialogs';
 import type { Ingestion } from '../host/ingestion';
@@ -142,8 +141,8 @@ export class ReaderView extends ItemView {
   }
   private articleLabel(): string {
     return this.snapshot
-      ? (articleInfo(this.snapshot.path, this.snapshot.properties, this.host.store.folders)
-          ?.title ?? this.snapshot.file.basename)
+      ? (articleInfo(this.snapshot.path, this.snapshot.properties)?.title ??
+          this.snapshot.file.basename)
       : (this.fallbackFile?.basename ?? 'Reading list');
   }
   getIcon(): string {
@@ -439,16 +438,16 @@ export class ReaderView extends ItemView {
       cls: 'reader-toolbar reader-bottom-controls',
       attr: { 'aria-label': 'Reading list actions' },
     });
-    for (const name of queues.filter((name) => name !== 'Treasury')) {
+    for (const name of queues.filter((name) => name !== 'Archive')) {
       const button = this.button(
         tabs,
-        name,
+        name === 'Feed' ? 'Feed articles' : name,
         () => {
           this.search = '';
           this.listLimit = 50;
           this.showList(name);
         },
-        { Inbox: 'inbox', Stream: 'waves', Later: 'clock' }[name],
+        { Inbox: 'inbox', Feed: 'rss', Later: 'clock' }[name],
       );
       button.classList.toggle('mod-cta', name === queue);
     }
@@ -523,7 +522,7 @@ export class ReaderView extends ItemView {
             return;
           const document = readDocument(raw);
           if (document.properties.type !== 'article') return;
-          const openedBefore = !!readingMarker(document.properties.reading_position);
+          const openedBefore = !!readingMarker(document.properties.bookmark);
           let highlighted = false;
           try {
             highlighted = renderedHighlight(document.body);
@@ -620,7 +619,7 @@ export class ReaderView extends ItemView {
       if (this.stopping || this.host.signal.aborted || signal?.aborted || request !== this.opening)
         return;
       token = this.generation;
-      let snapshot = await this.host.store.read(path);
+      const snapshot = await this.host.store.read(path);
       if (
         this.stopping ||
         this.lifetime.signal.aborted ||
@@ -630,7 +629,7 @@ export class ReaderView extends ItemView {
       )
         return;
       targetFile = snapshot.file;
-      let article = articleInfo(path, snapshot.properties, this.host.store.folders)!;
+      const article = articleInfo(path, snapshot.properties)!;
       const origin =
         browsing ??
         (!this.readingQueue.current
@@ -639,26 +638,6 @@ export class ReaderView extends ItemView {
               paths: article.queue ? this.host.store.catalog.paths(article.queue) : [path],
             }
           : undefined);
-      // Fresh Stream articles are not scanned by expiry. Use the body already opened
-      // here to preserve native/synced annotations without changing the origin queue.
-      if (article.queue === 'Stream' && hasAnnotations(snapshot.body, snapshot.properties)) {
-        try {
-          snapshot = await this.host.store.move(snapshot, 'Inbox');
-        } catch (error) {
-          this.error(error);
-          // A failed multi-step host move may have changed the path. Never continue
-          // with an obsolete snapshot; a failed reread leaves the Markdown escape.
-          snapshot = await this.host.store.read(snapshot.file.path);
-        }
-        if (
-          this.stopping ||
-          this.host.signal.aborted ||
-          signal?.aborted ||
-          token !== this.generation
-        )
-          return;
-        article = articleInfo(snapshot.path, snapshot.properties, this.host.store.folders)!;
-      }
       // Keep the old article and browsing context until all awaited work and modal
       // cancellation checks finish. A cancelled capture cannot steal the current view.
       this.clear();
@@ -690,7 +669,7 @@ export class ReaderView extends ItemView {
       this.syncPresentation();
       surface.setBody(snapshot.body, article.url);
       if (this.surface !== surface) return; // The synchronous error callback installed the escape hatch.
-      surface.restore(readingMarker(snapshot.properties.reading_position) ?? '');
+      surface.restore(readingMarker(snapshot.properties.bookmark) ?? '');
       if (this.surface !== surface) return;
       this.status = column.createDiv({ cls: 'reader-status', attr: { role: 'status' } });
       column.prepend(this.status); // Feedback stays clear of the floating controls.
@@ -754,12 +733,10 @@ export class ReaderView extends ItemView {
       );
     }
     this.button(this.actions, 'Read later', () => this.move('Later'), 'clock');
-    this.button(
-      this.actions,
-      'Save to Treasury',
-      () => this.finish('keep'),
-      'bookmark',
-    ).setAttribute('aria-label', 'Save to Treasury and advance');
+    this.button(this.actions, 'Archive', () => this.finish('keep'), 'archive').setAttribute(
+      'aria-label',
+      'Archive and advance',
+    );
     this.button(this.actions, 'Delete', () => this.finish('delete'), 'trash-2').setAttribute(
       'aria-label',
       'Trash article and advance',
@@ -769,11 +746,7 @@ export class ReaderView extends ItemView {
   }
   private updateStatus(): void {
     if (!this.snapshot || !this.status) return;
-    const article = articleInfo(
-      this.snapshot.path,
-      this.snapshot.properties,
-      this.host.store.folders,
-    )!;
+    const article = articleInfo(this.snapshot.path, this.snapshot.properties)!;
     const message =
       article.error ||
       (!this.snapshot.body.trim()
@@ -1069,7 +1042,7 @@ export class ReaderView extends ItemView {
         1,
         (path) => !!this.host.store.catalog.article(path),
       );
-      if (action === 'keep') await this.host.store.move(snapshot, 'Treasury');
+      if (action === 'keep') await this.host.store.move(snapshot, 'Archive');
       else if (action === 'delete') await this.host.store.trash(snapshot);
       if (!this.current(snapshot, generation) || this.stopping) return;
       this.snapshot = undefined;
@@ -1089,7 +1062,7 @@ export class ReaderView extends ItemView {
       const signal = this.articleLifetime.signal;
       const target =
         destination ??
-        (await choose(this.app, 'Move article to…', [...queues], (queue) => queue, signal));
+        (await choose(this.app, 'Change article status…', [...queues], (queue) => queue, signal));
       if (!target || signal.aborted || !this.current(snapshot, generation)) return;
       this.assertDisplayed(snapshot, true);
       const moved = await this.host.store.move(snapshot, target);
@@ -1283,18 +1256,12 @@ export class ReaderView extends ItemView {
           guard();
           const file = await this.host.store.capture({ url: href }, new Date(), guard);
           guard();
-          const snapshot = await this.host.store.read(file.path);
-          guard();
-          const saved =
-            queueAt(snapshot.path, this.host.store.folders) === 'Inbox'
-              ? snapshot
-              : await this.host.store.move(snapshot, 'Inbox', guard);
-          guard();
+          // Capture owns new-note status; duplicates retain their status and placement.
           // Save/capture stays in the current article and its original browsing context.
-          void this.host.ingestion.acquire(saved.path, true).catch((error) => {
+          void this.host.ingestion.acquire(file.path, true).catch((error) => {
             if (!signal.aborted) this.error(error);
           });
-          new Notice('Saved to Inbox.');
+          new Notice('Article saved.');
         },
         [signal, this.host.signal],
       );
@@ -1558,7 +1525,11 @@ export class ReaderView extends ItemView {
         return;
       }
       this.adoptSnapshot(current);
-      this.surface?.setBody(current.body, text(current.properties.url));
+      if (
+        current.body !== before.body ||
+        text(current.properties.url) !== text(before.properties.url)
+      )
+        this.surface?.setBody(current.body, text(current.properties.url));
       this.controls();
     } catch (error) {
       if (!this.stopping && this.current(before, generation)) {

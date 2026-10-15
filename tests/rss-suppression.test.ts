@@ -10,7 +10,7 @@ import { queues, vaultLink } from '../src/core/model';
 import { gate, MemoryVault } from './helpers/memory-vault';
 
 const url = 'https://example.com/article';
-const feedPath = 'Reading/Wires/Example.md';
+const feedPath = 'Reading/Feeds/Example.md';
 const feed = vaultLink(feedPath);
 async function setup(extra: Record<string, unknown> = {}) {
   const vault = new MemoryVault();
@@ -157,7 +157,7 @@ describe('permanent RSS suppression', () => {
 
   it('does not remember native trash or expiry, and removing suppression permits reimport', async () => {
     const { vault, store, subscription } = await setup();
-    const file = await store.importFeed({ url, feed, queue: 'Stream', published: '2020-01-01' });
+    const file = await store.importFeed({ url, feed, queue: 'Feed', published: '2020-01-01' });
     expect((await store.expire(new Date('2026-10-15'))).deleted).toBe(1);
     expect(readDocument(await vault.read(subscription)).properties.deleted_urls).toBeUndefined();
     const imported = await store.importFeed({ url, feed });
@@ -177,7 +177,7 @@ describe('permanent RSS suppression', () => {
     );
     expect(store.catalog.feed(feedPath)?.deletedUrls).toEqual([]);
     expect(await store.importFeed({ url, feed })).toBeUndefined();
-    const other = 'Reading/Wires/Other.md';
+    const other = 'Reading/Feeds/Other.md';
     await vault.create(other, createDocument({ type: 'feed' }, ''));
     expect(await store.importFeed({ url, feed: vaultLink(other) })).toBeDefined();
     await vault.process(subscription, (raw) => patchProperties(raw, { deleted_urls: [false] }));

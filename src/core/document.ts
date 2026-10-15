@@ -144,12 +144,12 @@ export function savePosition(raw: string, marker: string): string {
   const doc = requireArticle(raw);
   if (readingMarker(marker) === undefined) throw new Error('Invalid reading position.');
   if (
-    doc.properties.reading_position !== undefined &&
-    readingMarker(doc.properties.reading_position) === undefined
+    doc.properties.bookmark !== undefined &&
+    readingMarker(doc.properties.bookmark) === undefined
   ) {
     throw new Error('Unsupported reading position; preserved the note.');
   }
-  return patchProperties(raw, { reading_position: marker || undefined });
+  return patchProperties(raw, { bookmark: marker || undefined });
 }
 /** Recovering acquisition never treats arbitrary nonempty text as a disposable excerpt. */
 export function acquireBody(

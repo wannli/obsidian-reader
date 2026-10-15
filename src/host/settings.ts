@@ -98,7 +98,7 @@ export class ReaderSettings extends PluginSettingTab {
     this.containerEl.createEl('h2', { text: 'Reader' });
     const candidate = { ...this.folders };
     this.containerEl.createEl('p', {
-      text: 'Choose five independent vault folders. They cannot overlap. Applying changes never moves existing files or changes their Markdown.',
+      text: 'Choose creation destinations for new articles and feed subscriptions. Folders may be shared or nested; leave a path empty to use the vault root. Applying changes never moves existing files or changes their Markdown.',
     });
     for (const key of folderKeys) {
       const setting = new Setting(this.containerEl).setName(folderLabels[key]);
@@ -119,7 +119,7 @@ export class ReaderSettings extends PluginSettingTab {
     new Setting(this.containerEl)
       .setName('Apply folder locations')
       .setDesc(
-        'All five locations are checked and applied together. Reader returns to the reading list. New folders are created only when needed for a new note or an explicit move.',
+        'Both creation destinations are applied together. Reader returns to the reading list. Folders are created only when needed for a new note.',
       )
       .addButton((button) =>
         button
@@ -153,7 +153,7 @@ export class ReaderSettings extends PluginSettingTab {
         }),
       );
     this.containerEl.createEl('p', {
-      text: 'Feeds import only when you click Sync or run Refresh feeds. Stream expires after one calendar month; adding highlights or links keeps articles in Inbox. Saved text works offline; remote images need a connection.',
+      text: 'Feeds import only when you click Sync or run Refresh feeds. Only explicit Feed status expires after one calendar month; adding highlights or links keeps Feed articles in Later. Saved text works offline; remote images need a connection.',
     });
   }
 }

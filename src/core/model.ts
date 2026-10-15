@@ -1,6 +1,6 @@
-import { defaultFolders, isWithinFolder, type ReaderFolders } from './folders';
-
-export const queues = ['Inbox', 'Later', 'Stream', 'Treasury'] as const;
+export const queues = ['Inbox', 'Later', 'Feed', 'Archive'] as const;
+export const articleStatuses = ['inbox', 'later', 'feed', 'archive'] as const;
+export type ArticleStatus = (typeof articleStatuses)[number];
 export type Queue = (typeof queues)[number];
 export type Properties = Record<string, unknown>;
 export interface ArticleInfo {
@@ -8,6 +8,8 @@ export interface ArticleInfo {
   title: string;
   url: string;
   queue?: Queue;
+  /** Only a validated, explicitly persisted status; missing Feed is not expirable. */
+  status?: ArticleStatus;
   published?: string;
   feed?: string;
   topics: string[];
@@ -39,12 +41,18 @@ export function deletedUrls(value: unknown): string[] {
     throw new Error('Invalid deleted_urls; expected a list of HTTP(S) URLs.');
   return [...new Set(value.map((url) => webUrl(url as string)))];
 }
-export function queueFolder(queue: Queue, folders: ReaderFolders = defaultFolders): string {
-  const keys = { Inbox: 'inbox', Stream: 'stream', Later: 'later', Treasury: 'treasury' } as const;
-  return folders[keys[queue]];
+export function articleStatus(value: unknown): ArticleStatus | undefined {
+  return articleStatuses.find((status) => status === value);
 }
-export function queueAt(path: string, folders: ReaderFolders = defaultFolders): Queue | undefined {
-  return queues.find((queue) => isWithinFolder(path, queueFolder(queue, folders)));
+export function queueStatus(queue: Queue): ArticleStatus {
+  const index = queues.indexOf(queue);
+  if (index < 0) throw new Error('Invalid article queue.');
+  return articleStatuses[index];
+}
+export function queueAt(properties: Properties): Queue | undefined {
+  if (!Object.hasOwn(properties, 'status')) return 'Feed';
+  const status = articleStatus(properties.status);
+  return status === undefined ? undefined : queues[articleStatuses.indexOf(status)];
 }
 export function timestamp(input: unknown): number | undefined {
   if (typeof input !== 'string' || !/^\d{4}-\d{2}-\d{2}(?:T.*)?$/.test(input)) return;
@@ -99,11 +107,7 @@ export function monthCutoff(now: Date): number {
     now.getUTCMilliseconds(),
   );
 }
-export function articleInfo(
-  path: string,
-  properties: Properties,
-  folders: ReaderFolders = defaultFolders,
-): ArticleInfo | undefined {
+export function articleInfo(path: string, properties: Properties): ArticleInfo | undefined {
   if (properties.type !== 'article') return;
   const name = path.split('/').pop()!.replace(/\.md$/i, '');
   let url = '';
@@ -118,7 +122,8 @@ export function articleInfo(
     path,
     title: text(properties.title).trim() || name.replace(/^\d{6} /, ''),
     url,
-    queue: queueAt(path, folders),
+    queue: queueAt(properties),
+    status: Object.hasOwn(properties, 'status') ? articleStatus(properties.status) : undefined,
     published,
     feed: text(properties.feed) || undefined,
     topics: Array.isArray(properties.topics)

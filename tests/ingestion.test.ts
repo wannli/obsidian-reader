@@ -128,7 +128,7 @@ function pausedSubscriptionCreate(h: Host) {
     });
   return { entered, release, creating };
 }
-async function seedFeed({ vault, store }: Host, url = FEED, path = 'Reading/Wires/Example.md') {
+async function seedFeed({ vault, store }: Host, url = FEED, path = 'Reading/Feeds/Example.md') {
   const properties = { type: 'feed', title: 'Example', url, prefix: 'Example', enabled: true };
   await vault.create(path, createDocument(properties));
   store.catalog.update(path, properties);
@@ -140,7 +140,7 @@ async function seedExcerpt(h: Host, entry = item(1)) {
     url: entry.url,
     title: entry.title,
     body: await feeds.feedMarkdown(entry),
-    queue: 'Stream',
+    queue: 'Feed',
     feed: vaultLink(feed.path),
     published: entry.published,
   });
@@ -266,7 +266,7 @@ describe('subscription import contracts', () => {
         .sort(),
     );
     const feed = h.store.catalog.feeds()[0];
-    expect(h.store.catalog.list('Stream')).toHaveLength(20);
+    expect(h.store.catalog.list('Feed')).toHaveLength(20);
     const snapshot = await h.store.read(h.store.catalog.findUrl(item(25).url)!.path);
     const published = new Date(item(25).published!),
       pad = (part: number) => String(part).padStart(2, '0');
@@ -371,15 +371,15 @@ describe('subscription import contracts', () => {
     const h = host(),
       entry = item(1);
     const file = await h.store.capture({ url: `${entry.url}#saved`, body: 'My existing article.' });
-    await h.store.move(await h.store.read(file.path), 'Treasury');
+    await h.store.move(await h.store.read(file.path), 'Archive');
     const before = await h.vault.read(file);
     await seedFeed(h);
-    await seedFeed(h, 'https://example.com/second.xml', 'Reading/Wires/Second.md');
+    await seedFeed(h, 'https://example.com/second.xml', 'Reading/Feeds/Second.md');
     serve(() => response(xml([entry, { ...entry, url: `${entry.url}#duplicate` }, item(2)])));
     await Promise.all([h.ingestion.refreshAll(), h.ingestion.refreshAll()]);
     expect(urls(h.store)).toEqual([entry.url, item(2).url]);
     expect(await h.vault.read(file)).toBe(before);
-    expect(file.path).toContain('/Treasury/');
+    expect((await h.store.read(file.path)).properties.status).toBe('archive');
     expect(request).toHaveBeenCalledTimes(2);
   });
 
@@ -496,7 +496,7 @@ describe('subscription filename allocation and external metadata', () => {
     await entered.promise;
     try {
       await flush(); // Drain the other queued addition without sleeps; the first create is still blocked.
-      expect(creating.mock.calls.map(([path]) => path)).toEqual(['Reading/Wires/example.com.md']);
+      expect(creating.mock.calls.map(([path]) => path)).toEqual(['Reading/Feeds/example.com.md']);
     } finally {
       release.resolve();
     }
@@ -506,8 +506,8 @@ describe('subscription filename allocation and external metadata', () => {
     ]);
     const subscriptions = h.store.catalog.feeds();
     expect(subscriptions.map((feed) => feed.path).sort()).toEqual([
-      'Reading/Wires/example.com 2.md',
-      'Reading/Wires/example.com.md',
+      'Reading/Feeds/example.com 2.md',
+      'Reading/Feeds/example.com.md',
     ]);
     expect(subscriptions.map((feed) => feed.url).sort()).toEqual([FEED, secondUrl].sort());
     expect(request).not.toHaveBeenCalled();
@@ -534,9 +534,9 @@ describe('subscription filename allocation and external metadata', () => {
 
   it('uses vault.exists to skip a folder and a case-alias collision without touching either', async () => {
     const h = host(),
-      folder = 'Reading/Wires/example.com.md';
+      folder = 'Reading/Feeds/example.com.md';
     const alias = await h.vault.create(
-      'Reading/Wires/EXAMPLE.COM 2.md',
+      'Reading/Feeds/EXAMPLE.COM 2.md',
       '# Existing user note\n\nPreserve me exactly.\n',
     );
     const before = await h.vault.read(alias);
@@ -555,13 +555,13 @@ describe('subscription filename allocation and external metadata', () => {
     serve(() => response(xml([])));
     await h.ingestion.subscribe(FEED);
     expect(exists.mock.calls.map(([path]) => path)).toEqual([
-      'Reading/Wires/example.com.md',
-      'Reading/Wires/example.com 2.md',
-      'Reading/Wires/example.com 3.md',
+      'Reading/Feeds/example.com.md',
+      'Reading/Feeds/example.com 2.md',
+      'Reading/Feeds/example.com 3.md',
     ]);
-    expect(creating.mock.calls.map(([path]) => path)).toEqual(['Reading/Wires/example.com 3.md']);
+    expect(creating.mock.calls.map(([path]) => path)).toEqual(['Reading/Feeds/example.com 3.md']);
     expect(h.store.catalog.feeds().map((feed) => feed.path)).toEqual([
-      'Reading/Wires/example.com 3.md',
+      'Reading/Feeds/example.com 3.md',
     ]);
     expect(await h.vault.read(alias)).toBe(before);
     expect(h.vault.file(folder)).toBeUndefined();
@@ -578,7 +578,7 @@ describe('subscription filename allocation and external metadata', () => {
       'Too many subscriptions share this filename.',
     );
     expect(exists).toHaveBeenCalledTimes(1000);
-    expect(exists).toHaveBeenLastCalledWith('Reading/Wires/example.com 1000.md');
+    expect(exists).toHaveBeenLastCalledWith('Reading/Feeds/example.com 1000.md');
     expect(create).not.toHaveBeenCalled();
     expect(h.vault.files.size).toBe(0);
     expect(h.store.catalog.feeds()).toEqual([]);
@@ -848,7 +848,7 @@ describe('exact excerpt ownership and stale acquisition', () => {
       { file } = await seedExcerpt(h);
     await h.vault.process(file, (raw) =>
       patchProperties(raw, {
-        reading_position: 'quote:[[Topics/X.md]]',
+        bookmark: 'quote:[[Topics/X.md]]',
         title: '[[Literal publisher title]]',
       }),
     );
@@ -856,7 +856,7 @@ describe('exact excerpt ownership and stale acquisition', () => {
     await h.ingestion.acquire(file.path);
     const saved = await h.store.read(file.path);
     expect(saved.body).toBe(`\n${FULL}\n`);
-    expect(saved.properties.reading_position).toBe('quote:[[Topics/X.md]]');
+    expect(saved.properties.bookmark).toBe('quote:[[Topics/X.md]]');
     expect(saved.properties.title).toBe('[[Literal publisher title]]');
     expect(extraction).toHaveBeenCalledOnce();
   });
@@ -1190,7 +1190,7 @@ describe('unsubscribe and unload cancellation', () => {
         url: item(1).url,
         body: 'Already saved.',
         feed: vaultLink(feed.path),
-        queue: 'Stream',
+        queue: 'Feed',
       });
       const before = await h.vault.read(kept);
       const pending = deferred<ReturnType<typeof response>>(),
@@ -1241,7 +1241,7 @@ describe('unsubscribe and unload cancellation', () => {
       const h = host();
       const feedUrls = [1, 2, 3].map((id) => `https://example.com/feed-${id}.xml`);
       const subscriptions = await Promise.all(
-        feedUrls.map((url, i) => seedFeed(h, url, `Reading/Wires/Feed ${i}.md`)),
+        feedUrls.map((url, i) => seedFeed(h, url, `Reading/Feeds/Feed ${i}.md`)),
       );
       const pending = deferred<ReturnType<typeof response>>();
       serve(() => pending.promise);
@@ -1352,7 +1352,7 @@ describe('unsubscribe and unload cancellation', () => {
         subscriptions = [];
       for (let id = 1; id <= 3; id++)
         subscriptions.push(
-          await seedFeed(h, `https://example.com/feed-${id}.xml`, `Reading/Wires/Feed ${id}.md`),
+          await seedFeed(h, `https://example.com/feed-${id}.xml`, `Reading/Feeds/Feed ${id}.md`),
         );
       const pending = [
         deferred<ReturnType<typeof response>>(),

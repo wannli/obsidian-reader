@@ -1,27 +1,21 @@
-export const folderKeys = ['inbox', 'stream', 'later', 'treasury', 'feeds'] as const;
+export const folderKeys = ['articles', 'feeds'] as const;
 export type FolderKey = (typeof folderKeys)[number];
 export type ReaderFolders = Readonly<Record<FolderKey, string>>;
 
 export const defaultFolders: ReaderFolders = Object.freeze({
-  inbox: 'Reading/Inbox',
-  stream: 'Reading/Stream',
-  later: 'Reading/Later',
-  treasury: 'Reading/Treasury',
-  feeds: 'Reading/Wires',
+  articles: 'Reading/Articles',
+  feeds: 'Reading/Feeds',
 });
 
 export const folderLabels: Readonly<Record<FolderKey, string>> = {
-  inbox: 'Inbox',
-  stream: 'Stream',
-  later: 'Later',
-  treasury: 'Treasury',
+  articles: 'Articles',
   feeds: 'Feed subscriptions',
 };
 
 /** Do not normalize unsafe input into a different destination. */
 export function folderPath(input: unknown): string {
-  if (typeof input !== 'string' || !input)
-    throw new Error('Choose a nonempty vault-relative folder.');
+  if (typeof input !== 'string') throw new Error('Choose a vault-relative folder.');
+  if (input === '') return ''; // Explicit vault-root destination.
   const encoder = new TextEncoder();
   if (
     /[\\:*?"<>|\[\]#^\x00-\x1f\x7f]/.test(input) ||
@@ -46,25 +40,14 @@ export function folderPath(input: unknown): string {
 /** Validate the whole group before returning any usable destinations. */
 export function validateFolders(input: unknown): ReaderFolders {
   if (!input || typeof input !== 'object' || Array.isArray(input))
-    throw new Error('Choose all five Reader folders.');
+    throw new Error('Choose both Reader capture folders.');
   const record = input as Record<string, unknown>;
   const folders = Object.fromEntries(
     folderKeys.map((key) => [key, folderPath(record[key])]),
   ) as Record<FolderKey, string>;
-  const comparable = (path: string) => path.normalize('NFC').toLowerCase();
-  for (let i = 0; i < folderKeys.length; i++) {
-    for (let j = i + 1; j < folderKeys.length; j++) {
-      const left = folderKeys[i],
-        right = folderKeys[j],
-        a = comparable(folders[left]),
-        b = comparable(folders[right]);
-      if (a === b || a.startsWith(`${b}/`) || b.startsWith(`${a}/`))
-        throw new Error(`${folderLabels[left]} and ${folderLabels[right]} must not overlap.`);
-    }
-  }
   return Object.freeze(folders);
 }
 
 export function isWithinFolder(path: string, folder: string): boolean {
-  return path.startsWith(`${folder}/`);
+  return folder === '' || path.startsWith(`${folder}/`);
 }

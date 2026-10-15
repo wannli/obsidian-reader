@@ -36,7 +36,7 @@ it.each(cases)(
     const raw = await vault.read(file);
     expect(raw).toContain(`\npublished: ${expected}\n`);
     expect(readDocument(raw).properties.published).toBe(expected);
-    expect(file.path).toBe(`Reading/Inbox/${day} Example.md`);
+    expect(file.path).toBe(`Reading/Articles/${day} Example.md`);
     expect(store.catalog.article(file.path)?.date).toBe(Date.parse(expected));
   },
 );
@@ -45,7 +45,7 @@ it.each(['2026-10-03T04:29', '2026-03-08T02:30', '2026-11-01T01:30', '2026-10-03
   'keeps existing zone-free %s on native local parsing, including DST normalization',
   (published) => {
     expect(timestamp(published)).toBe(Date.parse(published));
-    const info = articleInfo('Reading/Inbox/Example.md', { type: 'article', published });
+    const info = articleInfo('Reading/Articles/Example.md', { type: 'article', published });
     expect(info?.date).toBe(Date.parse(published));
     expect(info?.published).toBe(published);
   },

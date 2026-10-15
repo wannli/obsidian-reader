@@ -43,7 +43,7 @@ it.each([0, 30_000, 59_999, 60_000])(
   async (elapsed) => {
     const vault = new MemoryVault(),
       store = new ArticleStore(vault);
-    const properties = { type: 'article', published: minute };
+    const properties = { type: 'article', status: 'feed', published: minute };
     const file = await vault.create(
       'Reading/Stream/Article.md',
       createDocument(properties, 'Publisher body.'),
@@ -65,9 +65,13 @@ it('does not trust stale older metadata when fresh Markdown contains an ambiguou
     store = new ArticleStore(vault);
   const file = await vault.create(
     'Reading/Stream/Article.md',
-    createDocument({ type: 'article', published: minute }, 'Publisher body.'),
+    createDocument({ type: 'article', status: 'feed', published: minute }, 'Publisher body.'),
   );
-  store.catalog.update(file.path, { type: 'article', published: '2026-09-01T00:00:00Z' });
+  store.catalog.update(file.path, {
+    type: 'article',
+    status: 'feed',
+    published: '2026-09-01T00:00:00Z',
+  });
   const raw = await vault.read(file);
   const read = vi.spyOn(vault, 'read');
   await store.expire(clock(start + 30_000));
@@ -79,13 +83,16 @@ it('does not trust stale older metadata when fresh Markdown contains an ambiguou
 it('rechecks newly minute-precision publication bytes at the final trash boundary', async () => {
   const vault = new MemoryVault(),
     store = new ArticleStore(vault);
-  const old = { type: 'article', published: '2026-09-01T00:00:00Z' };
+  const old = { type: 'article', status: 'feed', published: '2026-09-01T00:00:00Z' };
   const file = await vault.create(
     'Reading/Stream/Article.md',
     createDocument(old, 'Publisher body.'),
   );
   store.catalog.update(file.path, old);
-  const changed = createDocument({ type: 'article', published: minute }, 'Publisher body.');
+  const changed = createDocument(
+    { type: 'article', status: 'feed', published: minute },
+    'Publisher body.',
+  );
   const boundary = vi.fn(async () => {
     vault.bytes.set(file, changed);
   });

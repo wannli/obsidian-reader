@@ -164,7 +164,9 @@ const sourceProperties = new Set([
   'title',
   'published',
   'error',
-  'reading_position',
+  'status',
+  'bookmark',
+  'reading_position', // Inert historical metadata, not a bookmark fallback or authored link.
 ]);
 
 /** Cache keys may name a nested/list value. Exclusions apply only to Reader records

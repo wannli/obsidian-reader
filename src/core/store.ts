@@ -20,7 +20,7 @@ import {
   monthCutoff,
   publicationBefore,
   queueAt,
-  queueFolder,
+  queueStatus,
   timestamp,
   webUrl,
   type Properties,
@@ -111,7 +111,7 @@ export class ArticleStore<File extends NoteFile> {
   }
   private async unique(folder: string, name: string, ownPath?: string): Promise<string> {
     for (let i = 0; i < 1_000; i++) {
-      const path = `${folder}/${i ? name.replace(/\.md$/, ` ${i + 1}.md`) : name}`;
+      const path = `${folder ? `${folder}/` : ''}${i ? name.replace(/\.md$/, ` ${i + 1}.md`) : name}`;
       // Keep an already matching name (including a numbered/case-only alias)
       // rather than treating the capture itself as a filename collision.
       if (ownPath && path.normalize('NFC').toLowerCase() === ownPath.normalize('NFC').toLowerCase())
@@ -156,8 +156,12 @@ export class ArticleStore<File extends NoteFile> {
         input.prefix,
         publishedAt !== undefined,
       );
-      const path = await this.unique(queueFolder(input.queue ?? 'Inbox', this.folders), name);
-      const properties: Properties = { type: 'article', url };
+      const path = await this.unique(this.folders.articles, name);
+      const properties: Properties = {
+        type: 'article',
+        url,
+        status: queueStatus(input.queue ?? (input.feed ? 'Feed' : 'Inbox')),
+      };
       if (input.title?.trim()) properties.title = input.title.trim();
       if (published) properties.published = published;
       if (input.feed) properties.feed = input.feed;
@@ -210,7 +214,7 @@ export class ArticleStore<File extends NoteFile> {
       if (await suppressed()) return;
       const blocked = new Error('Entry was deleted.');
       try {
-        return await this.capture(input, now, async () => {
+        return await this.capture({ ...input, queue: 'Feed' }, now, async () => {
           // Also runs in the native create guard, after directory creation/other awaits.
           if (await suppressed()) throw blocked;
         });
@@ -240,6 +244,7 @@ export class ArticleStore<File extends NoteFile> {
     this.assert(snapshot.file, snapshot.path);
     if (transform(snapshot.raw) === snapshot.raw) {
       if ((await this.vault.read(snapshot.file)) !== snapshot.raw) throw new ChangedNote();
+      this.assert(snapshot.file, snapshot.path);
       return snapshot;
     }
     const raw = await this.vault.process(snapshot.file, (current) => {
@@ -273,39 +278,22 @@ export class ArticleStore<File extends NoteFile> {
   ): Promise<Snapshot<File>> {
     guard();
     this.captures.delete(snapshot.file);
-    this.assert(snapshot.file, snapshot.path);
-    if ((await this.vault.read(snapshot.file)) !== snapshot.raw) throw new ChangedNote();
-    if (queueAt(snapshot.path, this.folders) === queue) return snapshot;
-    return this.creates.run('articles', async () => {
-      const target = await this.unique(
-        queueFolder(queue, this.folders),
-        snapshot.path.split('/').pop()!,
-      );
-      this.assert(snapshot.file, snapshot.path);
-      if ((await this.vault.read(snapshot.file)) !== snapshot.raw) throw new ChangedNote();
-      this.assert(snapshot.file, snapshot.path);
+    return this.commit(snapshot, (raw) => {
       guard();
-      await this.vault.move(snapshot.file, target, guard);
-      this.catalog.rename(
-        snapshot.path,
-        target,
-        readDocument(await this.vault.read(snapshot.file)).properties,
-      );
-      return this.read(target);
+      return patchProperties(raw, { status: queueStatus(queue) });
     });
   }
-  /** Move first: interruption may leave a kept article, never a saved annotation still eligible for expiry. */
+  /** Retain first: interruption may leave Later, never an annotated disposable Feed article. */
   annotate(snapshot: Snapshot<File>, transform: (raw: string) => string): Promise<Snapshot<File>> {
     return this.writes.run(snapshot.file, async () => {
       // Validate before moving: invalid selections/cancelled pickers must not cause any mutation.
       const proposed = transform(snapshot.raw);
       if (proposed === snapshot.raw) return snapshot;
       let current = snapshot;
-      if (queueAt(current.path, this.folders) === 'Stream')
-        current = await this.moveNow(current, 'Inbox');
+      if (queueAt(current.properties) === 'Feed') current = await this.moveNow(current, 'Later');
       if (current.body !== snapshot.body)
         throw new ChangedNote(
-          'The article moved to Inbox, but its text changed. Reopen it to retry the annotation.',
+          'The article changed to Later, but its text changed. Reopen it to retry the annotation.',
         );
       return this.commit(current, transform);
     });
@@ -347,7 +335,9 @@ export class ArticleStore<File extends NoteFile> {
         // lose acquired text or turn a successful acquisition into a retry.
         return await this.creates.run('articles', async () => {
           try {
-            const folder = saved.path.slice(0, saved.path.lastIndexOf('/')),
+            const folder = saved.path.includes('/')
+                ? saved.path.slice(0, saved.path.lastIndexOf('/'))
+                : '',
               name = filename(title, receipt.date);
             const target = await this.unique(folder, name, saved.path);
             this.assert(saved.file, receipt.path);
@@ -384,7 +374,12 @@ export class ArticleStore<File extends NoteFile> {
   trash(snapshot: Snapshot<File>, guard: () => void = () => {}): Promise<void> {
     return this.rss.run('rss', () => this.trashNote(snapshot, guard, true));
   }
-  private trashNote(snapshot: Snapshot<File>, guard: () => void, remember = false): Promise<void> {
+  private trashNote(
+    snapshot: Snapshot<File>,
+    guard: () => void,
+    remember = false,
+    validate: (current: string) => void = () => {},
+  ): Promise<void> {
     this.captures.delete(snapshot.file);
     return this.writes.run(snapshot.file, async () => {
       this.assert(snapshot.file, snapshot.path);
@@ -410,6 +405,7 @@ export class ArticleStore<File extends NoteFile> {
       await this.vault.trash(snapshot.file, (current) => {
         this.assert(snapshot.file, snapshot.path);
         if (current !== snapshot.raw) throw new ChangedNote();
+        validate(current);
         guard();
       });
       this.catalog.remove(snapshot.path);
@@ -423,7 +419,7 @@ export class ArticleStore<File extends NoteFile> {
       cutoff = monthCutoff(now);
     for (const article of [...this.catalog.values()]) {
       if (!this.active) break;
-      if (article.queue !== 'Stream') continue;
+      if (article.status !== 'feed') continue;
       // Cleanup needs bodies only for potentially expired notes. Fresh/undated
       // annotation promotion belongs to native change handling and reader writes.
       if (!publicationBefore(article.published, cutoff, filenameDay(article.path))) continue;
@@ -434,15 +430,35 @@ export class ArticleStore<File extends NoteFile> {
       }
       try {
         const snapshot = await this.read(article.path);
+        if (!Object.hasOwn(snapshot.properties, 'status') || snapshot.properties.status !== 'feed')
+          continue;
         if (hasAnnotations(snapshot.body, snapshot.properties)) {
-          await this.move(snapshot, 'Inbox');
+          await this.move(snapshot, 'Later');
           result.promoted++;
         } else if (
           publicationBefore(snapshot.properties.published, cutoff, filenameDay(snapshot.path))
         ) {
-          await this.trashNote(snapshot, () => {
-            if (inUse(file)) throw new ChangedNote('Article is in use.');
-          });
+          await this.trashNote(
+            snapshot,
+            () => {
+              if (inUse(file)) throw new ChangedNote('Article is in use.');
+            },
+            false,
+            (raw) => {
+              const fresh = requireArticle(raw);
+              if (
+                !Object.hasOwn(fresh.properties, 'status') ||
+                fresh.properties.status !== 'feed' ||
+                !publicationBefore(
+                  fresh.properties.published,
+                  cutoff,
+                  filenameDay(snapshot.path),
+                ) ||
+                hasAnnotations(fresh.body, fresh.properties)
+              )
+                throw new ChangedNote('Article is no longer eligible for expiry.');
+            },
+          );
           result.deleted++;
         }
       } catch {

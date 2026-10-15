@@ -46,9 +46,9 @@ describe('one authoritative Markdown document', () => {
   });
   it('keeps comments attached to changed properties and surviving topic items', () => {
     const input =
-      '---\ntype: article\nreading_position: old # my bookmark\ntopics:\n  - "[[One.md]]" # why one\n  - "[[Two.md]]" # why two\n---\nBody';
+      '---\ntype: article\nbookmark: old # my bookmark\ntopics:\n  - "[[One.md]]" # why one\n  - "[[Two.md]]" # why two\n---\nBody';
     const next = patchProperties(input, {
-      reading_position: 'new',
+      bookmark: 'new',
       topics: ['[[Two.md]]', '[[Three.md]]'],
     });
     expect(next).toContain('# my bookmark');
@@ -85,9 +85,9 @@ describe('one authoritative Markdown document', () => {
   it('stores position without modifying the body and protects malformed position data', () => {
     const next = savePosition(raw, 'Read this short passage.');
     expect(readDocument(next).body).toBe(readDocument(raw).body);
-    expect(readDocument(next).properties.reading_position).toBe('Read this short passage.');
+    expect(readDocument(next).properties.bookmark).toBe('Read this short passage.');
     expect(() =>
-      savePosition(patchProperties(raw, { reading_position: { old: 'unknown' } }), 'new'),
+      savePosition(patchProperties(raw, { bookmark: { old: 'unknown' } }), 'new'),
     ).toThrow();
   });
   it('fills an empty offline capture, preserving an explicit title', () => {
@@ -134,10 +134,10 @@ describe('one authoritative Markdown document', () => {
 describe('explicit identity, paths, dates and URLs', () => {
   it('never infers article identity from a URL or queue location', () => {
     expect(articleInfo('Reading/Inbox/file.md', { url: 'https://example.com' })).toBeUndefined();
-    expect(
-      articleInfo('Elsewhere/Article.md', { type: 'article', status: 'feed' })?.queue,
-    ).toBeUndefined();
-    expect(queueAt('Other/Reading/Inbox/file.md')).toBeUndefined();
+    expect(articleInfo('Elsewhere/Article.md', { type: 'article', status: 'feed' })?.queue).toBe(
+      'Feed',
+    );
+    expect(queueAt({ status: 'invalid' })).toBeUndefined();
   });
   it.each(['../private', '/absolute', 'A/../B', 'A//B', 'A\\B'])('rejects unsafe folders', (path) =>
     expect(() => folderPath(path)).toThrow(),

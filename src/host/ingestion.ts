@@ -144,7 +144,7 @@ export class Ingestion {
         const base = filename(title, new Date()).replace(/^\d{6} /, '');
         for (let suffix = 1; suffix <= 1000; suffix++) {
           const name = suffix === 1 ? base : base.replace(/\.md$/, ` ${suffix}.md`);
-          const path = `${this.store.folders.feeds}/${name}`;
+          const path = [this.store.folders.feeds, name].filter(Boolean).join('/');
           if (this.store.vault.exists?.(path) ?? this.store.vault.file(path)) continue;
           const properties = {
             type: 'feed',
@@ -254,7 +254,7 @@ export class Ingestion {
             title: item.title,
             body,
             published: item.published,
-            queue: 'Stream',
+            queue: 'Feed',
             feed: vaultLink(feed.path),
             prefix: feed.prefix,
           },

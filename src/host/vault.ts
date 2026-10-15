@@ -104,7 +104,7 @@ export class ObsidianVault implements VaultPort<TFile> {
     guard: () => void | Promise<void> = () => {},
   ): Promise<TFile> {
     await guard();
-    await this.folder(path.slice(0, path.lastIndexOf('/')));
+    await this.folder(path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : '');
     await guard();
     if (!this.active()) throw new Error('Reader has stopped.');
     if (this.exists(path)) throw new Error(`Destination already exists: ${path}`);
@@ -161,7 +161,7 @@ export class ObsidianVault implements VaultPort<TFile> {
     this.assertCurrent(file, from, before);
     if (this.exists(path)) throw new Error(`Destination already exists: ${path}`);
     guard();
-    await this.folder(path.slice(0, path.lastIndexOf('/')));
+    await this.folder(path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : '');
     const current = await this.read(file);
     this.assertCurrent(file, from, current);
     if (current !== before) throw new ChangedNote();

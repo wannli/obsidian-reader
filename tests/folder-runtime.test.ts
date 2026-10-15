@@ -4,10 +4,7 @@ import { gate } from './helpers/memory-vault';
 import { defaultFolders } from '../src/core/folders';
 
 const folders = {
-  inbox: 'Capture',
-  stream: 'Disposable',
-  later: 'Plans',
-  treasury: 'Kept',
+  articles: 'Capture',
   feeds: 'Subscriptions',
 };
 afterEach(() => {
@@ -18,6 +15,7 @@ afterEach(() => {
 it('ignores legacy settings, applies the whole group, and recreates only Reader leaves as lists', async () => {
   const legacy = {
     root: 'Ignored',
+    folders: { inbox: 'Legacy inbox', feeds: 'Legacy feeds' },
     feedsFolder: 'Old feeds',
     pollMinutes: 1,
     maxFeedItems: 999,
@@ -32,8 +30,8 @@ it('ignores legacy settings, applies the whole group, and recreates only Reader 
     oldIngestion = f.plugin.ingestion;
   const exemption = { file: {}, transitioning: false };
   f.plugin.sourceLeaves.set(f.native, exemption);
-  f.app.notes.set('Reading/Inbox/Old.md', {
-    file: { path: 'Reading/Inbox/Old.md' },
+  f.app.notes.set('Reading/Articles/Old.md', {
+    file: { path: 'Reading/Articles/Old.md' },
     properties: { type: 'article', url: 'https://example.com/old' },
     raw: 'Unchanged authored bytes',
   });
@@ -42,14 +40,14 @@ it('ignores legacy settings, applies the whole group, and recreates only Reader 
   });
   expect(oldStore.folders).toEqual(defaultFolders);
   await f.plugin.applyFolders(folders);
-  expect(f.plugin.data).toEqual({ ...legacy, folders });
+  expect(f.plugin.data).toEqual({ ...legacy, captureFolders: folders });
   expect(f.plugin.store.folders).toEqual(folders);
-  expect(f.plugin.store.catalog.article('Reading/Inbox/Old.md')?.queue).toBeUndefined();
+  expect(f.plugin.store.catalog.article('Reading/Articles/Old.md')?.queue).toBe('Feed');
   expect(f.plugin.store.catalog.findUrl('https://example.com/old')?.path).toBe(
-    'Reading/Inbox/Old.md',
+    'Reading/Articles/Old.md',
   );
   expect(f.plugin.store.catalog.feeds()).toHaveLength(1);
-  expect(f.app.notes.get('Reading/Inbox/Old.md').raw).toBe('Unchanged authored bytes');
+  expect(f.app.notes.get('Reading/Articles/Old.md').raw).toBe('Unchanged authored bytes');
   expect(old.stopped).toBe(true);
   expect(host.signal.aborted).toBe(true);
   expect(host.store).toBe(oldStore);
@@ -88,7 +86,7 @@ it('rejects invalid groups or failed persistence before retiring the current gen
   const f = await runtimeFixture();
   const signal = f.plugin.signal,
     store = f.plugin.store;
-  expect(() => f.plugin.applyFolders({ ...folders, feeds: 'Capture/nested' })).toThrow(/overlap/);
+  expect(() => f.plugin.applyFolders({ ...folders, feeds: '../Unsafe' })).toThrow(/vault-relative/);
   expect(f.plugin.saveData).not.toHaveBeenCalled();
   f.plugin.saveData.mockRejectedValueOnce(new Error('Disk full'));
   await expect(f.plugin.applyFolders(folders)).rejects.toThrow('Disk full');
@@ -128,7 +126,7 @@ it('serializes overlapping applies and preserves unknown data through each persi
     f.plugin.data = data;
   });
   const first = f.plugin.applyFolders(folders),
-    secondFolders = { ...folders, inbox: 'Other capture' };
+    secondFolders = { ...folders, articles: 'Other capture' };
   const second = f.plugin.applyFolders(secondFolders);
   await entered.promise;
   expect(f.plugin.saveData).toHaveBeenCalledTimes(1);
@@ -136,7 +134,7 @@ it('serializes overlapping applies and preserves unknown data through each persi
   release.resolve();
   await Promise.all([first, second]);
   expect(f.plugin.saveData).toHaveBeenCalledTimes(2);
-  expect(f.plugin.data).toEqual({ extra: true, folders: secondFolders });
+  expect(f.plugin.data).toEqual({ extra: true, captureFolders: secondFolders });
   expect(f.plugin.store.folders).toEqual(secondFolders);
   expect(
     f.runtime.watchers.slice(0, -1).every((watcher: any) => watcher.stop.mock.calls.length === 1),
@@ -160,3 +158,23 @@ it('rejects unload during save and never starts a replacement runtime', async ()
   expect(f.plugin.signal.aborted).toBe(true);
   expect(f.plugin.ingestion.network.stop).toHaveBeenCalledOnce();
 });
+
+it.each([
+  { articles: 'Shared', feeds: 'Shared' },
+  { articles: 'Shared', feeds: 'Shared/Subscriptions' },
+  { articles: '', feeds: '' },
+])(
+  'accepts creation destinations %j without acquisition, promotion or file writes',
+  async (candidate) => {
+    const f = await runtimeFixture();
+    const oldStore = f.plugin.store,
+      oldIngestion = f.plugin.ingestion;
+    const move = vi.spyOn(oldStore, 'move');
+    await f.plugin.applyFolders(candidate);
+    expect(f.plugin.data.captureFolders).toEqual(candidate);
+    expect(f.plugin.store.folders).toEqual(candidate);
+    expect(oldIngestion.acquire).not.toHaveBeenCalled();
+    expect(f.plugin.ingestion.acquire).not.toHaveBeenCalled();
+    expect(move).not.toHaveBeenCalled();
+  },
+);

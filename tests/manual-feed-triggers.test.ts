@@ -117,10 +117,7 @@ it('does not report or alter a replacement generation after a busy manual sync r
   await f.sync();
   expect(f.plugin.ingestion.refreshAll).toHaveBeenCalledOnce();
   await f.plugin.applyFolders({
-    inbox: 'Capture',
-    stream: 'Disposable',
-    later: 'Plans',
-    treasury: 'Kept',
+    articles: 'Capture',
     feeds: 'Subscriptions',
   });
   f.plugin.refreshing = true;
@@ -143,8 +140,13 @@ it('Refresh feeds is explicit and is never throttled by the housekeeping interva
 
 it('recovers an offline URL capture online without refreshing subscriptions', async () => {
   const f = await fixture();
-  const file = { path: 'Reading/Inbox/Captured.md' };
-  const properties = { type: 'article', url: 'https://example.com/article', title: 'Captured' };
+  const file = { path: 'Reading/Articles/Captured.md' };
+  const properties = {
+    type: 'article',
+    status: 'inbox',
+    url: 'https://example.com/article',
+    title: 'Captured',
+  };
   f.app.notes.set(file.path, { file, properties });
   f.plugin.store.catalog.update(file.path, properties);
   vi.stubGlobal('navigator', { onLine: false });
@@ -160,8 +162,13 @@ it.each(['startup', 'foreground', 'metadata'])(
   'still acquires pending article captures on %s without importing feeds',
   async (trigger) => {
     const f = await fixture();
-    const file = { path: 'Reading/Inbox/Pending.md' };
-    const properties = { type: 'article', url: 'https://example.com/pending', title: 'Pending' };
+    const file = { path: 'Reading/Articles/Pending.md' };
+    const properties = {
+      type: 'article',
+      status: 'inbox',
+      url: 'https://example.com/pending',
+      title: 'Pending',
+    };
     f.app.notes.set(file.path, { file, properties });
     f.plugin.store.catalog.update(file.path, properties);
     if (trigger === 'startup') await f.ready();
@@ -174,7 +181,7 @@ it.each(['startup', 'foreground', 'metadata'])(
 
 it('feed creation, enablement and metadata resolution never start imports', async () => {
   const f = await fixture();
-  const file = { path: 'Reading/Wires/Example.md' };
+  const file = { path: 'Reading/Feeds/Example.md' };
   for (const enabled of [false, true]) {
     const properties = { type: 'feed', url: 'https://example.com/feed', enabled };
     f.app.notes.set(file.path, { file, properties });
@@ -193,10 +200,7 @@ it('Folder Apply reseeds metadata without acquiring articles or syncing old/new 
   const f = await fixture();
   const old = f.plugin.ingestion;
   await f.plugin.applyFolders({
-    inbox: 'Capture',
-    stream: 'Disposable',
-    later: 'Plans',
-    treasury: 'Kept',
+    articles: 'Capture',
     feeds: 'Subscriptions',
   });
   expect(old.refreshAll).not.toHaveBeenCalled();

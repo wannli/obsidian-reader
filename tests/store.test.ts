@@ -8,7 +8,7 @@ import { ArticleStore } from '../src/core/store';
 import { SerialWrites, WorkQueue } from '../src/core/work';
 import { gate, MemoryVault } from './helpers/memory-vault';
 
-async function setup(queue: 'Inbox' | 'Stream' = 'Stream') {
+async function setup(queue: 'Inbox' | 'Feed' = 'Feed') {
   const vault = new MemoryVault(),
     store = new ArticleStore(vault);
   const file = await store.capture({
@@ -57,7 +57,7 @@ describe('guarded article operations', () => {
   });
   it('deduplicates after queue moves and permits reimport after deletion', async () => {
     const { store, file, snapshot } = await setup();
-    const moved = await store.move(snapshot, 'Treasury');
+    const moved = await store.move(snapshot, 'Archive');
     expect(await store.capture({ url: 'https://example.com/one' })).toBe(file);
     await store.trash(moved);
     expect(await store.capture({ url: 'https://example.com/one' })).not.toBe(file);
@@ -65,9 +65,9 @@ describe('guarded article operations', () => {
   it('promotes Stream before saving an annotation', async () => {
     const { store, file, snapshot } = await setup();
     const saved = await store.annotate(snapshot, highlight);
-    expect(file.path).toContain('/Inbox/');
+    expect((await store.read(file.path)).properties.status).toBe('later');
     expect(saved.body).toContain('==meaningful passage==');
-    expect(store.catalog.article(file.path)?.queue).toBe('Inbox');
+    expect(store.catalog.article(file.path)?.queue).toBe('Later');
   });
   it('invalid/no-op annotation attempts never move an article', async () => {
     const { store, file, snapshot } = await setup();
@@ -77,27 +77,36 @@ describe('guarded article operations', () => {
       }),
     ).rejects.toThrow();
     await store.annotate(snapshot, (raw) => raw);
-    expect(file.path).toContain('/Stream/');
+    expect(file.path).toBe(snapshot.path);
+    expect((await store.read(file.path)).properties.status).toBe('feed');
   });
   it('a failed move prevents annotation; a failed save retains the promoted article', async () => {
     const { store, vault, file, snapshot } = await setup();
-    vault.failMove = true;
-    await expect(store.annotate(snapshot, highlight)).rejects.toThrow('Move failed');
-    expect(await vault.read(file)).toBe(snapshot.raw);
-    vault.failMove = false;
     vault.failWrite = true;
     await expect(store.annotate(snapshot, highlight)).rejects.toThrow('Disk full');
-    expect(file.path).toContain('/Inbox/');
     expect(await vault.read(file)).toBe(snapshot.raw);
+    vault.failWrite = false;
+    const process = vault.process.bind(vault);
+    let writes = 0;
+    vault.process = async (target, update) => {
+      if (++writes === 2) throw new Error('Annotation failed');
+      return process(target, update);
+    };
+    await expect(store.annotate(snapshot, highlight)).rejects.toThrow('Annotation failed');
+    expect(file.path).toBe(snapshot.path);
+    expect((await store.read(file.path)).properties.status).toBe('later');
+    expect((await store.read(file.path)).body).toBe(snapshot.body);
     expect((await store.expire(new Date('2026-10-13'))).deleted).toBe(0);
   });
   it('does not expire an annotation/promotion in flight', async () => {
     const { store, vault, file, snapshot } = await setup();
     const moving = gate(),
       entered = gate();
-    vault.beforeMove = async () => {
+    const process = vault.process.bind(vault);
+    vault.process = async (target, update) => {
       entered.resolve();
       await moving.promise;
+      return process(target, update);
     };
     const saving = store.annotate(snapshot, highlight);
     await entered.promise;
@@ -105,7 +114,7 @@ describe('guarded article operations', () => {
     expect(vault.trashed).toEqual([]);
     moving.resolve();
     await saving;
-    expect(file.path).toContain('/Inbox/');
+    expect((await store.read(file.path)).properties.status).toBe('later');
   });
   it('rejects stale source, replaced identity, and unfinished native edits', async () => {
     const { store, vault, file, snapshot } = await setup('Inbox');
@@ -124,26 +133,26 @@ describe('guarded article operations', () => {
     vault.bytes.set(file, snapshot.raw + 'external edit');
     const saved = await store.position(file.path, 'A meaningful passage.');
     expect(saved.body).toContain('external edit');
-    expect(saved.properties.reading_position).toBe('A meaningful passage.');
+    expect(saved.properties.bookmark).toBe('A meaningful passage.');
   });
   it('expiry promotes source-authored annotations, ignores publisher links, and uses recoverable trash', async () => {
     const { store, vault } = await setup();
     await store.capture({
       url: 'https://example.com/two',
       body: 'An ==annotated passage==.',
-      queue: 'Stream',
+      queue: 'Feed',
       published: '2026-08-01',
     });
     await store.capture({
       url: 'https://example.com/three',
       body: '[Publisher](https://example.com)',
-      queue: 'Stream',
+      queue: 'Feed',
       published: '2026-08-01',
     });
     const result = await store.expire(new Date('2026-10-13'));
     expect(result).toEqual({ deleted: 2, promoted: 1, retained: 0 });
     expect(vault.trashed).toHaveLength(2);
-    expect(store.catalog.list('Inbox')).toHaveLength(1);
+    expect(store.catalog.list('Later')).toHaveLength(1);
   });
   it.each([
     '> ==first\n> second==',
@@ -177,7 +186,7 @@ describe('guarded article operations', () => {
         title: 'Nested highlight',
         url: 'https://example.com/nested',
         body,
-        queue: 'Stream',
+        queue: 'Feed',
         published: '2026-08-01',
       });
       const raw = await vault.read(file);
@@ -186,8 +195,11 @@ describe('guarded article operations', () => {
         promoted: 1,
         retained: 0,
       });
-      expect(file.path).toContain('/Inbox/');
-      expect(await vault.read(file)).toBe(raw);
+      expect((await store.read(file.path)).properties.status).toBe('later');
+      expect(readDocument(await vault.read(file)).properties).toEqual({
+        ...readDocument(raw).properties,
+        status: 'later',
+      });
       expect((await store.read(file.path)).body).toBe(readDocument(raw).body);
       expect(vault.trashed).toEqual([]);
     },
@@ -207,7 +219,7 @@ describe('guarded article operations', () => {
       title: 'Literal',
       url: 'https://example.com/literal',
       body,
-      queue: 'Stream',
+      queue: 'Feed',
       published: '2026-08-01',
     });
     expect(await store.expire(new Date('2026-10-13'))).toEqual({
@@ -254,8 +266,8 @@ describe('guarded article operations', () => {
     const vault = new MemoryVault(),
       store = new ArticleStore(vault);
     for (const [url, published, queue] of [
-      ['one', '2026-09-13', 'Stream'],
-      ['two', '2026-10-01', 'Stream'],
+      ['one', '2026-09-13', 'Feed'],
+      ['two', '2026-10-01', 'Feed'],
       ['three', '2026-01-01', 'Inbox'],
     ] as const) {
       await store.capture({ url: `https://example.com/${url}`, published, queue });
@@ -317,14 +329,14 @@ describe('incremental index and bounded work', () => {
         url: `https://example.com/${i}`,
       });
     expect(catalog.size).toBe(10_000);
-    expect(catalog.list('Stream')).toHaveLength(50);
+    expect(catalog.list('Feed')).toHaveLength(50);
     expect(catalog.findUrl('https://example.com/9999')?.title).toBe('Article 9999');
     expect(
       catalog.update('Reading/Stream/261001 Article 0.md', {
         type: 'article',
         title: 'Article 0',
         url: 'https://example.com/0',
-        reading_position: 'new marker',
+        bookmark: 'new marker',
       }),
     ).toBe(false);
     catalog.remove('Reading/Stream/261001 Article 0.md');

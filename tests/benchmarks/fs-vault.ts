@@ -67,7 +67,7 @@ export class FileVault implements VaultPort<NoteFile> {
   private countedRead(path: string, raw: string): string {
     this.counters.reads++;
     this.counters.readBytes += Buffer.byteLength(raw);
-    this.counters[path.startsWith('Reading/Wires/') ? 'feedReads' : 'articleReads']++;
+    this.counters[path.startsWith('Reading/Feeds/') ? 'feedReads' : 'articleReads']++;
     return raw;
   }
   private async handle(file: NoteFile, flags: number) {

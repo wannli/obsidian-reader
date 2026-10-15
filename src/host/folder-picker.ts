@@ -10,16 +10,18 @@ export class FolderPicker extends FuzzySuggestModal<TFolder> {
     this.setPlaceholder('Choose a vault folder');
   }
   getItems(): TFolder[] {
-    return this.app.vault
-      .getAllLoadedFiles()
-      .filter(
-        (file): file is TFolder => file instanceof TFolder && !!file.path && file.path !== '/',
-      );
+    const root = this.app.vault.getRoot();
+    return [
+      root,
+      ...this.app.vault
+        .getAllLoadedFiles()
+        .filter((file): file is TFolder => file instanceof TFolder && file !== root),
+    ];
   }
   getItemText(folder: TFolder): string {
-    return folder.path;
+    return folder.path === '/' || !folder.path ? 'Vault root' : folder.path;
   }
   onChooseItem(folder: TFolder): void {
-    this.choose(folder.path);
+    this.choose(folder.path === '/' ? '' : folder.path);
   }
 }

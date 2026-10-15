@@ -74,7 +74,9 @@ it.each([[new Date(2026, 9, 3, 4, 29, 59, 999).toISOString(), minute]])(
     const raw = await vault.read(file);
     expect(raw).toContain(`\npublished: ${expected}\n`);
     expect(readDocument(raw).properties.published).toBe(expected);
-    expect(file.path).toBe(`Reading/Inbox/${filename('Example', new Date(published), '', true)}`);
+    expect(file.path).toBe(
+      `Reading/Articles/${filename('Example', new Date(published), '', true)}`,
+    );
     expect(readDocument(raw).body).toBe('\nAuthored text.\n');
     expect(input.published).toBe(published);
   },
@@ -93,7 +95,7 @@ it.each([undefined, '', 'invalid', '2026-02-30T04:29:00Z'])(
     const raw = await vault.read(file);
     expect(readDocument(raw).properties).not.toHaveProperty('published');
     expect(raw).not.toContain('published:');
-    expect(file.path).toBe(`Reading/Inbox/${filename('Example', now)}`);
+    expect(file.path).toBe(`Reading/Articles/${filename('Example', now)}`);
   },
 );
 
@@ -155,9 +157,10 @@ it.each([
 ])('keeps legacy %s readable at its original instant', (published, instant) => {
   const expected = Date.parse(instant);
   expect(timestamp(published)).toBe(expected);
-  expect(articleInfo('Reading/Inbox/Example.md', { type: 'article', published })?.date).toBe(
-    expected,
-  );
+  expect(
+    articleInfo('Reading/Articles/Example.md', { type: 'article', status: 'feed', published })
+      ?.date,
+  ).toBe(expected);
 });
 
 it('preserves strict instant expiry for existing explicit-zone values, including subminute boundaries', async () => {
@@ -169,7 +172,7 @@ it('preserves strict instant expiry for existing explicit-zone values, including
     '2026-10-03T06:29:59.999+02:00',
   ];
   for (const [index, published] of publications.entries()) {
-    const properties = { type: 'article', published };
+    const properties = { type: 'article', status: 'feed', published };
     const file = await vault.create(
       `Reading/Stream/${index}.md`,
       createDocument(properties, 'Publisher body.'),
@@ -182,7 +185,7 @@ it('preserves strict instant expiry for existing explicit-zone values, including
     retained: 0,
   });
   expect(vault.trashed).toEqual(['Reading/Stream/0.md']);
-  expect(store.catalog.list('Stream').map((article) => article.path)).toEqual([
+  expect(store.catalog.list('Feed').map((article) => article.path)).toEqual([
     'Reading/Stream/2.md',
     'Reading/Stream/1.md',
   ]);

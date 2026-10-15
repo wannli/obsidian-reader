@@ -32,16 +32,17 @@ test('setup is create-only, preserves all existing bytes/mtimes, and seeds clean
   assert.deepEqual(await snapshot(f.vault), before);
   for (const [name, entry] of Object.entries(before).filter(([name]) => name.endsWith('.md'))) {
     const text = Buffer.from(entry.bytes, 'base64').toString();
-    if (/^Reading\/(?:Inbox|Later|Stream|Treasury|Wires)\//.test(name)) {
+    if (/^Reading\/(?:Articles|Feeds)\//.test(name)) {
       const { metadata, body } = parsed(text);
       assert.equal(Object.hasOwn(metadata, 'created-by'), false, name);
-      if (name.startsWith('Reading/Wires/')) {
+      if (name.startsWith('Reading/Feeds/')) {
         assert.equal(metadata.type, 'feed', name);
         for (const key of ['id', 'pullmanFormat'])
           assert.equal(Object.hasOwn(metadata, key), false, name);
         assert.equal(metadata.enabled, false, name);
       } else {
         assert.equal(metadata.type, 'article', name);
+        assert.ok(['inbox', 'later', 'feed', 'archive'].includes(metadata.status), name);
         assert.ok(body.trim(), name);
         for (const key of [
           'id',
@@ -255,7 +256,7 @@ test('seed library emits YAML-backed inline Markdown without active sidecars', (
       assert.equal(Object.hasOwn(metadata, key), false);
     assert.doesNotMatch(body, /^## (?:Comments|Highlights|Article)$/m);
     assert.doesNotMatch(raw, /<!--/);
-    if (path.includes('/Wires/')) {
+    if (path.includes('/Feeds/')) {
       assert.equal(metadata.type, 'feed');
       for (const key of ['id', 'pullmanFormat']) assert.equal(Object.hasOwn(metadata, key), false);
       assert.equal(metadata.enabled, false);
@@ -263,6 +264,8 @@ test('seed library emits YAML-backed inline Markdown without active sidecars', (
       assert.equal(metadata.url, 'https://example.invalid/reader/feed.xml');
     } else {
       assert.equal(metadata.type, 'article');
+      assert.ok(path.startsWith('Reading/Articles/'));
+      assert.ok(['inbox', 'later', 'feed', 'archive'].includes(metadata.status));
       assert.ok(body.trim());
       for (const key of [
         'id',
@@ -276,7 +279,7 @@ test('seed library emits YAML-backed inline Markdown without active sidecars', (
         assert.equal(Object.hasOwn(metadata, key), false, `${path}: ${key}`);
     }
   }
-  const path = `Reading/Inbox/261009 ${seedTitle}.md`;
+  const path = `Reading/Articles/261009 ${seedTitle}.md`;
   assert.ok(files[path].endsWith(seedBody));
   assert.equal(parsed(files[path]).metadata.url, 'https://example.invalid/reader/quiet-library');
   assert.equal(parsed(files[path]).metadata['test-note'], 'Preserve this unknown property');
@@ -287,12 +290,9 @@ test('seed library emits YAML-backed inline Markdown without active sidecars', (
   assert.equal(Object.hasOwn(files, '.obsidian/core-plugins.json'), false);
   assert.equal(Object.hasOwn(files, '.obsidian/daily-notes.json'), false);
   assert.deepEqual(JSON.parse(files['.obsidian/plugins/obsidian-reader/data.json']), {
-    folders: {
-      inbox: 'Reading/Inbox',
-      stream: 'Reading/Stream',
-      later: 'Reading/Later',
-      treasury: 'Reading/Treasury',
-      feeds: 'Reading/Wires',
+    captureFolders: {
+      articles: 'Reading/Articles',
+      feeds: 'Reading/Feeds',
     },
   });
   assert.deepEqual(seedFiles(day), files);

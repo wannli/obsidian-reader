@@ -328,10 +328,18 @@ function hostFixture(folders: ReaderFolders = defaultFolders) {
   const view = new ReaderView(leaf as WorkspaceLeaf, host);
   leaf.view = view;
   async function note(path: string, body = 'before words after', type = 'article') {
-    const file = await vault.create(path, createDocument({ type }, body));
+    const status = /(?:^|\/)Feed\//.test(path)
+      ? 'feed'
+      : /(?:^|\/)Later\//.test(path)
+        ? 'later'
+        : /(?:^|\/)Archive\//.test(path)
+          ? 'archive'
+          : 'inbox';
+    const properties = type === 'article' ? { type, status } : { type };
+    const file = await vault.create(path, createDocument(properties, body));
     Object.setPrototypeOf(file, TFile.prototype);
-    cache.set(file, { frontmatter: { type }, sections: [{ type: 'paragraph' }], links: [] });
-    store.catalog.update(path, { type });
+    cache.set(file, { frontmatter: properties, sections: [{ type: 'paragraph' }], links: [] });
+    store.catalog.update(path, properties);
     return file as TFile;
   }
   return {
@@ -363,7 +371,7 @@ async function pluginFixture() {
 function actionName(button: Element): string {
   const label = button.getAttribute('aria-label') ?? button.textContent ?? '';
   if (label === 'Trash article and advance') return 'Delete';
-  if (label === 'Save to Treasury and advance') return 'Save to Treasury';
+  if (label === 'Archive and advance') return 'Archive';
   return label.replace(/ (?:page or article|article(?: and advance)?)$/, '');
 }
 function menu(view: ReaderView, title: string) {
@@ -392,10 +400,12 @@ describe('Reader operation and close lifecycle', () => {
     await f.view.openArticle(a.path);
     const started = gate(),
       finish = gate();
-    f.vault.beforeMove = async () => {
+    const process = f.vault.process.bind(f.vault);
+    vi.spyOn(f.vault, 'process').mockImplementationOnce(async (file, update) => {
       started.resolve();
       await finish.promise;
-    };
+      return process(file, update);
+    });
     mocks.choose.mockResolvedValue('Later');
     const moving = f.probe.move();
     await started.promise;
@@ -418,7 +428,7 @@ describe('Reader operation and close lifecycle', () => {
     await f.view.onClose();
     const saved = readDocument(await f.vault.read(file));
     expect(saved.body).toBe('before ==words== after');
-    expect(saved.properties.reading_position).toBe('words');
+    expect(saved.properties.bookmark).toBe('words');
     expect(surface.dispose).toHaveBeenCalledOnce();
     expect(f.probe.surface).toBeUndefined();
   });
@@ -445,10 +455,12 @@ describe('Reader operation and close lifecycle', () => {
     await f.view.openArticle(a.path);
     const started = gate(),
       finish = gate();
-    f.vault.beforeMove = async () => {
+    const process = f.vault.process.bind(f.vault);
+    vi.spyOn(f.vault, 'process').mockImplementationOnce(async (file, update) => {
       started.resolve();
       await finish.promise;
-    };
+      return process(file, update);
+    });
     mocks.choose.mockResolvedValue('Later');
     const moving = f.probe.move();
     await started.promise;
@@ -591,7 +603,7 @@ describe('automatic selection event ownership', () => {
       'Previous',
       'Next',
       'Read later',
-      'Save to Treasury',
+      'Archive',
       'Delete',
       'List',
     ]);
@@ -912,7 +924,7 @@ describe('automatic selection event ownership', () => {
     },
   );
 
-  it.each(['Save to Treasury', 'Delete', 'Next'])(
+  it.each(['Archive', 'Delete', 'Next'])(
     'uses the real bottom %s action to advance, retaining recoverable trash semantics',
     async (label) => {
       const next = await f.note('Reading/Inbox/Z next.md');
@@ -928,10 +940,10 @@ describe('automatic selection event ownership', () => {
       expect(f.view.file).toBe(next);
       expect(f.vault.trashed).toEqual(label === 'Delete' ? [originalPath] : []);
       if (label !== 'Delete') {
-        expect(await f.vault.read(f.article)).toBe(original);
-        expect(f.article.path).toBe(
-          label === 'Save to Treasury' ? 'Reading/Treasury/Selection.md' : originalPath,
+        expect(await f.vault.read(f.article)).toBe(
+          label === 'Archive' ? patchProperties(original, { status: 'archive' }) : original,
         );
+        expect(f.article.path).toBe(originalPath);
       }
       click('Next');
       await f.probe.operations;
@@ -1020,9 +1032,7 @@ describe('automatic selection event ownership', () => {
       await f.probe.operations;
       expect((await f.store.read(f.article.path)).body).toBe('Alpha phrase.\n\n==Beta== phrase.');
       if (wait === 'position')
-        expect((await f.store.read(f.article.path)).properties.reading_position).toBe(
-          'position sentinel',
-        );
+        expect((await f.store.read(f.article.path)).properties.bookmark).toBe('position sentinel');
     },
   );
 
@@ -1130,8 +1140,8 @@ describe('automatic selection event ownership', () => {
     expect(mocks.notice).not.toHaveBeenCalled();
   });
 
-  it('preserves its own Stream promotion during an automatic highlight', async () => {
-    const moved = await f.store.move(await f.store.read(f.article.path), 'Stream');
+  it('preserves its own Feed promotion during an automatic highlight', async () => {
+    const moved = await f.store.move(await f.store.read(f.article.path), 'Feed');
     await f.view.openArticle(moved.path);
     // The surface changed through real navigation; drive its real DOM handler.
     const node = f.probe.surface.body.querySelector('p').firstChild;
@@ -1316,8 +1326,9 @@ describe('public article commands', () => {
     mocks.choose.mockResolvedValue('Later');
     command('move', false);
     await f.probe.operations;
-    expect(article.path).toBe('Reading/Later/Commands.md');
-    expect(await f.vault.read(article)).toBe(before);
+    expect(article.path).toBe('Reading/Inbox/Commands.md');
+    expect((await f.store.read(article.path)).properties.status).toBe('later');
+    expect(await f.vault.read(article)).toBe(patchProperties(before, { status: 'later' }));
     command('topics', false);
     await f.probe.operations;
     expect(mocks.topics).toHaveBeenCalledOnce();
@@ -1375,7 +1386,7 @@ describe('public reading-list command and URI', () => {
       expect(f.view.contentEl.querySelector('.reader-list')).not.toBeNull();
       const saved = readDocument(await f.vault.read(article));
       expect(saved.body).toBe('before ==words== after');
-      expect(saved.properties.reading_position).toBe('words');
+      expect(saved.properties.bookmark).toBe('words');
       expect(f.app.workspace.getLeaf).not.toHaveBeenCalled();
     },
   );
@@ -1524,7 +1535,7 @@ describe('article keyboard boundaries', () => {
         f.vault.bytes.set(
           file,
           patchProperties(f.vault.bytes.get(file)!, {
-            reading_position: saved ? `Saved text from ${file.path}` : undefined,
+            bookmark: saved ? `Saved text from ${file.path}` : undefined,
           }),
         );
       }
@@ -1851,7 +1862,7 @@ describe('article keyboard boundaries', () => {
       surface.viewport.scrollLeft = geometry.end - 4;
       surface.page(1); // Capture dispatches the real View.persistPosition -> ArticleStore write.
       await probe.positionWrite;
-      expect((await store.read(f.b.path)).properties.reading_position).toBe('before words');
+      expect((await store.read(f.b.path)).properties.bookmark).toBe('before words');
       expect(surface.atBoundary(1)).toBe(true);
       const body = surface.body.firstChild;
       surface.viewport.dispatchEvent(new Event('scroll'));
@@ -1871,7 +1882,7 @@ describe('article keyboard boundaries', () => {
         await probe.operations;
         expect(view.file).toBe(f.c);
         expect(probe.surface.viewport.scrollLeft).toBe(geometry.width + 32);
-        expect((await store.read(f.c.path)).properties.reading_position).toBe('after');
+        expect((await store.read(f.c.path)).properties.bookmark).toBe('after');
       } finally {
         if (bounds) Object.defineProperty(Range.prototype, 'getBoundingClientRect', bounds);
         else delete (Range.prototype as any).getBoundingClientRect;
@@ -2325,16 +2336,16 @@ describe('safe default article routing', () => {
 });
 
 describe('bounded Reader UI', () => {
-  it('keeps library titles as text, with four bottom actions and no search/subtitles/Treasury/Feeds buttons', async () => {
+  it('keeps library titles as text, with four bottom actions and no search/subtitles/Archive/Feeds buttons', async () => {
     const f = hostFixture();
     await f.note('Reading/Inbox/Visible title.md');
     f.view.showList();
     const buttons = [
       ...f.view.contentEl.querySelectorAll<HTMLButtonElement>('.reader-toolbar button'),
     ];
-    expect(buttons.map(actionName)).toEqual(['Inbox', 'Later', 'Stream', 'Add URL']);
+    expect(buttons.map(actionName)).toEqual(['Inbox', 'Later', 'Feed articles', 'Add URL']);
     expect(buttons.map((button) => button.querySelector('svg')?.getAttribute('data-icon'))).toEqual(
-      ['inbox', 'clock', 'waves', 'plus'],
+      ['inbox', 'clock', 'rss', 'plus'],
     );
     for (const button of buttons) {
       expect(button.textContent).toBe('');
@@ -2371,19 +2382,19 @@ describe('bounded Reader UI', () => {
     expect(f.view.contentEl.querySelector('[aria-label="Show more"]')).toBeNull();
   });
 
-  it('opens Treasury through the palette, resets old search, and preserves Treasury/feed bytes and feeds access', async () => {
+  it('opens Archive through the palette, resets old search, and preserves Archive/feed bytes and feeds access', async () => {
     const f = await pluginFixture();
-    const saved = await f.note('Reading/Treasury/Saved title.md', 'Authored Treasury body');
+    const saved = await f.note('Reading/Archive/Saved title.md', 'Authored Archive body');
     const feed = await f.note('Reading/Wires/Feed.md', 'Authored subscription notes', 'feed');
     const before = [await f.vault.read(saved), await f.vault.read(feed)];
     vi.mocked(f.app.workspace.getActiveViewOfType).mockReturnValue(f.view);
     f.probe.search = 'Unrelated old search';
     f.probe.listLimit = 150;
-    const command = mocks.commands.get('open-treasury')!;
-    expect(command.name).toBe('Open Treasury');
+    const command = mocks.commands.get('open-archive')!;
+    expect(command.name).toBe('Open Archive');
     command.callback!();
     await f.probe.operations;
-    expect(f.view.getState().queue).toBe('Treasury');
+    expect(f.view.getState().queue).toBe('Archive');
     expect(f.probe.search).toBe('');
     expect(f.probe.listLimit).toBe(50);
     expect(f.view.contentEl.querySelector('.reader-list-item')?.textContent).toContain(
@@ -2396,20 +2407,20 @@ describe('bounded Reader UI', () => {
     expect(f.vault.trashed).toEqual([]);
   });
 
-  it('opens a new Treasury view through the same public workspace route when no Reader is active', async () => {
+  it('opens a new Archive view through the same public workspace route when no Reader is active', async () => {
     const f = await pluginFixture();
     vi.mocked(f.app.workspace.getLeaf).mockReturnValue(f.leaf);
     f.leaf.setViewState.mockImplementation(async (state: any) =>
       f.view.setState(state.state, { history: false }),
     );
-    await f.plugin.openList('Treasury');
+    await f.plugin.openList('Archive');
     expect(f.app.workspace.getLeaf).toHaveBeenCalledWith('tab');
     expect(f.leaf.setViewState).toHaveBeenCalledWith({
       type: 'obsidian-reader',
-      state: { queue: 'Treasury' },
+      state: { queue: 'Archive' },
       active: true,
     });
-    expect(f.view.getState().queue).toBe('Treasury');
+    expect(f.view.getState().queue).toBe('Archive');
   });
 
   it.each([false, true])(
@@ -2459,17 +2470,17 @@ describe('bounded Reader UI', () => {
       ];
       expect(
         buttons.map((button) => button.querySelector('svg')?.getAttribute('data-icon')),
-      ).toEqual(['chevron-left', 'chevron-right', 'clock', 'bookmark', 'trash-2', 'list']);
+      ).toEqual(['chevron-left', 'chevron-right', 'clock', 'archive', 'trash-2', 'list']);
       expect(buttons.map((button) => button.getAttribute('aria-label'))).toEqual([
         'Previous article',
         'Next article',
         'Read later',
-        'Save to Treasury and advance',
+        'Archive and advance',
         'Trash article and advance',
         'List',
       ]);
       expect(setTooltip).toHaveBeenCalledWith(buttons[2], 'Read later');
-      expect(setTooltip).toHaveBeenCalledWith(buttons[3], 'Save to Treasury');
+      expect(setTooltip).toHaveBeenCalledWith(buttons[3], 'Archive');
       expect(buttons[0].disabled).toBe(true);
       for (const button of buttons) {
         const css = window.getComputedStyle(button);
@@ -2763,7 +2774,7 @@ describe('visible-row evidence indicators', () => {
       files: TFile[] = [];
     views.push(f.view);
     for (let i = 0; i < count; i++) {
-      const file = await f.note(`Reading/Stream/${i} Visible.md`, body);
+      const file = await f.note(`Reading/Feed/${i} Visible.md`, body);
       (file as any).stat = { mtime: 1, size: f.vault.bytes.get(file)!.length };
       files.push(file);
     }
@@ -2786,7 +2797,7 @@ describe('visible-row evidence indicators', () => {
       const reads = vi.spyOn(f.vault, 'read'),
         writes = vi.spyOn(f.vault, 'process'),
         moves = vi.spyOn(f.vault, 'move');
-      f.view.showList('Stream');
+      f.view.showList('Feed');
       const row = f.view.contentEl.querySelector('.reader-list-item')!;
       expect(reads).not.toHaveBeenCalled();
       expect(observers[0].options.root).toBe(f.view.contentEl.querySelector('.reader-list'));
@@ -2804,7 +2815,7 @@ describe('visible-row evidence indicators', () => {
       expect(writes).not.toHaveBeenCalled();
       expect(moves).not.toHaveBeenCalled();
       expect(f.host.ingestion.acquire).not.toHaveBeenCalled();
-      expect(f.files[0].path).toBe('Reading/Stream/0 Visible.md');
+      expect(f.files[0].path).toBe('Reading/Feed/0 Visible.md');
       expect(f.vault.bytes.get(f.files[0])).toBe(raw);
       expect(f.vault.trashed).toEqual([]);
     },
@@ -2826,7 +2837,7 @@ describe('visible-row evidence indicators', () => {
       const f = await fixture('==words=='),
         file = f.files[0];
       const raw = patchProperties(f.vault.bytes.get(file)!, {
-        reading_position: position,
+        bookmark: position,
         unknown_evidence: 'Keep',
         explicit_false: false,
         explicit_zero: 0,
@@ -2837,7 +2848,7 @@ describe('visible-row evidence indicators', () => {
         writes = vi.spyOn(f.vault, 'process'),
         positions = vi.spyOn(f.store, 'position'),
         moves = vi.spyOn(f.vault, 'move');
-      f.view.showList('Stream');
+      f.view.showList('Feed');
       const row = f.view.contentEl.querySelector('.reader-list-item')!;
       expect(reads).not.toHaveBeenCalled();
       observers[0].intersect([row]);
@@ -2855,7 +2866,7 @@ describe('visible-row evidence indicators', () => {
       expect(positions).not.toHaveBeenCalled();
       expect(moves).not.toHaveBeenCalled();
       expect(f.vault.bytes.get(file)).toBe(raw);
-      expect(file.path).toBe('Reading/Stream/0 Visible.md');
+      expect(file.path).toBe('Reading/Feed/0 Visible.md');
       expect(row.textContent).toBe('0 Visible');
     },
   );
@@ -2875,11 +2886,11 @@ describe('visible-row evidence indicators', () => {
         live--;
       }
     });
-    f.view.showList('Stream');
+    f.view.showList('Feed');
     const oldRows = [...f.view.contentEl.querySelectorAll('.reader-list-item')];
     observers[0].intersect(oldRows.slice(0, 3));
     expect(reads).toHaveBeenCalledTimes(2);
-    f.view.showList('Stream');
+    f.view.showList('Feed');
     expect(observers[0].disconnect).toHaveBeenCalledOnce();
     const rows = [...f.view.contentEl.querySelectorAll('.reader-list-item')];
     observers[1].intersect(rows.slice(0, 3));
@@ -2904,18 +2915,18 @@ describe('visible-row evidence indicators', () => {
     async (change) => {
       const f = await fixture(),
         release = gate(),
-        raw = patchProperties(f.vault.bytes.get(f.files[0])!, { reading_position: 'words' });
+        raw = patchProperties(f.vault.bytes.get(f.files[0])!, { bookmark: 'words' });
       f.vault.bytes.set(f.files[0], raw);
       f.files[0].stat.size = raw.length;
       vi.spyOn(f.vault, 'read').mockImplementationOnce(async () => {
         await release.promise;
         return raw;
       });
-      f.view.showList('Stream');
+      f.view.showList('Feed');
       const row = f.view.contentEl.querySelector('.reader-list-item')!;
       observers[0].intersect([row]);
       if (change === 'offscreen') observers[0].intersect([row], false);
-      if (change === 'rename') f.files[0].path = 'Reading/Stream/Renamed.md';
+      if (change === 'rename') f.files[0].path = 'Reading/Feed/Renamed.md';
       if (change === 'replacement') f.vault.files.set(f.files[0].path, {} as any);
       if (change === 'revision') f.files[0].stat.mtime++;
       if (change === 'queue') f.view.showList('Inbox');
@@ -2931,7 +2942,7 @@ describe('visible-row evidence indicators', () => {
   it('degrades without observers or on unreadable source without making a negative/read-state claim', async () => {
     const f = await fixture();
     const reads = vi.spyOn(f.vault, 'read').mockRejectedValue(new Error('Unavailable'));
-    f.view.showList('Stream');
+    f.view.showList('Feed');
     const row = f.view.contentEl.querySelector('.reader-list-item')!;
     observers[0].intersect([row]);
     await settle();
@@ -2940,7 +2951,7 @@ describe('visible-row evidence indicators', () => {
     expect(mocks.notice).not.toHaveBeenCalled();
     Object.defineProperty(window, 'IntersectionObserver', { configurable: true, value: undefined });
     reads.mockClear();
-    f.view.showList('Stream');
+    f.view.showList('Feed');
     expect(reads).not.toHaveBeenCalled();
     expect(f.view.contentEl.querySelector('.reader-list-item')?.textContent).toBe('0 Visible');
   });
@@ -3004,13 +3015,74 @@ describe('native title-only presentation', () => {
   });
 });
 
+describe('YAML queue presentation', () => {
+  it.each([
+    [{}, 'Feed', 'later'],
+    [{ status: 'feed' }, 'Feed', 'later'],
+    [{ status: 'inbox' }, 'Inbox', 'inbox'],
+    [{ status: 'later' }, 'Later', 'later'],
+    [{ status: 'archive' }, 'Archive', 'archive'],
+    [{ status: 'unknown' }, undefined, 'unknown'],
+    [{ status: null }, undefined, null],
+  ] as const)(
+    'uses status independently of placement and retains before annotation: %j',
+    async (properties, queue, savedStatus) => {
+      const f = hostFixture(),
+        article = await f.note('Unrelated/Inbox/Misleading.md');
+      const raw = createDocument({ type: 'article', ...properties }, 'before words after');
+      f.vault.bytes.set(article, raw);
+      f.store.catalog.update(article.path, readDocument(raw).properties);
+      expect(f.store.catalog.article(article.path)?.queue).toBe(queue);
+      await f.view.openArticle(article.path);
+      expect(await f.vault.read(article)).toBe(raw);
+      f.probe.surface.selectionValue = { quote: 'words', before: 'before ', after: ' after' };
+      await f.probe.saveSelection();
+      const saved = await f.store.read(article.path);
+      expect(saved.properties.status).toBe(savedStatus);
+      expect(saved.body).toBe('before ==words== after');
+      expect(article.path).toBe('Unrelated/Inbox/Misleading.md');
+    },
+  );
+
+  it('refreshes status-only metadata without remounting the article content', async () => {
+    const f = hostFixture(),
+      article = await f.note('Elsewhere/Article.md');
+    await f.view.openArticle(article.path, true);
+    const surface = f.probe.surface;
+    surface.setBody.mockClear();
+    await f.vault.process(article, (raw) => patchProperties(raw, { status: 'archive' }));
+    await f.view.changed({ path: article.path, metadataChanged: true });
+    expect(f.probe.snapshot.properties.status).toBe('archive');
+    expect(f.probe.surface).toBe(surface);
+    expect(surface.setBody).not.toHaveBeenCalled();
+    expect(surface.dispose).not.toHaveBeenCalled();
+    expect(f.view.getState()).toEqual({ file: article.path, queue: 'Inbox' });
+    expect(f.view.contentEl.querySelector('[aria-label="Archive and advance"]')).not.toBeNull();
+  });
+
+  it.each([undefined, 'words'])(
+    'resumes bookmark only, never legacy position: %s',
+    async (bookmark) => {
+      const f = hostFixture(),
+        article = await f.note('Elsewhere/Article.md');
+      await f.vault.process(article, (raw) =>
+        patchProperties(raw, { bookmark, reading_position: 'before' }),
+      );
+      const original = await f.vault.read(article);
+      await f.view.openArticle(article.path);
+      expect(f.probe.surface.restore).toHaveBeenCalledWith(bookmark ?? '');
+      expect(await f.vault.read(article)).toBe(original);
+    },
+  );
+});
+
 describe('browsing context and presentation', () => {
-  it.each(['Inbox', 'Stream', 'Later', 'Treasury'] as const)(
+  it.each(['Inbox', 'Feed', 'Later', 'Archive'] as const)(
     'Read later moves from %s without advancing or losing the original browsing context',
     async (queue) => {
-      const folders = { ...defaultFolders, later: 'Queues/Read later' };
+      const folders = { ...defaultFolders, articles: 'Queues/Articles' };
       const f = hostFixture(folders);
-      const folder = folders[queue.toLowerCase() as keyof ReaderFolders];
+      const folder = `Reading/${queue}`;
       const article = await f.note(`${folder}/A.md`, 'Article A'),
         next = await f.note(`${folder}/B.md`, 'Article B');
       f.view.showList(queue);
@@ -3025,17 +3097,19 @@ describe('browsing context and presentation', () => {
       await f.probe.operations;
       expect(mocks.choose).not.toHaveBeenCalled();
       expect(move).toHaveBeenCalledWith(expect.anything(), 'Later');
-      expect(article.path).toBe('Queues/Read later/A.md');
+      expect(article.path).toBe(`${folder}/A.md`);
+      expect((await f.store.read(article.path)).properties.status).toBe('later');
       expect(f.view.file).toBe(article);
       expect(f.probe.surface).toBe(surface);
       expect(f.view.getState()).toEqual({ file: article.path, queue });
       const saved = readDocument(await f.vault.read(article));
       expect(saved.body).toBe('Article A');
-      expect(saved.properties.reading_position).toBe('Article A');
+      expect(saved.properties.bookmark).toBe('Article A');
       expect(f.host.ingestion.acquire).toHaveBeenCalledWith(article.path);
       clickLater();
       await f.probe.operations;
-      expect(article.path).toBe('Queues/Read later/A.md');
+      expect(article.path).toBe(`${folder}/A.md`);
+      expect((await f.store.read(article.path)).properties.status).toBe('later');
       await f.view.navigate(1);
       expect(f.view.file).toBe(next);
       await f.view.readingList();
@@ -3056,31 +3130,28 @@ describe('browsing context and presentation', () => {
     expect(f.view.file).toBe(article);
   });
 
-  it('uses independent folder context for Stream promotion, browsing and explicit Save to Treasury', async () => {
+  it('keeps capture placement independent from Feed browsing and explicit Archive', async () => {
     const folders: ReaderFolders = {
-      inbox: 'Queues/Inbox',
-      stream: 'Cache/Stream',
-      later: 'Queues/Later',
-      treasury: 'Archive/Books',
+      articles: 'Cache/Feed',
       feeds: 'Subscriptions',
     };
     const f = hostFixture(folders);
-    const a = await f.note(`${folders.stream}/A.md`, '==Preserve this=='),
-      b = await f.note(`${folders.stream}/B.md`, 'Next article');
+    const a = await f.note(`${folders.articles}/A.md`, '==Preserve this=='),
+      b = await f.note(`${folders.articles}/B.md`, 'Next article');
     const rawA = f.vault.bytes.get(a),
       rawB = f.vault.bytes.get(b);
-    f.view.showList('Stream');
+    f.view.showList('Feed');
     expect(f.view.contentEl.querySelectorAll('.reader-list-item')).toHaveLength(2);
-    expect(a.path).toBe('Cache/Stream/A.md');
+    expect(a.path).toBe('Cache/Feed/A.md');
     await f.view.openArticle(a.path, true);
-    expect(a.path).toBe('Queues/Inbox/A.md');
+    expect(a.path).toBe('Cache/Feed/A.md');
     expect(f.view.getDisplayText()).toBe('Reader: A');
     await f.probe.finish('next');
     expect(f.view.file).toBe(b);
     await f.probe.finish('keep');
-    expect(b.path).toBe('Archive/Books/B.md');
+    expect(b.path).toBe('Cache/Feed/B.md');
     expect(f.vault.bytes.get(a)).toBe(rawA);
-    expect(f.vault.bytes.get(b)).toBe(rawB);
+    expect(f.vault.bytes.get(b)).toBe(patchProperties(rawB!, { status: 'archive' }));
   });
   it('snapshots every matching search result, excluding unrelated and later-arriving articles', async () => {
     const f = hostFixture();
@@ -3134,56 +3205,58 @@ describe('browsing context and presentation', () => {
     '- ==first\n  second==',
     '> ==first\r\n> second==',
     '- ==first\r\n  second==',
-  ])(
-    'promotes a fresh Stream article on open from its already-read annotations: %s',
-    async (body) => {
-      const f = hostFixture(),
-        a = await f.note('Reading/Stream/A.md', body),
-        b = await f.note('Reading/Stream/B.md');
-      f.view.showList('Stream');
-      const move = vi.spyOn(f.store, 'move'),
-        enumerate = vi.spyOn(f.app.vault, 'getMarkdownFiles');
-      await f.view.openArticle(a.path, true);
-      expect(move).toHaveBeenCalledWith(expect.objectContaining({ body }), 'Inbox');
-      expect(enumerate).not.toHaveBeenCalled();
-      expect(a.path).toBe('Reading/Inbox/A.md');
-      expect((await f.store.read(a.path)).body).toBe(body);
-      expect(f.view.getState().queue).toBe('Stream');
-      await f.view.navigate(1);
-      expect(f.view.file).toBe(b);
-    },
-  );
+  ])('opens a Feed article with native annotations without status writes: %s', async (body) => {
+    const f = hostFixture(),
+      a = await f.note('Reading/Feed/A.md', body),
+      b = await f.note('Reading/Feed/B.md');
+    f.view.showList('Feed');
+    const move = vi.spyOn(f.store, 'move'),
+      enumerate = vi.spyOn(f.app.vault, 'getMarkdownFiles');
+    await f.view.openArticle(a.path, true);
+    expect(move).not.toHaveBeenCalled();
+    expect(enumerate).not.toHaveBeenCalled();
+    expect(a.path).toBe('Reading/Feed/A.md');
+    expect((await f.store.read(a.path)).properties.status).toBe('feed');
+    expect((await f.store.read(a.path)).body).toBe(body);
+    expect(f.view.getState().queue).toBe('Feed');
+    await f.view.navigate(1);
+    expect(f.view.file).toBe(b);
+  });
 
   it.each([
     { properties: { related: '[[Topics/X.md]]' }, kept: true },
     { properties: { related: { nested: ['[[Topics/X.md]]'] } }, kept: true },
     {
-      properties: { feed: '[[Reading/Wires/Feed.md]]', reading_position: 'quote:[[Topics/X.md]]' },
+      properties: { feed: '[[Reading/Wires/Feed.md]]', bookmark: 'quote:[[Topics/X.md]]' },
       kept: false,
     },
   ])(
-    'checks authored YAML links, not feed/position values, when opening Stream: %j',
-    async ({ properties, kept }) => {
+    'checks authored YAML links, not feed/position values, when opening Feed: %j',
+    async ({ properties }) => {
       const f = hostFixture(),
-        file = await f.note('Reading/Stream/Article.md');
+        file = await f.note('Reading/Feed/Article.md');
       const raw = await f.vault.process(file, (current) => patchProperties(current, properties));
       await f.view.openArticle(file.path);
-      expect(file.path).toBe(`Reading/${kept ? 'Inbox' : 'Stream'}/Article.md`);
+      expect(file.path).toBe('Reading/Feed/Article.md');
       expect(await f.vault.read(file)).toBe(raw);
+      expect((await f.store.read(file.path)).properties.status).toBe('feed');
     },
   );
 
-  it('retains and reports a failed open-time promotion without losing the origin queue', async () => {
+  it('retains the Feed source and origin queue when annotation promotion fails', async () => {
     const f = hostFixture(),
-      a = await f.note('Reading/Stream/A.md', '==keep=='),
-      b = await f.note('Reading/Stream/B.md');
-    f.view.showList('Stream');
-    f.vault.failMove = true;
+      a = await f.note('Reading/Feed/A.md', 'before words after'),
+      b = await f.note('Reading/Feed/B.md');
+    f.view.showList('Feed');
     await f.view.openArticle(a.path, true);
+    const raw = await f.vault.read(a);
+    vi.spyOn(f.vault, 'process').mockRejectedValueOnce(new Error('Queue change failed'));
+    f.probe.surface.selectionValue = { quote: 'words', before: 'before ', after: ' after' };
+    await expect(f.probe.saveSelection()).rejects.toThrow('Queue change failed');
     expect(f.view.file).toBe(a);
-    expect(a.path).toBe('Reading/Stream/A.md');
-    expect(f.probe.surface.displayedBody).toBe('==keep==');
-    expect(mocks.notice).toHaveBeenCalledWith('Move failed');
+    expect(a.path).toBe('Reading/Feed/A.md');
+    expect(await f.vault.read(a)).toBe(raw);
+    expect(f.probe.surface.displayedBody).toBe('before words after');
     expect(f.vault.trashed).toEqual([]);
     await f.view.navigate(1);
     expect(f.view.file).toBe(b);
@@ -3231,7 +3304,7 @@ describe('commit-time annotation targets', () => {
     finish.resolve();
     await linking;
     expect((await f.store.read(article.path)).body).toBe('==[[Notes/Target.md|words]]==');
-    expect((await f.store.read(article.path)).properties.reading_position).toBe('words');
+    expect((await f.store.read(article.path)).properties.bookmark).toBe('words');
   });
 
   it('rejects a selected note replaced at the same path after preflight validation', async () => {
@@ -3318,7 +3391,7 @@ describe('commit-time annotation targets', () => {
   ])('fails closed on unrecognized/unresolved topic data: $topics', async ({ topics }) => {
     const f = hostFixture(),
       article = await f.note('Reading/Inbox/A.md');
-    const original = createDocument({ type: 'article', topics }, 'body');
+    const original = createDocument({ type: 'article', status: 'inbox', topics }, 'body');
     f.vault.bytes.set(article, original);
     await f.view.openArticle(article.path);
     await expect(f.probe.topics()).rejects.toThrow(/Markdown/);
@@ -3328,18 +3401,20 @@ describe('commit-time annotation targets', () => {
 
   it('retains an article promoted before a link target disappears, without saving the stale link', async () => {
     const f = hostFixture(),
-      article = await f.note('Reading/Stream/A.md', '==words=='),
+      article = await f.note('Reading/Feed/A.md', '==words=='),
       target = await f.note('Notes/Target.md', '', 'topic');
     await f.view.openArticle(article.path);
     sharedPicker(f, target);
-    // Opening now promotes preexisting annotations. Explicitly move back to Stream
-    // to exercise the later annotation's own move-first partial-failure boundary.
-    f.probe.snapshot = await f.store.move(await f.store.read(article.path), 'Stream');
-    f.vault.beforeMove = async () => {
+    // Exercise the annotation's retain-first partial-failure boundary.
+    f.probe.snapshot = await f.store.move(await f.store.read(article.path), 'Feed');
+    const process = f.vault.process.bind(f.vault);
+    vi.spyOn(f.vault, 'process').mockImplementationOnce(async (file, update) => {
       f.vault.files.delete(target.path);
-    };
+      return process(file, update);
+    });
     await expect(menu(f.view, 'Link to note…')).rejects.toThrow('selected note changed');
-    expect(article.path).toBe('Reading/Inbox/A.md');
+    expect(article.path).toBe('Reading/Feed/A.md');
+    expect((await f.store.read(article.path)).properties.status).toBe('later');
     expect((await f.store.read(article.path)).body).toBe('==words==');
   });
 
@@ -3564,15 +3639,15 @@ describe('Nodes v2 linked creation', () => {
     },
   );
 
-  it.each(['Inbox', 'Stream'] as const)(
+  it.each(['Inbox', 'Feed'] as const)(
     'commits directly before required completion without self-cancellation or a second link (%s)',
     async (queue) => {
       const f = await fixture(),
         entered = gate(),
         complete = gate(),
         order: string[] = [];
-      if (queue === 'Stream')
-        f.probe.snapshot = await f.store.move(await f.store.read(f.article.path), 'Stream');
+      if (queue === 'Feed')
+        f.probe.snapshot = await f.store.move(await f.store.read(f.article.path), 'Feed');
       const annotate = vi.spyOn(f.store, 'annotate'),
         process = f.vault.process.bind(f.vault),
         move = f.vault.move.bind(f.vault);
@@ -3611,7 +3686,7 @@ describe('Nodes v2 linked creation', () => {
       f.probe.persistPosition('words');
       await f.probe.positionWrite; // Must not wait for itself through the metadata notification.
       expect(requestSignal.aborted).toBe(false);
-      expect((await f.store.read(f.article.path)).properties.reading_position).toBe('words');
+      expect((await f.store.read(f.article.path)).properties.bookmark).toBe('words');
       complete.resolve();
       await creation;
       expect(order).toEqual(['created', 'linked', 'required completion']);
@@ -3784,7 +3859,7 @@ describe('Nodes v2 linked creation', () => {
       [
         ['footer', 'Next'],
         ['footer', 'Read later'],
-        ['footer', 'Save to Treasury'],
+        ['footer', 'Archive'],
         ['footer', 'Delete'],
         ['footer', 'List'],
         ['footer', 'Previous'],
@@ -3831,10 +3906,11 @@ describe('Nodes v2 linked creation', () => {
         await creation;
         await f.probe.operations;
         // Reach the destination before releasing the uncooperative provider.
-        if (['Next', 'Previous', 'Save to Treasury', 'Delete'].includes(label))
+        if (['Next', 'Previous', 'Archive', 'Delete'].includes(label))
           expect(f.view.file?.path).toBe(neighbour);
         if (label === 'Read later') {
-          expect(f.article.path).toBe('Reading/Later/A.md');
+          expect(f.article.path).toBe('Reading/Inbox/A.md');
+          expect((await f.store.read(f.article.path)).properties.status).toBe('later');
           expect(f.view.file).toBe(f.article);
           expect(mocks.choose).not.toHaveBeenCalled();
           expect(f.api.pickNodeForLink).toHaveBeenCalledTimes(1);
@@ -3845,7 +3921,10 @@ describe('Nodes v2 linked creation', () => {
         if (label === 'Topics…') expect(mocks.topics).toHaveBeenCalled();
         if (label === 'Change link…') expect(f.api.pickNodeForLink).toHaveBeenCalledTimes(2);
         if (label === 'Create note…') expect(calls).toBe(2);
-        if (label === 'Save to Treasury') expect(f.article.path).toBe('Reading/Treasury/A.md');
+        if (label === 'Archive') {
+          expect(f.article.path).toBe('Reading/Inbox/A.md');
+          expect((await f.store.read(f.article.path)).properties.status).toBe('archive');
+        }
         if (label === 'Open Markdown')
           await vi.waitFor(
             () =>
@@ -4290,7 +4369,7 @@ describe('Nodes v2 linked creation', () => {
     await f.probe.positionWrite;
     complete.resolve();
     await creation;
-    expect((await f.store.read(f.article.path)).properties.reading_position).toBe('words');
+    expect((await f.store.read(f.article.path)).properties.bookmark).toBe('words');
     expect((await f.store.read(f.article.path)).body).toBe(linkedBody);
   });
 
@@ -4386,7 +4465,7 @@ describe('safe links and drawing', () => {
 describe('Reader web-link capture', () => {
   async function fixture(href = 'https://publisher.test/story', folders = defaultFolders) {
     const f = hostFixture(folders);
-    const article = await f.note(`${folders.inbox}/Current.md`);
+    const article = await f.note(`${folders.articles}/Current.md`);
     await f.view.openArticle(article.path);
     f.probe.surface.body.innerHTML = `<a href="${href}">publisher</a>`;
     const event = { target: f.probe.surface.body.querySelector('a'), preventDefault: vi.fn() };
@@ -4405,32 +4484,49 @@ describe('Reader web-link capture', () => {
     const surface = f.probe.surface;
     await f.save(new AbortController().signal);
     const captured = f.store.catalog.findUrl('https://publisher.test/story')!;
-    expect(captured.path).toMatch(/^Reading\/Inbox\//);
+    expect(captured.path).toMatch(/^Reading\/Articles\//);
+    expect(captured.status).toBe('inbox');
     expect(f.host.ingestion.acquire).toHaveBeenLastCalledWith(captured.path, true);
     expect(f.view.file).toBe(f.article);
     expect(f.probe.surface).toBe(surface);
     expect(f.opened.openFile).not.toHaveBeenCalled();
   });
-  it('uses independent queue folders when retaining a duplicate from Stream', async () => {
-    const folders = {
-      inbox: 'Capture',
-      stream: 'Disposable',
-      later: 'Plans',
-      treasury: 'Kept',
-      feeds: 'Subscriptions',
-    };
-    const f = await fixture('https://publisher.test/story', folders);
-    const existing = await f.store.capture({
-      url: 'https://publisher.test/story',
-      queue: 'Stream',
-      body: 'authored ==words==',
-    });
-    await f.save(new AbortController().signal);
-    expect(f.vault.files.size).toBe(2);
-    expect(existing.path.startsWith('Capture/')).toBe(true);
-    expect((await f.store.read(existing.path)).body).toContain('authored ==words==');
-    expect(f.view.file).toBe(f.article);
-  });
+  it.each(['inbox', 'feed', 'later', 'archive', undefined, 'invalid', null] as const)(
+    'preserves duplicate status, bookmark, placement and authored bytes: %s',
+    async (status) => {
+      const folders = {
+        articles: 'Capture',
+        feeds: 'Subscriptions',
+      };
+      const f = await fixture('https://publisher.test/story', folders);
+      const existing = await f.note('Unrelated/Existing.md');
+      const raw = createDocument(
+        {
+          type: 'article',
+          url: 'https://publisher.test/story',
+          status,
+          bookmark: 'authored words',
+          custom: 'Preserve',
+        },
+        'authored ==words==',
+      );
+      f.vault.bytes.set(existing, raw);
+      f.store.catalog.update(existing.path, readDocument(raw).properties);
+      const move = vi.spyOn(f.store, 'move');
+      await f.save(new AbortController().signal);
+      expect(f.vault.files.size).toBe(2);
+      expect(existing.path).toBe('Unrelated/Existing.md');
+      expect(await f.vault.read(existing)).toBe(raw);
+      const saved = await f.store.read(existing.path);
+      expect(saved.properties.status).toBe(status);
+      expect(Object.hasOwn(saved.properties, 'status')).toBe(status !== undefined);
+      expect(saved.properties.bookmark).toBe('authored words');
+      expect(saved.body).toBe('authored ==words==');
+      expect(move).not.toHaveBeenCalled();
+      expect(f.host.ingestion.acquire).toHaveBeenLastCalledWith(existing.path, true);
+      expect(f.view.file).toBe(f.article);
+    },
+  );
   it('keeps web links inside highlights on the annotation-menu path', async () => {
     const f = hostFixture();
     const article = await f.note(
@@ -4462,21 +4558,25 @@ describe('Reader web-link capture', () => {
       expect(f.vault.files.size).toBe(count);
     },
   );
-  it('does not move a duplicate when navigation cancels a pending move', async () => {
+  it('preserves a duplicate and skips acquisition when navigation cancels pending capture', async () => {
     const f = await fixture(),
       entered = gate(),
       release = gate();
     const existing = await f.store.capture({
       url: 'https://publisher.test/story',
-      queue: 'Stream',
+      queue: 'Feed',
       body: 'Keep authored text',
     });
     const path = existing.path,
       raw = await f.vault.read(existing);
-    f.vault.beforeMove = async () => {
+    const capture = f.store.capture.bind(f.store);
+    vi.spyOn(f.store, 'capture').mockImplementationOnce(async (...args) => {
+      const file = await capture(...args);
       entered.resolve();
       await release.promise;
-    };
+      return file;
+    });
+    f.host.ingestion.acquire.mockClear();
     const save = f.save(new AbortController().signal).catch((error) => error);
     await entered.promise;
     await f.view.readingList();
@@ -4484,6 +4584,7 @@ describe('Reader web-link capture', () => {
     expect(await save).toMatchObject({ message: 'Reader capture was cancelled.' });
     expect(existing.path).toBe(path);
     expect(await f.vault.read(existing)).toBe(raw);
+    expect(f.host.ingestion.acquire).not.toHaveBeenCalled();
   });
 });
 
@@ -4668,7 +4769,7 @@ describe('native Markdown escape hatch', () => {
 describe('plugin routing and conservative expiry', () => {
   it('fails closed while any per-file cache is missing, even if resolved fires', async () => {
     const f = await pluginFixture(),
-      file = await f.note('Reading/Stream/000101 Old.md');
+      file = await f.note('Reading/Feed/000101 Old.md');
     const cached = f.cache.get(file);
     f.cache.delete(file);
     const expire = vi
@@ -4694,8 +4795,8 @@ describe('plugin routing and conservative expiry', () => {
   it('enables late-plugin-load expiry from complete public link metadata without resolvedLinks or body scans', async () => {
     const f = hostFixture(),
       source = await f.note('Notes/Source.md', '', 'topic');
-    const bodyTarget = await f.note('Reading/Stream/000101 Body target.md'),
-      frontmatterTarget = await f.note('Reading/Stream/000101 Frontmatter target.md');
+    const bodyTarget = await f.note('Reading/Feed/000101 Body target.md'),
+      frontmatterTarget = await f.note('Reading/Feed/000101 Frontmatter target.md');
     f.cache.get(source).links = [
       { link: encodeURI(bodyTarget.path), original: `[keep](/${encodeURI(bodyTarget.path)})` },
     ];
@@ -4746,10 +4847,10 @@ describe('plugin routing and conservative expiry', () => {
       { related: '[[Topics/X.md]]' },
       { related: { nested: [{ title: '[[Topics/X.md]]' }] } },
       { topics: ['Research'] },
-      { feed: '[[Reading/Wires/Feed.md]]', reading_position: 'quote:[[Topics/X.md]]' },
+      { feed: '[[Reading/Wires/Feed.md]]', bookmark: 'quote:[[Topics/X.md]]' },
       {},
     ].entries()) {
-      const file = await f.note(`Reading/Stream/261013 Article ${index}.md`);
+      const file = await f.note(`Reading/Feed/261013 Article ${index}.md`);
       const raw = await f.vault.process(file, (current) => patchProperties(current, properties));
       f.cache.get(file).frontmatter = readDocument(raw).properties;
       (index < 3 ? candidates : ordinary).push(file);
@@ -4770,8 +4871,11 @@ describe('plugin routing and conservative expiry', () => {
     for (const file of ordinary) expect(guard(file)).toBe(false);
     promote.mockRestore();
     for (const file of candidates) await f.pluginProbe.promote(file);
-    for (const file of candidates) expect(file.path).toContain('/Inbox/');
-    for (const file of ordinary) expect(file.path).toContain('/Stream/');
+    for (const file of candidates) {
+      expect(file.path).toContain('/Feed/');
+      expect((await f.store.read(file.path)).properties.status).toBe('later');
+    }
+    for (const file of ordinary) expect(file.path).toContain('/Feed/');
     expect(reads.mock.calls.every(([file]) => candidates.includes(file as TFile))).toBe(true);
     expect(f.vault.trashed).toEqual([]);
   });
@@ -4791,14 +4895,14 @@ describe('plugin routing and conservative expiry', () => {
         targets: TFile[] = [];
       for (const key of [
         'feed',
-        'reading_position',
+        'bookmark',
         'title',
         'error',
         'url',
         'published',
         ...(type === 'article' ? [] : ['prefix', 'enabled']),
       ]) {
-        const target = await f.note(`Reading/Stream/000101 ${key}.md`);
+        const target = await f.note(`Reading/Feed/000101 ${key}.md`);
         targets.push(target);
         properties[key] = `literal [[${target.path}]]`;
         links.push({ key, link: target.path, original: `[[${target.path}]]` });
@@ -4827,7 +4931,7 @@ describe('plugin routing and conservative expiry', () => {
     'revalidates a live unknown-field annotation against current bytes (stale cache: %s)',
     async (stale) => {
       const f = await pluginFixture(),
-        file = await f.note('Reading/Stream/Article.md');
+        file = await f.note('Reading/Feed/Article.md');
       const properties = { type: 'article', related: { nested: ['[[Topics/X.md]]'] } };
       f.cache.get(file).frontmatter = properties;
       if (!stale) await f.vault.process(file, (raw) => patchProperties(raw, properties));
@@ -4835,15 +4939,17 @@ describe('plugin routing and conservative expiry', () => {
         promote = vi.spyOn(f.pluginProbe, 'promote');
       f.pluginProbe.changed({ path: file.path, metadataChanged: false });
       await Promise.all(promote.mock.results.map((result) => result.value));
-      expect(file.path).toBe(`Reading/${stale ? 'Stream' : 'Inbox'}/Article.md`);
-      expect(await f.vault.read(file)).toBe(before);
+      expect(file.path).toBe('Reading/Feed/Article.md');
+      expect(await f.vault.read(file)).toBe(
+        stale ? before : patchProperties(before, { status: 'later' }),
+      );
       expect(f.vault.trashed).toEqual([]);
     },
   );
 
   it('blocks expiry again if a public cache disappears after startup recovery', async () => {
     const f = await pluginFixture(),
-      file = await f.note('Reading/Stream/000101 Article.md');
+      file = await f.note('Reading/Feed/000101 Article.md');
     expect(f.pluginProbe.recoverReferences()).toBe(true);
     f.pluginProbe.referencesReady = true;
     const cache = f.cache.get(file);
@@ -4865,7 +4971,7 @@ describe('plugin routing and conservative expiry', () => {
   it('never treats publisher fragments, authorities or schemes as native-link promotion', async () => {
     const f = await pluginFixture(),
       source = await f.note('Notes/Source.md', '', 'topic'),
-      target = await f.note('Reading/Stream/000101 Old.md');
+      target = await f.note('Reading/Feed/000101 Old.md');
     vi.spyOn(f.pluginProbe, 'promote').mockResolvedValue(undefined);
     f.cache.get(source).links = [
       '#toc',
@@ -4886,13 +4992,13 @@ describe('plugin routing and conservative expiry', () => {
 
   it('protects all open FileViews and Reader articles even without a saveable selection', async () => {
     const f = await pluginFixture(),
-      native = await f.note('Reading/Stream/000101 Native.md'),
-      reader = await f.note('Reading/Stream/000101 Reader.md');
+      native = await f.note('Reading/Feed/000101 Native.md'),
+      reader = await f.note('Reading/Feed/000101 Reader.md');
     await f.view.openArticle(reader.path);
     const preview = new MarkdownView(f.leaf);
     (preview as any).file = native;
     f.leaves.push({ view: preview });
-    const other = await f.note('Reading/Stream/000101 Other.md'),
+    const other = await f.note('Reading/Feed/000101 Other.md'),
       otherView = new (FileView as unknown as new () => FileView)();
     (otherView as any).file = other;
     f.leaves.push({ view: otherView });

@@ -5,7 +5,7 @@ import {
   hasPropertyAnnotations,
   isAnnotationProperty,
 } from '../src/core/annotations';
-import { createDocument, patchProperties } from '../src/core/document';
+import { createDocument, patchProperties, readDocument } from '../src/core/document';
 import type { Properties } from '../src/core/model';
 import { ArticleStore } from '../src/core/store';
 import { MemoryVault } from './helpers/memory-vault';
@@ -18,12 +18,21 @@ const authored: Properties[] = [
   { 'title.related': '[[Topics/X.md]]' },
   { related: '[X](/Topics/X.md)' },
 ];
-const sourceKeys = ['feed', 'url', 'title', 'published', 'error', 'reading_position'];
+const sourceKeys = [
+  'feed',
+  'url',
+  'title',
+  'published',
+  'error',
+  'bookmark',
+  'reading_position',
+  'status',
+];
 
 async function article(properties: Properties = {}, body = 'Publisher excerpt.') {
   const vault = new MemoryVault(),
     store = new ArticleStore(vault);
-  const fields = { type: 'article', published: '2026-08-01', ...properties };
+  const fields = { type: 'article', published: '2026-08-01', ...properties, status: 'feed' };
   const file = await vault.create('Reading/Stream/260801 Article.md', createDocument(fields, body));
   store.catalog.update(file.path, fields);
   return { vault, store, file, snapshot: await store.read(file.path) };
@@ -114,8 +123,12 @@ describe('core YAML-link retention boundaries', () => {
         promoted: 1,
         retained: 0,
       });
-      expect(f.file.path).toBe('Reading/Inbox/260801 Article.md');
-      expect(await f.vault.read(f.file)).toBe(before);
+      expect(f.file.path).toBe(f.snapshot.path);
+      expect(readDocument(await f.vault.read(f.file)).properties).toEqual({
+        ...readDocument(before).properties,
+        status: 'later',
+      });
+      expect(readDocument(await f.vault.read(f.file)).body).toBe(readDocument(before).body);
       expect(f.vault.trashed).toEqual([]);
     },
   );
@@ -148,7 +161,7 @@ describe('core YAML-link retention boundaries', () => {
   it('still acquires an exact excerpt with only feed and position references', async () => {
     const f = await article({
       feed: '[[Reading/Wires/Source.md]]',
-      reading_position: 'quote:[[Topics/X.md]]',
+      bookmark: 'quote:[[Topics/X.md]]',
     });
     const saved = await f.store.acquire(
       f.snapshot,
@@ -158,7 +171,7 @@ describe('core YAML-link retention boundaries', () => {
     );
     expect(saved.body).toBe('\nReplacement\n');
     expect(saved.properties.feed).toBe(f.snapshot.properties.feed);
-    expect(saved.properties.reading_position).toBe(f.snapshot.properties.reading_position);
+    expect(saved.properties.bookmark).toBe(f.snapshot.properties.bookmark);
   });
 
   it('preserves an unknown-field link arriving at the final trash boundary and promotes on retry', async () => {
@@ -181,6 +194,9 @@ describe('core YAML-link retention boundaries', () => {
       promoted: 1,
       retained: 0,
     });
-    expect(await f.vault.read(f.file)).toBe(edited);
+    expect(readDocument(await f.vault.read(f.file)).properties).toEqual({
+      ...readDocument(edited).properties,
+      status: 'later',
+    });
   });
 });

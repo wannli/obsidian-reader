@@ -4,7 +4,7 @@ export const seedTitle = 'The quiet library — Reader synthetic seed';
 export const seedQuote = 'Small observations become durable knowledge when we leave room to read.';
 export const seedBody = `# ${seedTitle}\n\n${seedQuote}\n\nThis is a synthetic article for the dedicated Reader test vault. It does not contain personal data or need a network connection.\n\n## A place for attention\n\nSelect a passage to mark it inline with ordinary Markdown. Keep the surrounding words and this source snapshot intact. Daily journals remain unchanged.\n`;
 export const feedTitle = 'Reader synthetic offline feed';
-const feedPath = 'Reading/Wires/Reader synthetic feed.md';
+const feedPath = 'Reading/Feeds/Reader synthetic feed.md';
 const json = (value) => `${JSON.stringify(value, null, 2)}\n`;
 function markdown(fields, body) {
   return `---\n${Object.entries(fields)
@@ -23,20 +23,18 @@ export function seedFiles(day = localDay()) {
     '.obsidian/app.json': json({}),
     '.obsidian/community-plugins.json': json([pluginId]),
     [`.obsidian/plugins/${pluginId}/data.json`]: json({
-      folders: {
-        inbox: 'Reading/Inbox',
-        stream: 'Reading/Stream',
-        later: 'Reading/Later',
-        treasury: 'Reading/Treasury',
-        feeds: 'Reading/Wires',
+      captureFolders: {
+        articles: 'Reading/Articles',
+        feeds: 'Reading/Feeds',
       },
     }),
     'Welcome.md':
       '# Reader Test Vault\n\nThis vault is exclusively for synthetic Reader development and testing. Never put personal notes here.\n\nUse Reader’s Open reading list command, then choose The quiet library. Highlights use ==ordinary inline Markdown== inside each article, and state stays in YAML frontmatter. Links are ordinary inline links. Reader does not maintain daily copies or require JSON sidecars; existing journal text stays untouched.\n\nThe sample feed is disabled and offline. Setup preserves every existing file. Plugin updates back up and replace only the three plugin distribution files.\n\nNative Obsidian, device behavior, and sync require manual acceptance; unit tests do not prove them.\n',
     ...managedNote(
-      `Reading/Inbox/${added} ${seedTitle}.md`,
+      `Reading/Articles/${added} ${seedTitle}.md`,
       {
         type: 'article',
+        status: 'inbox',
         url: 'https://example.invalid/reader/quiet-library',
         'test-note': 'Preserve this unknown property',
       },
@@ -55,27 +53,30 @@ export function seedFiles(day = localDay()) {
     ),
     // No publication date is known for this fictional RSS item: added-day fallback only.
     ...managedNote(
-      `Reading/Stream/${added} Synthetic - A paper lantern — Reader synthetic feed item.md`,
+      `Reading/Articles/${added} Synthetic - A paper lantern — Reader synthetic feed item.md`,
       {
         type: 'article',
+        status: 'feed',
         url: 'https://example.invalid/reader/paper-lantern',
         feed: `[[${feedPath.replace(/\.md$/, '')}]]`,
       },
-      '# A paper lantern\n\nAn offline synthetic feed item makes the Stream list visible without requesting the internet.\n',
+      '# A paper lantern\n\nAn offline synthetic feed item makes the Feed list visible without requesting the internet.\n',
     ),
     ...managedNote(
-      `Reading/Later/${added} Reader synthetic later item.md`,
+      `Reading/Articles/${added} Reader synthetic later item.md`,
       {
         type: 'article',
+        status: 'later',
       },
       '# A future page\n\nThis synthetic sample waits in Later.\n',
     ),
     ...managedNote(
-      `Reading/Treasury/${added} Reader synthetic treasury item.md`,
+      `Reading/Articles/${added} Reader synthetic archive item.md`,
       {
         type: 'article',
+        status: 'archive',
       },
-      '# A saved page\n\nThis synthetic sample is kept in Treasury.\n',
+      '# A saved page\n\nThis synthetic sample is kept in Archive.\n',
     ),
     [`Daily/${day}.md`]: markdown(
       { date: day },

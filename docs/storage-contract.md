@@ -1,21 +1,22 @@
 # Reader storage contract
 
-Approved by Wannes: “Yes, the contract looks good.” The refresh limit is also approved: “Yes, only the last 20 entries.” Independent folder settings were additionally approved on 14 October. This is not a note migration plan; existing Markdown is not converted.
+Approved by Wannes: articles and subscriptions are identified by YAML anywhere in the vault; folders determine creation placement only. Article statuses, automatic expiry, missing-status protection and `bookmark` were approved on 15 October. This is not authorization to convert existing Markdown or install the plugin into a vault.
 
 ## Article
 
-Example: `Reading/Inbox/261012 Example - A useful article.md`. The examples use default locations; a shared `Reading` parent is not required.
+Example: `Reading/Articles/261015 A useful article.md`. Users may move or rename it anywhere in the vault without changing its Reader state.
 
 ```markdown
 ---
 type: article
+status: inbox
 url: https://example.com/article
 title: A useful article
-published: 2026-10-12T08:00
-feed: '[[Reading/Wires/Example.md]]'
+published: 2026-10-15T08:00
+feed: '[[Reading/Feeds/Example.md]]'
 topics:
   - '[[Topics/Example topic.md]]'
-reading_position: These words identify the reading position
+bookmark: These words identify the reading position
 ---
 
 The article is ordinary Markdown.
@@ -25,18 +26,24 @@ A ==[[Nodes/Example.md|linked passage]]== preserves its words.
 A ==[**formatted** passage](/Nodes/Example.md)== preserves its formatting.
 ```
 
-- Identification: `type: article`. A source URL is needed for capture/acquisition, not for reading an existing local article.
-- `title`, `published`, `feed`, `topics`, `reading_position`, and `error` are optional. Missing dates are not invented.
-- New captures write `published` as an unquoted local wall-clock minute in Obsidian’s `YYYY-MM-DDTHH:mm` format, without seconds or a timezone suffix. Zone-free values follow the current device’s timezone and native date/DST interpretation, not an instant-preserving cross-device convention. Repeated DST hours cannot retain their original offset. Existing date-only, offset and full ISO values remain readable; unrelated edits and duplicate captures do not normalize them. No timezone fields, bulk rewrite or migration.
-- `error` is a human-readable acquisition failure, cleared by successful acquisition.
-- Position is a bounded text anchor, not a pixel offset. It may cross inline formatting. Duplicate passages remain a best-effort restoration case; image-only pages persist the last valid text anchor, not an exact page number.
-- Queue is the folder, not another YAML property. Identified articles outside the configured queues remain readable but unqueued.
-- No article IDs, acquisition hashes/stamps, annotation arrays, sidecars, or synchronized copies.
-- Existing unknown properties and authored text are preserved. Markdown remains editable without Reader.
+- Identification: exact `type: article`, independent of location. A source URL is needed for capture/acquisition, not for reading an existing local article.
+- `status` is one of `inbox`, `feed`, `later`, `archive`. It controls queue membership, never physical location or completion.
+- `inbox`: manually captured, awaiting attention. `feed`: imported, not explicitly retained. `later`: deliberately retained for further attention. `archive`: retained, no longer needing attention; not necessarily finished.
+- A missing `status` appears in Feed but is never automatically expired. Reading does not add a status. Explicit null, empty, malformed or unknown statuses remain readable but unqueued and protected from expiry; they are not treated as missing.
+- Only an explicit, freshly verified `status: feed` is eligible for expiry. Displayed queue membership is never deletion authority.
+- Normal transitions: Inbox → Later/Archive; Feed → Later/Archive; Later → Archive; Archive → Later. Manual queue selection is reversible and writes the chosen status without moving the file.
+- A saved highlight or user-created passage link promotes Feed (including missing status) to Later before annotation is committed. Inbox, Later and Archive annotations leave status unchanged. Removing a highlight never demotes an article. Publisher links do not count.
+- Opening, scrolling, reaching the end, or saving a bookmark never changes status. There is no completion flag or read history.
+- `title`, `published`, `feed`, `topics`, `bookmark`, and `error` are optional. Missing dates are not invented. The `feed` link retains subscription provenance after status changes; `status: feed` does not identify a subscription note.
+- `bookmark` is the existing bounded text-anchor representation, not a pixel offset, percentage, favorite or completion marker. It may cross inline formatting. Duplicate passages remain best effort; image-only pages keep the last valid text anchor.
+- `reading_position` is no longer read or written. Existing values are preserved as unknown data, with no automatic conversion or fallback.
+- New captures write `published` as an unquoted local wall-clock minute in Obsidian's `YYYY-MM-DDTHH:mm` format, without seconds or timezone suffix. Zone-free values follow the current device's timezone/DST interpretation, not a unique instant across devices or repeated DST hours. Existing date-only, offset and full ISO values remain readable and are never normalized by unrelated edits.
+- `error` describes acquisition failure and is cleared by successful acquisition.
+- No article IDs, acquisition hashes/stamps, annotation arrays, sidecars, or synchronized copies. Unknown properties, comments, authored text and existing links are preserved.
 
 ## Subscription
 
-Example: `Reading/Wires/Example.md`
+Example: `Reading/Feeds/Example.md`; subscriptions are discovered anywhere by exact `type: feed`.
 
 ```yaml
 ---
@@ -50,45 +57,44 @@ deleted_urls:
 ---
 ```
 
-- `title`, `prefix`, and `enabled` are optional; enabled defaults to true. `error` may describe the last failed refresh.
-- New subscription notes do not write `id` or `ID`. Existing unknown properties, including old IDs, remain preserved during unrelated edits and duplicate subscription attempts. Removing existing IDs requires separately authorized targeted cleanup, not automatic deletion or migration.
-- Subscription notes and articles can share the configured subscription folder (default `Reading/Wires`); their `type` distinguishes them. Articles outside the four queue folders remain unqueued.
-- Unsubscribe trashes the subscription note, not its articles.
+- `title`, `prefix`, and `enabled` are optional; enabled defaults to true. `error` may describe the last failed refresh. Article statuses do not apply to subscriptions.
+- New subscription notes do not write `id` or `ID`. Existing unknown properties, including old IDs, remain preserved. No automatic cleanup or migration of existing IDs.
+- Unsubscribe trashes the subscription note, not its articles. Articles and subscriptions may share a folder.
 
 ### Deleted articles
 
-Approved on 15 October: optional `deleted_urls` stores normalized article URLs in the subscription note. Reader records a feed-associated article’s URL before explicit recoverable deletion, in any queue. Refresh skips these URLs; manual Add URL remains allowed. The list travels with ordinary vault sync, without sidecars or custom conflict resolution. Removing an entry permits future feed import again.
+Optional `deleted_urls` stores normalized article URLs in the subscription note. Reader records a feed-associated article's URL before explicit recoverable deletion, in any queue. Refresh skips these URLs; manual Add URL remains allowed. Removing an entry permits future feed import again. History travels with ordinary vault sync, without sidecars or custom conflict resolution.
 
-This covers future Reader deletions, not past or native/external deletions. Suppression is per subscription; another feed can still import the URL. Expiry does not add history. Concurrent edits on different devices remain subject to the vault sync provider’s conflict handling; a device may import before receiving the suppression record. No existing articles are automatically removed when records arrive.
+This covers future Reader deletions, not past or native/external deletions. Suppression is per subscription; another feed can still import the URL. Expiry does not add history. Concurrent edits remain subject to the vault sync provider; an unsynced device may import before receiving suppression. Existing articles are not automatically removed when records arrive.
 
 ### Bounded refresh
 
-Add feed saves the subscription only, allowing its parameters to be edited before an explicit Sync. Startup and periodic timers do not refresh RSS/Atom feeds. Only explicit Sync imports entries from enabled subscriptions; each Sync considers at most the latest 20 entries, before deduplication and age filtering. No cursor or backlog traversal is stored. Subscription `deleted_urls` prevents explicitly dismissed articles from returning.
+Add feed saves only the subscription; no network or article import. Only explicit Sync imports articles from enabled subscriptions with `status: feed`. Each Sync considers at most the latest 20 entries before deduplication/age filtering. No startup/timer/online refresh, historical cursor or backlog service.
 
-Articles deleted outside Reader or before suppression was recorded can return while in that window. More than 20 new entries between explicit Syncs can mean missed entries; feed reordering can change which entries fall in the window.
+Articles deleted outside Reader or before suppression was recorded can return while in that window. More than 20 new entries between Syncs can mean missed entries; reordering can change which entries fall in the window.
 
 ## Acquisition and safety
 
-- Offline Add URL immediately creates the note; unfinished acquisition can resume while Reader is active and online.
-- Save feed-provided text first. Replace a body only if it is empty or exactly equals an independently retrieved, current feed excerpt, and the entire raw note revision still matches.
-- If the excerpt is no longer available or cannot be proved, nonempty content stays protected. Retry must not become permission to overwrite it.
-- Explicit titles (including empty ones), authored headings/comments, unknown YAML, and existing links are not regenerated from publisher content.
-- A new untitled manual capture may be renamed from its provisional hostname filename after acquisition, using a session-only receipt and guarded native move. An explicit title, duplicate capture, user move/rename, or restart prevents that automatic retitle; no ownership marker is persisted.
-- Filenames use the original parsed publication instant’s UTC date, before local-minute formatting; otherwise the local capture day. Feed ordering and age filtering likewise use the full-precision incoming publication value before writing. Names contain `YYMMDD`, a safe UTF-8-bounded title, optional feed prefix, and collision suffix. A receipt-based retitle reuses the capture instant (the current system timezone still determines its local date). Expiry uses the UTC rules below.
-- Writes serialize by file identity and compare current bytes. Native source editors, dirty preview buffers, and ambiguous editor state are conservatively protected.
-- Publisher content is sanitized and bounded before conversion. Executable fence labels are removed; default Dataview inline expressions and Templater delimiters fail capture, including in external titles. Reader is not a sandbox for arbitrary third-party Markdown processors.
-- Promote Stream to Inbox before annotation/link writes. A failed save may leave a retained Inbox note, never a successfully annotated disposable Stream note.
-- Native/synced annotations and authored vault links must also be protected before expiry. Publisher web/section links do not protect Stream articles.
-- Native link-aware moves preserve references. Deletion and expiry use recoverable trash only.
+- Offline Add URL immediately creates an article with `status: inbox`; unfinished acquisition may resume while Reader is active and online. Duplicate capture opens the existing article without resetting its status, bookmark or placement.
+- Save feed-provided text first. Replace a body only if empty or exactly equal to an independently retrieved current feed excerpt, and only if the entire raw revision still matches. Missing/unprovable excerpts keep nonempty text protected; Retry never overrides this.
+- Explicit titles (including empty ones), authored headings/comments, unknown YAML, and links are not regenerated from publisher content.
+- A new untitled manual capture may be retitled from its provisional hostname filename after acquisition using a session-only receipt and guarded native move. Explicit titles, duplicate capture, user moves/renames or restart prevent automatic retitle. This filename correction is not queue organization.
+- Filenames use the original publication instant's UTC date before local-minute formatting, otherwise the local capture day. Names contain `YYMMDD`, a safe bounded title, optional feed prefix, and collision suffix; never overwrite. A receipt retitle reuses its capture instant.
+- Writes serialize by file identity and compare current bytes. Dirty native editors, uncertain buffers and source revisions are protected.
+- Publisher content is sanitized and bounded. Executable fence labels are removed; default Dataview/Templater expressions fail capture, including in titles. Reader is not a sandbox for arbitrary third-party processors.
+- Promotion must succeed before annotation commit. A failure may leave a retained Later note, never a successfully annotated disposable Feed note. Browsing context and bookmark survive status changes.
+- Native/synced annotations and authored vault links must also be protected before expiry. Publisher web/section links do not protect feed articles.
+- Deletion and expiry use recoverable Obsidian trash only. No automatic file moves or bulk note rewrites.
 
 ## Expiry and settings
 
-- One calendar month means the clamped UTC calendar-month cutoff, not 30 days. Explicit-zone and date-only values retain the strict before-cutoff comparison. Canonical local-minute values remain protected through their whole parsed minute: eligible only when minute start plus 60 seconds is at or before the cutoff. Both the metadata candidate filter and the fresh final trash guard apply this precision safeguard.
-- Use publication date; otherwise the filename's `YYMMDD` date, interpreted in 2000–2099. Unknown age is retained. Old published feed entries are skipped to prevent import/expiry loops.
-- An article in use, awaiting a protected write/promotion, or with uncertain backlink resolution is retained rather than raced by cleanup.
-- Inbox, Stream, Later, Treasury and feed-subscription folders are independent organization settings. No shared parent is required; duplicate or overlapping role paths are rejected. Changing paths does not migrate, move or rewrite existing notes.
-- E-ink pagination is device-local. Reading position remains in the note for existing vault sync.
+- Expiry applies only to explicit `status: feed`, after one clamped UTC calendar month. Explicit-zone and date-only values use strict before-cutoff comparison. Local-minute values retain their full minute: eligible only when minute start plus 60 seconds is at or before cutoff. Both candidate filtering and the final fresh-byte trash guard enforce this.
+- Use publication date; otherwise filename `YYMMDD` interpreted in 2000–2099. Unknown age is retained. Old published feed entries are skipped to prevent import/expiry loops.
+- In-use articles, pending writes/promotion and uncertain backlink resolution remain protected. Final trash validation rechecks status, identity, current bytes and annotations; UI classification alone never authorizes expiry.
+- Two configurable creation destinations: articles (default `Reading/Articles`) and subscriptions (default `Reading/Feeds`). Same, nested and vault-root destinations are allowed; paths must remain safe and vault-relative. These are not discovery scopes or queue boundaries.
+- New configuration is stored in `captureFolders`; previous `folders`, root and flat settings remain inert and preserved. Applying destinations does not migrate files, rewrite Markdown, acquire articles or promote them.
+- E-ink pagination is device-local. `bookmark` travels with the note through existing vault sync.
 
 ## Acceptance
 
-Fast unit/component tests and manual synthetic-vault/device checks only. No automated E2E suite. Passing DOM tests do not prove native desktop, iOS, Boox pagination, sync, or Hot Reload behavior.
+Fast unit/component tests and guarded tooling tests; native synthetic-vault/device checks are separate. No automated E2E suite. DOM tests do not prove native desktop, iOS, Boox or Sync behavior. No personal-vault access, installed-vault update, release, or existing-note conversion is authorized by this implementation.

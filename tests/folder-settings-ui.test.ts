@@ -106,7 +106,7 @@ beforeEach(() => {
 });
 const row = (name: string) => ui.settings.find((setting) => setting.name === name);
 
-it('stages five independent picker values and applies one whole group', async () => {
+it('stages two creation destination picker values and applies one whole group', async () => {
   const save = vi.fn(async () => {});
   const settings = new ReaderSettings(
     {} as App,
@@ -117,28 +117,22 @@ it('stages five independent picker values and applies one whole group', async ()
     vi.fn(),
   );
   settings.display();
-  expect(ui.settings.filter((setting) => setting.input)).toHaveLength(5);
-  row('Inbox').input.change('Capture');
-  row('Stream').input.change('Disposable');
-  row('Later').input.change('Plans');
-  row('Treasury').input.change('Kept');
+  expect(ui.settings.filter((setting) => setting.input)).toHaveLength(2);
+  row('Articles').input.change('Capture');
   row('Feed subscriptions').buttons[0].click();
   ui.picker.onChooseItem({ path: 'Subscriptions' });
   expect(row('Feed subscriptions').input.value).toBe('Subscriptions');
   expect(save).not.toHaveBeenCalled();
   await row('Apply folder locations').buttons[0].click();
   expect(save).toHaveBeenCalledExactlyOnceWith({
-    inbox: 'Capture',
-    stream: 'Disposable',
-    later: 'Plans',
-    treasury: 'Kept',
+    articles: 'Capture',
     feeds: 'Subscriptions',
   });
   settings.display();
-  expect(row('Inbox').input.value).toBe('Capture');
+  expect(row('Articles').input.value).toBe('Capture');
 });
 
-it('rejects a late overlap before persistence and does not update committed settings', async () => {
+it('rejects an unsafe path before persistence and does not update committed settings', async () => {
   const save = vi.fn(async () => {});
   const settings = new ReaderSettings(
     {} as App,
@@ -149,13 +143,13 @@ it('rejects a late overlap before persistence and does not update committed sett
     vi.fn(),
   );
   settings.display();
-  row('Inbox').input.change('Capture');
-  row('Feed subscriptions').input.change('Capture/Feeds');
+  row('Articles').input.change('Capture');
+  row('Feed subscriptions').input.change('../Unsafe');
   await row('Apply folder locations').buttons[0].click();
   expect(save).not.toHaveBeenCalled();
-  expect(ui.notices.at(-1)).toMatch(/overlap/);
+  expect(ui.notices.at(-1)).toMatch(/vault-relative/);
   settings.display();
-  expect(row('Inbox').input.value).toBe(defaultFolders.inbox);
+  expect(row('Articles').input.value).toBe(defaultFolders.articles);
 });
 
 it('retains prior settings on persistence failure and disables duplicate apply while saving', async () => {
@@ -175,7 +169,7 @@ it('retains prior settings on persistence failure and disables duplicate apply w
     vi.fn(),
   );
   settings.display();
-  row('Inbox').input.change('Capture');
+  row('Articles').input.change('Capture');
   const button = row('Apply folder locations').buttons[0];
   const pending = button.click();
   expect(button.disabled).toBe(true);
@@ -184,5 +178,26 @@ it('retains prior settings on persistence failure and disables duplicate apply w
   expect(button.disabled).toBe(false);
   expect(ui.notices.at(-1)).toBe('Disk full');
   settings.display();
-  expect(row('Inbox').input.value).toBe(defaultFolders.inbox);
+  expect(row('Articles').input.value).toBe(defaultFolders.articles);
+});
+
+it.each([
+  { articles: 'Shared', feeds: 'Shared' },
+  { articles: 'Shared', feeds: 'Shared/Feeds' },
+  { articles: '', feeds: '' },
+])('allows shared, nested and root creation destinations: %j', async (candidate) => {
+  const save = vi.fn(async () => {});
+  const settings = new ReaderSettings(
+    {} as App,
+    {} as Plugin,
+    defaultFolders,
+    false,
+    save,
+    vi.fn(),
+  );
+  settings.display();
+  row('Articles').input.change(candidate.articles);
+  row('Feed subscriptions').input.change(candidate.feeds);
+  await row('Apply folder locations').buttons[0].click();
+  expect(save).toHaveBeenCalledExactlyOnceWith(candidate);
 });

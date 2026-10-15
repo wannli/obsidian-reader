@@ -61,7 +61,7 @@ describe('comments on removed frontmatter properties', () => {
       `---
 # beginning attached to the removed first key
 # second line of marker context
-reading_position: Old words # why I stopped
+bookmark: Old words # why I stopped
 # article identity
 type: article
 title: ''
@@ -80,7 +80,7 @@ ${body}`.replace(/\n/g, '\r\n');
     expect(readDocument(next).body).toBe(readDocument(raw).body);
     expect(next.startsWith('\uFEFF---\r\n')).toBe(true);
     expect(next).not.toMatch(/(?<!\r)\n/);
-    expect(next).not.toMatch(/^reading_position:/m);
+    expect(next).not.toMatch(/^bookmark:/m);
     const again = patchProperties(next, { unknown: 'updated' });
     expect(comments(again)).toEqual(comments(raw));
     expect(again).not.toContain('\r\r\n');
@@ -116,13 +116,13 @@ ${body}`;
 type: article
 ? error # explicit key note
 : [offline, timeout] # shared note
-reading_position: null # shared note
+bookmark: null # shared note
 custom: { kept: true } # surviving flow comment
 
 # document ending
 ---
 ${body}`;
-    const next = patchProperties(raw, { error: undefined, reading_position: undefined });
+    const next = patchProperties(raw, { error: undefined, bookmark: undefined });
     expect(comments(next)).toEqual(comments(raw));
     expect(comments(next).filter((comment) => comment.trim() === 'shared note')).toHaveLength(2);
     expect(readDocument(next).properties).toEqual({ type: 'article', custom: { kept: true } });
@@ -133,7 +133,7 @@ ${body}`;
     const raw = `---
 type: article
 error: offline # preserve cleared error
-reading_position: old # preserve changed marker
+bookmark: old # preserve changed marker
 topics:
   - '[[One.md]]' # preserve first topic
   - '[[Two.md]]' # preserve second topic
@@ -141,13 +141,13 @@ topics:
 Body`;
     const next = patchProperties(raw, {
       error: undefined,
-      reading_position: 'new',
+      bookmark: 'new',
       topics: ['[[Two.md]]', '[[One.md]]'],
     });
     expect(comments(next)).toEqual(comments(raw));
     expect(readDocument(next).properties).toEqual({
       type: 'article',
-      reading_position: 'new',
+      bookmark: 'new',
       topics: ['[[Two.md]]', '[[One.md]]'],
     });
     expect(readDocument(next).body).toBe('Body');

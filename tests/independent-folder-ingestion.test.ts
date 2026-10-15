@@ -1,7 +1,7 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import type { TFile } from 'obsidian';
 import { ArticleStore } from '../src/core/store';
-import { readDocument } from '../src/core/document';
+import { createDocument, readDocument } from '../src/core/document';
 import { MemoryVault, gate } from './helpers/memory-vault';
 
 const external = vi.hoisted(() => ({ request: vi.fn(), items: [] as any[] }));
@@ -15,10 +15,7 @@ import { Ingestion } from '../src/host/ingestion';
 import { Network } from '../src/host/network';
 
 const folders = {
-  inbox: 'Capture',
-  stream: 'Disposable',
-  later: 'Plans',
-  treasury: 'Kept',
+  articles: 'Capture',
   feeds: 'Subscriptions',
 };
 const response = { text: '<rss/>', status: 200, headers: {} };
@@ -29,7 +26,7 @@ afterEach(() => {
   external.items = [];
 });
 
-it('adds locally, then explicitly syncs latest-20 Stream captures in separate folders, deduplicating retained URLs', async () => {
+it('adds locally, then explicitly syncs latest-20 Feed captures in separate folders, deduplicating retained URLs', async () => {
   const vault = new MemoryVault(),
     store = storeFor(vault);
   external.items = Array.from({ length: 25 }, (_, i) => ({
@@ -42,35 +39,42 @@ it('adds locally, then explicitly syncs latest-20 Stream captures in separate fo
   const keep = await store.capture({
     url: 'https://example.com/0',
     title: 'Existing',
-    queue: 'Treasury',
+    queue: 'Archive',
     body: 'Authored',
   });
   const ingestion = new Ingestion(store, vi.fn());
   await ingestion.subscribe('https://example.com/feed');
   expect(store.catalog.feeds().map((feed) => feed.path)).toEqual(['Subscriptions/example.com.md']);
   expect(external.request).not.toHaveBeenCalled();
-  expect(store.catalog.list('Stream', '', 0, 100)).toEqual([]);
+  expect(store.catalog.list('Feed', '', 0, 100)).toEqual([]);
   await ingestion.refreshAll();
-  expect(store.catalog.list('Stream', '', 0, 100)).toHaveLength(19);
+  expect(store.catalog.list('Feed', '', 0, 100)).toHaveLength(19);
   expect(store.catalog.findUrl('https://example.com/0')?.path).toBe(keep.path);
   expect(store.catalog.findUrl('https://example.com/20')).toBeUndefined();
-  for (const article of store.catalog.list('Stream', '', 0, 100)) {
-    expect(article.path.startsWith('Disposable/')).toBe(true);
+  for (const article of store.catalog.list('Feed', '', 0, 100)) {
+    expect(article.path.startsWith('Capture/')).toBe(true);
     const doc = readDocument(await vault.read(vault.file(article.path)!));
     expect(doc.properties.feed).toBe('[[Subscriptions/example.com.md]]');
+    expect(doc.properties.status).toBe('feed');
     expect(doc.properties).not.toHaveProperty('queue');
   }
   ingestion.stop();
 });
 
-it('does not discover or import unconfigured feed notes', async () => {
-  const store = storeFor(new MemoryVault());
-  for (const path of ['Reading/Wires/Old.md', 'Elsewhere/Feed.md', 'Subscriptions extra/Feed.md'])
-    store.catalog.update(path, { type: 'feed', url: 'https://example.com/feed' });
+it('discovers and refreshes feed notes vault-wide, independent of creation destinations', async () => {
+  const vault = new MemoryVault(),
+    store = storeFor(vault);
+  const paths = ['Reading/Feeds/Old.md', 'Elsewhere/Feed.md', 'Subscriptions extra/Feed.md'];
+  for (const [i, path] of paths.entries()) {
+    const properties = { type: 'feed', url: `https://example.com/feed-${i}` };
+    await vault.create(path, createDocument(properties));
+    store.catalog.update(path, properties);
+  }
+  external.request.mockResolvedValue(response);
   const ingestion = new Ingestion(store, vi.fn());
   await ingestion.refreshAll();
-  expect(external.request).not.toHaveBeenCalled();
-  expect(store.catalog.feeds()).toEqual([]);
+  expect(external.request).toHaveBeenCalledTimes(3);
+  expect(store.catalog.feeds().map((feed) => feed.path)).toEqual(paths);
   ingestion.stop();
 });
 
@@ -116,7 +120,23 @@ it('retains native network slots when replacing a stopped ingestion generation',
   expect(oldVault.files.size).toBe(2); // Only the subscriptions saved before stopping.
   expect(oldVault.bytes).toEqual(before); // No late article imports or error writes.
   expect(nextStore.catalog.feeds()).toHaveLength(1);
-  expect(nextStore.catalog.list('Stream')).toHaveLength(1);
+  expect(nextStore.catalog.list('Feed')).toHaveLength(1);
   next.stop();
   network.stop();
+});
+
+it('creates subscriptions safely at the vault root', async () => {
+  const vault = new MemoryVault();
+  const store = new ArticleStore(vault, {
+    articles: '',
+    feeds: '',
+  }) as unknown as ArticleStore<TFile>;
+  const ingestion = new Ingestion(store, vi.fn());
+  await ingestion.subscribe('https://example.com/feed');
+  expect([...vault.files.keys()]).toEqual(['example.com.md']);
+  expect(readDocument(await vault.read(vault.file('example.com.md')!)).properties.type).toBe(
+    'feed',
+  );
+  expect(external.request).not.toHaveBeenCalled();
+  ingestion.stop();
 });
