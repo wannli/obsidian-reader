@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.8.1](https://github.com/wannli/obsidian-reader/compare/0.8.0...0.8.1) (2026-10-15)
+
+
+### Fixed
+
+* **capture:** extract streamed articles and reject title-only results ([7bcfc5a](https://github.com/wannli/obsidian-reader/commit/7bcfc5a6b185aae719d50823ce5be9ae371d4a63))
+* **capture:** integrate new article publication with YAML organization ([532da6d](https://github.com/wannli/obsidian-reader/commit/532da6d9c6ffef078f664665eb24946fc85c75c7))
+
 ## [0.8.0](https://github.com/wannli/obsidian-reader/compare/0.7.2...0.8.0) (2026-10-15)
 
 
