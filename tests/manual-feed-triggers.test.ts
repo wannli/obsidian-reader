@@ -263,6 +263,59 @@ it('does not recover native captures while hidden or after generation retirement
   expect(f.plugin.ingestion.acquire).not.toHaveBeenCalled();
 });
 
+it.each(['resolve', 'resolved'])(
+  'indexes native capture missing startup frontmatter when %s arrives',
+  async (event) => {
+    const f = await fixture();
+    const file = { path: 'Reading/Inbox/Late native.md', extension: 'md' };
+    const properties = { type: 'article', url: 'https://example.com/late-native' };
+    f.app.notes.set(file.path, { file, properties });
+    let ready = false;
+    f.app.metadataCache.getFileCache = () =>
+      ready ? { frontmatter: properties, sections: [{ type: 'yaml' }] } : undefined;
+    await f.ready();
+    expect(f.plugin.store.catalog.article(file.path)).toBeUndefined();
+    expect(f.plugin.ingestion.acquire).not.toHaveBeenCalled();
+    ready = true;
+    await f.metadata(event, file);
+    expect(f.plugin.store.catalog.article(file.path)?.url).toBe(properties.url);
+    expect(f.plugin.ingestion.acquire).toHaveBeenCalledExactlyOnceWith(file.path);
+    await f.metadata(event, file);
+    expect(f.plugin.ingestion.acquire).toHaveBeenCalledOnce();
+  },
+);
+
+it('does not treat resolved after folder Apply as startup capture recovery', async () => {
+  const f = await fixture();
+  const file = { path: 'Capture/Native.md', extension: 'md' };
+  const properties = { type: 'article', url: 'https://example.com/configured' };
+  f.app.notes.set(file.path, { file, properties });
+  // Also cover Apply before startup metadata ever became complete.
+  await f.plugin.applyFolders({
+    inbox: 'Capture',
+    stream: 'Disposable',
+    later: 'Plans',
+    treasury: 'Kept',
+    feeds: 'Subscriptions',
+  });
+  expect(f.plugin.store.catalog.article(file.path)?.queue).toBe('Inbox');
+  await f.metadata('resolved');
+  await f.metadata('resolved');
+  await f.metadata('resolve', file);
+  f.runtime.watchers.at(-1).changed({ path: file.path });
+  expect(f.plugin.ingestion.acquire).not.toHaveBeenCalled();
+  expect(f.plugin.ingestion.refreshAll).not.toHaveBeenCalled();
+  const fresh = { path: 'Capture/New native.md', extension: 'md' };
+  const freshProperties = { type: 'article', url: 'https://example.com/new-native' };
+  f.app.notes.set(fresh.path, { file: fresh, properties: freshProperties });
+  await f.metadata('resolve', fresh);
+  expect(f.plugin.ingestion.acquire).toHaveBeenCalledExactlyOnceWith(fresh.path);
+  f.plugin.ingestion.acquire.mockClear();
+  // Normal explicit foreground recovery still works in the new generation.
+  await f.event('visibilitychange');
+  expect(f.plugin.ingestion.acquire).toHaveBeenCalledExactlyOnceWith(file.path);
+});
+
 it('feed creation, enablement and metadata resolution never start imports', async () => {
   const f = await fixture();
   const file = { path: 'Reading/Wires/Example.md' };

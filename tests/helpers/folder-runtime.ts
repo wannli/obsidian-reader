@@ -121,6 +121,7 @@ export async function runtimeFixture(data: unknown = {}) {
   const leaves: any[] = [];
   const app: any = {
     notes: new Map(),
+    vault: { getMarkdownFiles: () => [...app.notes.values()].map((note: any) => note.file) },
     workspace: {
       getLeavesOfType: (type: string) => leaves.filter((leaf) => leaf.view.getViewType() === type),
       iterateAllLeaves: (visit: any) => leaves.forEach(visit),

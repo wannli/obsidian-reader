@@ -34,7 +34,7 @@ On iOS (Obsidian **1.14+**, iOS/iPadOS **26+**):
 
 The template places `{{content}}` in the existing `url` property and leaves the body empty. Reader starts Defuddle when Obsidian opens and is online; plugins cannot run inside background Quick Capture. Keep Obsidian open until extraction finishes. Offline captures retain their URL for foreground recovery. Native capture creates a new note per capture: it does not use Reader’s deduplication or filename generation. Use **Add URL** when those are needed.
 
-For Safari’s native **Share Sheet** instead (Obsidian **1.13+**, iOS **18+**), create a separate **New note** location in Inbox, enable **Full Text**, and select a template containing `type: article` and `url: {{url}}`. The Share Sheet appends native captured content; Reader preserves that text instead of replacing it. Do not use the Quick Capture `{{content}}` template for this location. A URL-only body is protected too, so use Full Text for readable content.
+For Safari’s native **Share Sheet** instead (Obsidian **1.13+**, iOS **18+**), create a separate **New note** location in Inbox, enable **Full Text**, and select a separate copy of the installed template with `{{content}}` replaced by `{{url}}`. The Share Sheet appends native captured content; Reader preserves that text instead of replacing it. Do not use the Quick Capture `{{content}}` template for this location. A URL-only body is protected too, so use Full Text for readable content.
 
 See [Obsidian’s native iOS capture documentation](https://help.obsidian.md/mobile/ios). Setup choices and physical-device acceptance remain manual; Reader cannot install or configure the iOS shortcut silently.
 

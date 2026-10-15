@@ -42,6 +42,8 @@ export default class ReaderPlugin extends Plugin {
   private refreshing = false;
   private referencesReady = false;
   private referencesRecovered = false;
+  private startupCaptureRecoveryPending = true;
+  private deferredCaptureSeeds = new Set<TFile>();
   private stopIndex?: () => void;
   get signal(): AbortSignal {
     return this.lifetime.signal;
@@ -196,6 +198,7 @@ export default class ReaderPlugin extends Plugin {
     this.registerEvent(
       this.app.metadataCache.on('resolve', (file) => {
         if (!this.signal.aborted) {
+          this.indexCapture(file);
           this.keepReferences(file);
           // Native Quick Capture may publish its body sections after `changed`.
           this.recover(file);
@@ -210,11 +213,12 @@ export default class ReaderPlugin extends Plugin {
         const first = !this.referencesRecovered;
         if (first && !this.recoverReferences()) return;
         this.referencesReady = true;
-        if (first) {
-          // Startup capture notes may have had no usable cache at layout-ready.
+        if (this.startupCaptureRecoveryPending) {
+          this.startupCaptureRecoveryPending = false;
+          // recoverReferences indexed notes whose frontmatter arrived late.
           this.recoverCaptures();
-          void this.expire().catch((error) => this.notice(error));
         }
+        if (first) void this.expire().catch((error) => this.notice(error));
       }),
     );
     this.app.workspace.onLayoutReady(() => {
@@ -224,6 +228,10 @@ export default class ReaderPlugin extends Plugin {
       // Late plugin loads may never see the initial resolved event. Complete per-file
       // metadata lets us reconstruct native references directly, without resolvedLinks.
       if (!this.referencesRecovered && this.recoverReferences()) this.referencesReady = true;
+      if (this.referencesReady && this.startupCaptureRecoveryPending) {
+        this.startupCaptureRecoveryPending = false;
+        this.recoverCaptures();
+      }
       void this.tick(false, true).catch((error) => this.notice(error));
     });
   }
@@ -349,6 +357,11 @@ export default class ReaderPlugin extends Plugin {
       this.refreshing = false;
       this.referencesReady = this.referencesRecovered = false;
       this.lifetime = new AbortController();
+      // Applying folders is not a new startup and must not acquire existing notes.
+      this.startupCaptureRecoveryPending = false;
+      // Metadata replay after Apply is not a request to acquire existing files.
+      // New native captures have new identities and remain eligible immediately.
+      this.deferredCaptureSeeds = new Set(this.app.vault.getMarkdownFiles());
       this.startFolders(folders);
       const signal = this.signal;
       // Metadata-only reseed above: never recover/acquire/promote or reopen articles here.
@@ -549,7 +562,10 @@ export default class ReaderPlugin extends Plugin {
     }
     // Aggregated resolvedLinks loses provenance (e.g. #TOC self-links). Resolve the
     // cached source links themselves, preserving native targets before enabling expiry.
-    for (const { file, cache } of entries) this.keepReferences(file, cache);
+    for (const { file, cache } of entries) {
+      if (this.startupCaptureRecoveryPending) this.indexCapture(file);
+      this.keepReferences(file, cache);
+    }
     this.referencesRecovered = true;
     return true;
   }
@@ -578,7 +594,8 @@ export default class ReaderPlugin extends Plugin {
       this.signal.aborted ||
       !navigator.onLine ||
       document.visibilityState !== 'visible' ||
-      this.attempted.has(file.path)
+      this.attempted.has(file.path) ||
+      this.deferredCaptureSeeds.has(file)
     )
       return;
     const article = this.store.catalog.article(file.path);
@@ -591,8 +608,16 @@ export default class ReaderPlugin extends Plugin {
       if (!signal.aborted) this.notice(error);
     });
   }
+  private indexCapture(file: TFile): void {
+    if (this.signal.aborted || file.extension !== 'md' || this.store.vault.file(file.path) !== file)
+      return;
+    const cache = this.app.metadataCache.getFileCache(file);
+    if (cache?.frontmatter) this.store.catalog.update(file.path, cache.frontmatter);
+  }
   private recoverCaptures(): void {
     if (this.signal.aborted) return;
+    // Explicit foreground/online recovery releases Apply's metadata-replay hold.
+    this.deferredCaptureSeeds.clear();
     // Metadata-only enumeration. recover() filters queues/empty bodies and bounds
     // each path to one attempt per generation (reset when connectivity returns).
     for (const article of this.store.catalog.values()) {
