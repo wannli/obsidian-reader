@@ -9,14 +9,18 @@ const api = (): NodesApi => ({
   getNode: vi.fn(() => null),
   createNode: vi.fn(async () => null),
 });
-const app = (value: unknown) => ({ plugins: { getPlugin: vi.fn(() => ({ api: value })) } });
+const app = (value: unknown) => ({
+  plugins: {
+    getPlugin: vi.fn((id: string) => (id === 'fileclass-inline' ? { api: value } : undefined)),
+  },
+});
 const detect = (value: unknown) => nodesApi(app(value) as unknown as App);
 
 it('accepts the public version-2 API without linked capture and uses only the public plugin ID', () => {
   const value = api(),
     host = app(value);
   expect(nodesApi(host as unknown as App)).toBe(value);
-  expect(host.plugins.getPlugin).toHaveBeenCalledExactlyOnceWith('obsidian-nodes');
+  expect(host.plugins.getPlugin).toHaveBeenCalledExactlyOnceWith('fileclass-inline');
   for (const name of ['listTypes', 'searchNodes', 'getNode', 'createNode'] as const)
     expect(value[name]).not.toHaveBeenCalled();
 });

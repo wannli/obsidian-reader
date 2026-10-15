@@ -79,7 +79,7 @@
 - Passage-menu language is “note”: Open note (linked), Link to note / Change link, Create note, then separated Remove link and Remove highlight actions. All-note and class-aware search remain inside one linking flow; class selection stays inside creation.
 - Topics are links to existing topic notes in frontmatter; no topic creation interface.
 - Optional Nodes integration supports schema-aware search of existing nodes AND node creation.
-- Joint-testing follow-up requires public **Nodes API v2** (`obsidian-nodes.api`), not Reader-created node files/forms/schemas or private Fileclass calls. Older API versions are not silently accepted.
+- Joint-testing follow-up requires public **Nodes API v2** (`fileclass-inline.api`), not Reader-created node files/forms/schemas or private Fileclass calls. Older API versions are not silently accepted.
 - V2 exposes Fileclass classes/icons, not schema colors; highlights keep their standard appearance. This replaces the earlier v1 color integration requirement.
 - Prefer linked creation's callback before required-field completion; reject uncertain source writes, validate intended class membership, and never prune a created node. Null/cancellation can still leave a note.
 - Reader remains usable without Nodes; ordinary highlights and existing-note links still work.
