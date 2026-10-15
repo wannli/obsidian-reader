@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.6.1](https://github.com/wannli/obsidian-reader/compare/0.6.0...0.6.1) (2026-10-15)
+
+
+### Fixed
+
+* **reader:** align reading list and article bottom controls ([7ac6f07](https://github.com/wannli/obsidian-reader/commit/7ac6f07ed3e193a53bbafc43a80b1a838ac6d58b))
+* **reader:** allow 900ms to adjust a highlight selection ([021a68e](https://github.com/wannli/obsidian-reader/commit/021a68e87a1d450e2251dd8ade066f21faa9a2d9))
+* **reader:** isolate reading gestures from sidebar swipes ([35c3323](https://github.com/wannli/obsidian-reader/commit/35c332322aeafd8e811f909217d8967b592369d7))
+* **reader:** page with arrow keys before crossing articles ([9ddfe55](https://github.com/wannli/obsidian-reader/commit/9ddfe5517ece6a9e82b40cecc32302ac0b1ebc27))
+* **reader:** remove image viewer frame and close button ([e1a2365](https://github.com/wannli/obsidian-reader/commit/e1a236550d6dfe61a8d2473d27cbf8e8c367f65a))
+
 ## [0.6.0](https://github.com/wannli/obsidian-reader/compare/0.5.0...0.6.0) (2026-10-14)
 
 
