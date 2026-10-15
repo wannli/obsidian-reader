@@ -32,9 +32,16 @@ it('opens loaded images by keyboard, traps focus, dismisses and restores focus w
   expect(dialog.getAttribute('aria-label')).toBe('Diagram');
   expect(dialog.querySelector('img')?.referrerPolicy).toBe('no-referrer');
   expect(dialog.querySelector('img')?.src).toBe(image.src);
-  expect(document.activeElement).toBe(dialog.querySelector('button'));
-  dialog.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true }));
-  expect(document.activeElement).toBe(dialog.querySelector('button'));
+  const enlarged = dialog.querySelector('img')!;
+  expect(dialog.querySelector('button')).toBeNull();
+  expect(dialog.children).toHaveLength(1);
+  expect(enlarged.getAttribute('role')).toBe('button');
+  expect(enlarged.getAttribute('aria-label')).toBe('Close image: Diagram');
+  expect(document.activeElement).toBe(enlarged);
+  for (const shiftKey of [false, true]) {
+    dialog.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', shiftKey, bubbles: true }));
+    expect(document.activeElement).toBe(enlarged);
+  }
   dialog.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
   expect(document.querySelector('dialog')).toBeNull();
   expect(document.activeElement).toBe(image);
@@ -47,7 +54,7 @@ it('intercepts linked image clicks and supports close and disposal', () => {
   root.parentElement!.addEventListener('click', navigate);
   image.click();
   expect(navigate).not.toHaveBeenCalled();
-  document.querySelector<HTMLButtonElement>('dialog button')!.click();
+  document.querySelector<HTMLImageElement>('dialog img')!.click();
   expect(document.querySelector('dialog')).toBeNull();
   image.dispatchEvent(new KeyboardEvent('keydown', { key: ' ', bubbles: true }));
   expect(document.querySelector('dialog')).not.toBeNull();
@@ -55,6 +62,42 @@ it('intercepts linked image clicks and supports close and disposal', () => {
   expect(document.querySelector('dialog')).toBeNull();
   image.click();
   expect(document.querySelector('dialog')).toBeNull();
+});
+it.each(['Enter', ' '])('closes the enlarged image with %j without propagating the key', (key) => {
+  const { image } = setup();
+  image.click();
+  const enlarged = document.querySelector<HTMLImageElement>('dialog img')!;
+  const outside = vi.fn();
+  document.body.addEventListener('keydown', outside, { once: true });
+  const event = new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true });
+  enlarged.dispatchEvent(event);
+  expect(event.defaultPrevented).toBe(true);
+  expect(outside).not.toHaveBeenCalled();
+  expect(document.querySelector('dialog')).toBeNull();
+  expect(document.activeElement).toBe(image);
+  document.body.removeEventListener('keydown', outside);
+});
+it.each(['Enter', ' '])('does not toggle repeatedly while holding %j', (key) => {
+  const { image } = setup();
+  image.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, repeat: true }));
+  expect(document.querySelector('dialog')).toBeNull();
+  image.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true }));
+  const dialog = document.querySelector('dialog')!;
+  dialog
+    .querySelector('img')!
+    .dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, repeat: true }));
+  expect(document.querySelector('dialog')).toBe(dialog);
+});
+it('dismisses backdrop taps without leaking the click to the host', () => {
+  const { image } = setup();
+  image.click();
+  const outside = vi.fn();
+  document.body.addEventListener('click', outside, { once: true });
+  document.querySelector('dialog')!.click();
+  expect(document.querySelector('dialog')).toBeNull();
+  expect(document.activeElement).toBe(image);
+  expect(outside).not.toHaveBeenCalled();
+  document.body.removeEventListener('click', outside);
 });
 it('does not bypass lazy loading or retry a failed URL', () => {
   vi.stubGlobal(

@@ -271,37 +271,38 @@ body.is-mobile.reader-mobile-active .mobile-navbar {
 
 dialog.reader-image-viewer {
   position: fixed;
-  inset: 0;
+  inset: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom)
+    env(safe-area-inset-left);
   margin: auto;
   display: block;
   height: fit-content;
   box-sizing: border-box;
   width: fit-content;
-  max-width: 95vw;
-  max-height: 95vh;
-  padding: 16px;
-  background: var(--background-primary, white);
-  color: var(--text-normal, black);
-  overflow: auto;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  overflow: visible;
 }
 .reader-image-viewer::backdrop {
   background: rgb(0 0 0 / 70%);
 }
-.reader-image-viewer button {
-  display: block;
-  min-height: 44px;
-  margin-inline-start: auto;
+dialog.reader-image-viewer,
+.reader-image-viewer img {
+  max-width: calc(100vw - 16px - env(safe-area-inset-left) - env(safe-area-inset-right));
+  max-height: calc(100vh - 16px - env(safe-area-inset-top) - env(safe-area-inset-bottom));
+  max-height: calc(100dvh - 16px - env(safe-area-inset-top) - env(safe-area-inset-bottom));
 }
 .reader-image-viewer img {
   display: block;
   width: auto;
   height: auto;
-  max-width: 85vw;
-  max-height: calc(85vh - 60px);
   object-fit: contain;
-  margin-inline: auto;
+  cursor: zoom-out;
 }
-.reader-document img:focus-visible {
+.reader-document img:focus-visible,
+.reader-image-viewer img:focus-visible {
   outline: 2px solid var(--interactive-accent, Highlight);
   outline-offset: 2px;
 }
