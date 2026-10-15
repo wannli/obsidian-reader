@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
+import { spawnSync } from 'node:child_process';
 
 const ci = await readFile(new URL('../.github/workflows/ci.yml', import.meta.url), 'utf8');
 const release = await readFile(
@@ -63,7 +64,7 @@ test('CI retains PR/manual checks without an independent tag publication path', 
     assert.equal(ci.split(command).length - 1, 1, command);
 });
 
-test('main pushes build before Release Please and publish only its created release', () => {
+test('main pushes check before Release Please, then recover exact-tag drafts independently', () => {
   assert.match(release, /push:\n    branches: \[main\]/);
   assert.match(release, /actions\/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1/);
   assert.match(release, /jdx\/mise-action@2d8d4cafcbd33be2ea37d2b6f5ad595363d1f1ca/);
@@ -75,11 +76,80 @@ test('main pushes build before Release Please and publish only its created relea
   assert.ok(
     release.indexOf('npm run build') < release.indexOf('googleapis/release-please-action@v5'),
   );
-  assert.match(release, /if: \$\{\{ steps\.release\.outputs\.release_created \}\}/);
+  assert.match(release, /group: reader-release\n  cancel-in-progress: false/);
+  assert.match(release, /if: \$\{\{ !inputs\.existing_tag \}\}/);
+  assert.match(release, /MANUAL_TAG: \$\{\{ inputs\.existing_tag \}\}/);
+  assert.match(release, /CREATED_TAG: \$\{\{ steps\.release\.outputs\.tag_name \}\}/);
+  assert.ok(release.includes(String.raw`[[ "$TAG" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]`));
+  assert.match(release, /ref: refs\/tags\/\$\{\{ steps\.draft\.outputs\.tag \}\}/);
+  assert.match(release, /path: release-build/);
+  assert.equal(release.split('working-directory: release-build').length - 1, 2);
+  assert.match(release, /GITHUB_REF_TYPE=tag GITHUB_REF_NAME="\$TAG" mise exec -- npm run check/);
+  assert.match(
+    release,
+    /mise trust \.mise\.toml\n          mise install\n          mise exec -- npm ci/,
+  );
+  assert.ok(release.indexOf('npm run check') < release.indexOf('gh release upload'));
   assert.match(release, /test "\$VERSION" = "\$TAG"/);
-  assert.match(release, /gh release upload "\$TAG"/);
-  assert.match(release, /gh release edit "\$TAG" --draft=false/);
+  assert.match(
+    release,
+    /for name in main\.js manifest\.json styles\.css; do\n            test -s "dist\/\$name"/,
+  );
+  assert.match(release, /cmp "dist\/\$name" "\$work\/existing\/\$name"/);
+  assert.ok(release.indexOf('"$work/existing/$name"') < release.indexOf('gh release upload'));
+  assert.match(
+    release,
+    /gh release download "\$TAG" --pattern main\.js --pattern manifest\.json --pattern styles\.css --dir "\$work\/verified"/,
+  );
+  assert.ok(release.indexOf('"$work/verified/$name"') < release.indexOf('gh release edit'));
+  assert.doesNotMatch(release, /gh release create|git tag|git push|--notes|--body/);
+  assert.doesNotMatch(release, /if: .*release_created/);
   assert.doesNotMatch(release, /--clobber/);
+});
+
+test('inline draft selector handles created-tag race, retries, published and lookup errors', () => {
+  const step = release.split('      - name: Select existing draft\n')[1].split('\n      #')[0];
+  const script = step.split('        run: |\n')[1].replace(/^          /gm, '');
+  const run = (env = {}) =>
+    spawnSync(
+      'bash',
+      [
+        '-c',
+        `
+    gh() { test "$FAKE_ABSENT" != true || return 1; printf '%s\\n' "$FAKE_DRAFT"; }
+    mise() { printf '%s\\n' '0.7.0'; }
+    ${script}
+  `,
+      ],
+      {
+        encoding: 'utf8',
+        env: {
+          PATH: process.env.PATH,
+          GITHUB_OUTPUT: '/dev/stdout',
+          MANUAL_TAG: '',
+          CREATED_TAG: '',
+          FAKE_DRAFT: 'true',
+          FAKE_ABSENT: 'false',
+          ...env,
+        },
+      },
+    );
+  for (const [env, output] of [
+    [{ CREATED_TAG: '0.7.1' }, 'tag=0.7.1'],
+    [{ MANUAL_TAG: '0.7.1', CREATED_TAG: '0.7.2' }, 'tag=0.7.1'],
+    [{}, 'tag=0.7.0'],
+    [{ FAKE_DRAFT: 'false' }, ''],
+  ]) {
+    const result = run(env);
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stdout.trim(), output);
+  }
+  for (const env of [
+    { FAKE_ABSENT: 'true' },
+    { MANUAL_TAG: '0.7.1', FAKE_ABSENT: 'true' },
+    { CREATED_TAG: '0.7.1', FAKE_ABSENT: 'true' },
+  ])
+    assert.notEqual(run(env).status, 0, JSON.stringify(env));
 });
 
 test('Release Please includes refactors in the visible Refactored section', () => {

@@ -73,7 +73,7 @@ Displayed text must match the write snapshot before a selection action. Position
 - `hot-reload.mjs`: explicit pinned development-plugin installation; never a build-time download.
 - `sandbox.mjs` / `safety-hold.mjs`: fixed owned paths, link checks and fail-closed holds. Historical **Reader2** names are safety identities, not legacy runtime compatibility.
 - `artifacts.mjs`: artifact hash/build-identity verification before installation.
-- `validate-release.mjs`, root metadata, `.github/`: validation and the existing Release Please publication path. No new release/tag mechanism.
+- `validate-release.mjs`, root metadata, `.github/`: validation and the existing Release Please publication path. The serialized workflow builds the exact release tag and can retry existing drafts without overwriting mismatched assets; it never creates or moves tags outside Release Please.
 
 `mise exec -- npm run benchmark:scale` is an opt-in 10,000-article/100-feed core and filesystem benchmark, not native UI/E2E automation. Its synthetic corpus and measurements stay ignored.
 

@@ -132,4 +132,12 @@ The [joint iPhone smoke plan](docs/mobile-smoke.md) uses one disposable Sync vau
 
 Native Hot Reload, touch selection, physical iOS/Boox pagination, and real sync need separate manual acceptance in synthetic vaults. They are not claimed as verified by automated tests. Local commits/merges do not authorize personal-vault installation, pushing, version changes or publication.
 
-Release Please remains the only release/version path. It prepares the release PR and draft release; the existing workflow validates the build, checks exact tag/version equality, and uploads only plugin artifacts before publication.
+Release Please remains the only release/version path. Wannes merges its release PR to authorize publication. The serialized Release workflow builds and validates the **exact existing release-tag commit**, not the commit that triggered the workflow. It uploads only `main.js`, `manifest.json`, and `styles.css`, verifies the complete remote asset set, then publishes the existing draft without changing its tag or notes.
+
+Failed or partial publication can safely retry: matching assets are reused; conflicting bytes fail without overwriting. The workflow also recovers an existing current-version draft when Release Please reports no newly created release. To recover a specific existing draft without running Release Please:
+
+```sh
+gh workflow run release.yml --ref main -f existing_tag=0.7.1
+```
+
+Recovery never creates or moves a tag, creates another release, or changes version metadata. Published releases are not overwritten.
