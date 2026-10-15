@@ -116,16 +116,18 @@ test('inline draft selector handles created-tag race, retries, published and loo
       [
         '-c',
         `
+    GITHUB_OUTPUT=$(mktemp)
+    trap 'rm -f "$GITHUB_OUTPUT"' EXIT
     gh() { test "$FAKE_ABSENT" != true || return 1; printf '%s\\n' "$FAKE_DRAFT"; }
     mise() { printf '%s\\n' '0.7.0'; }
     ${script}
+    cat "$GITHUB_OUTPUT"
   `,
       ],
       {
         encoding: 'utf8',
         env: {
           PATH: process.env.PATH,
-          GITHUB_OUTPUT: '/dev/stdout',
           MANUAL_TAG: '',
           CREATED_TAG: '',
           FAKE_DRAFT: 'true',
