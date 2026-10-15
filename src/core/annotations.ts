@@ -2,7 +2,7 @@ import { Lexer } from 'marked';
 import { blockSpans, markdownSource, renderedHighlight, type Span } from './markdown';
 import { ChangedNote } from './document';
 import { vaultLink, type Properties } from './model';
-import { inlineProjection } from './projection';
+import { blockProjection, inlineProjection } from './projection';
 
 /** Expected selection rejection, distinct from source/write failures and parser defects. */
 export class UnmappableSelection extends Error {}
@@ -235,11 +235,13 @@ export function locateSelection(
   const wanted = normalized(quote);
   if (!wanted || wanted.length > 12_000)
     throw new UnmappableSelection('Select a short passage of article text.');
-  const source = eligibleSource(body, false),
-    projection = inlineProjection(source),
+  const blocks = blockSpans(body),
+    source = eligibleSource(body, false, blocks),
+    projection = blockProjection(source),
     plain = projection.text;
   const blocked = [
     ...passages(body),
+    ...blocks.links,
     ...projection.links,
     ...[...source.matchAll(/!?\[[^\]\n]*\](?:\([^\n]*?\)|\[[^\]\n]*\])|!?\[\[[^\]\n]*\]\]/g)].map(
       (match) => ({ from: match.index!, to: match.index! + match[0].length }),
@@ -263,9 +265,10 @@ export function locateSelection(
     let found = false;
     for (const from of starts) {
       for (const to of ends) {
-        const raw = body.slice(from, to);
+        const raw = projection.slice(from, to);
         if (
-          /\n\s*\n|[\[\]`<>]|==/.test(raw) ||
+          raw === undefined ||
+          /\n\s*\n|[\0\[\]`<>]|==/.test(raw) ||
           !withinParagraph(from, to) ||
           blocked.some((span) => from < span.to && to > span.from)
         )
@@ -303,12 +306,17 @@ export function addHighlight(body: string, from: number, to: number): string {
     to > body.length
   )
     throw new ChangedNote();
-  const quote = inlineProjection(body.slice(from, to)).text;
+  const projection = blockProjection(body),
+    raw = projection.slice(from, to);
+  if (raw === undefined) throw new ChangedNote();
+  const quote = inlineProjection(raw).text;
+  const start = projection.starts.findIndex((at) => at >= from),
+    end = projection.starts.findIndex((at) => at >= to);
   const match = locateSelection(
     body,
     quote,
-    inlineProjection(body.slice(0, from)).text.slice(-120),
-    inlineProjection(body.slice(to)).text.slice(0, 120),
+    projection.text.slice(0, start).slice(-120),
+    end < 0 ? '' : projection.text.slice(end, end + 120),
   );
   if (match.from !== from || match.to !== to) throw new ChangedNote();
   return `${body.slice(0, from)}==${body.slice(from, to)}==${body.slice(to)}`;

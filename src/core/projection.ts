@@ -1,5 +1,6 @@
 import { Lexer, type Token } from 'marked';
 import { decodeHTML } from 'entities';
+import { blockSpans } from './markdown';
 
 interface Projection {
   text: string;
@@ -9,6 +10,66 @@ interface Projection {
   closings: Map<number, number[]>;
   links: { from: number; to: number; target: string }[];
 }
+/** Project parser-proven prose, removing block syntax without losing source columns.
+ * Keep inlineProjection separate: link labels and partial source slices are not documents.
+ * Callers still enforce protected spans, paragraph boundaries and balanced formatting. */
+export function blockProjection(source: string): Projection & {
+  slice: (from: number, to: number) => string | undefined;
+} {
+  const blocks = blockSpans(source).inlineBlocks;
+  const result = {
+    text: '',
+    starts: [] as number[],
+    ends: [] as number[],
+    openings: new Map<number, number[]>(),
+    closings: new Map<number, number[]>(),
+    links: [] as Projection['links'],
+    slice(from: number, to: number): string | undefined {
+      for (const block of blocks) {
+        if (!block.text || from < block.offset(0) || to > block.offset(block.text.length - 1) + 1)
+          continue;
+        let start = -1;
+        for (let at = 0; at < block.text.length; at++) {
+          if (start < 0 && block.offset(at) === from) start = at;
+          if (start >= 0 && block.offset(at) + 1 === to) return block.text.slice(start, at + 1);
+        }
+      }
+      return undefined;
+    },
+  };
+  for (const block of blocks) {
+    const local = inlineProjection(block.text);
+    const first = local.text.search(/\S/u);
+    if (first < 0) continue;
+    const last = local.text.trimEnd().length;
+    if (result.text) {
+      result.text += ' ';
+      result.starts.push(block.offset(local.starts[first]));
+      result.ends.push(block.offset(local.starts[first]));
+    }
+    const base = result.text.length - first;
+    result.text += local.text.slice(first, last);
+    for (let at = first; at < last; at++) {
+      result.starts.push(block.offset(local.starts[at]));
+      result.ends.push(block.offset(local.ends[at] - 1) + 1);
+    }
+    for (const [at, offsets] of local.openings)
+      result.openings.set(base + at, offsets.map(block.offset));
+    for (const [at, offsets] of local.closings)
+      result.closings.set(
+        base + at,
+        offsets.map((end) => block.offset(end - 1) + 1),
+      );
+    for (const link of local.links)
+      result.links.push({
+        ...link,
+        from: block.offset(link.from),
+        to: block.offset(link.to - 1) + 1,
+      });
+  }
+  return result;
+}
+
 /** A transient source map for the one selected article, not a parallel annotation representation. */
 export function inlineProjection(source: string): Projection {
   const projection: Projection = {

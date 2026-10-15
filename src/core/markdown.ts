@@ -52,6 +52,11 @@ const syntax = readerMarkdown();
 
 export type Span = { from: number; to: number };
 type MappedBlock = { text: string; offset: (at: number) => number };
+/** Parser-proven inline prose with exact original UTF-16 source columns. */
+export interface InlineBlock {
+  text: string;
+  offset: (at: number) => number;
+}
 
 /** Follow Marked's actual block containers, mapping their stripped lines to original
  * Markdown offsets. Unknown transformations throw: retention must fail closed. */
@@ -61,6 +66,8 @@ export function blockSpans(body: string): {
   protected: Span[];
   code: Span[];
   comments: Span[];
+  inlineBlocks: InlineBlock[];
+  links: Span[];
 } {
   const result = {
     paragraphs: [] as Span[],
@@ -68,6 +75,8 @@ export function blockSpans(body: string): {
     protected: [] as Span[],
     code: [] as Span[],
     comments: [] as Span[],
+    inlineBlocks: [] as InlineBlock[],
+    links: [] as Span[],
   };
   const fail = (): never => {
     throw new Error(
@@ -155,6 +164,8 @@ export function blockSpans(body: string): {
       (token) =>
         token.type === 'codespan' ||
         token.type === 'readerComment' ||
+        token.type === 'link' ||
+        token.type === 'image' ||
         ('tokens' in token && Array.isArray(token.tokens) && needsMap(token.tokens)),
     );
   const spanOf = (source: MappedBlock): Span => ({
@@ -169,6 +180,7 @@ export function blockSpans(body: string): {
       cursor = at + token.raw.length;
       if (!token.raw.length) continue;
       const raw = slice(source, at, cursor);
+      if (token.type === 'link' || token.type === 'image') result.links.push(spanOf(raw));
       if (token.type === 'codespan') result.code.push(spanOf(raw));
       else if (token.type === 'readerComment') result.comments.push(spanOf(raw));
       else if (token.type === 'readerHighlight')
@@ -196,7 +208,17 @@ export function blockSpans(body: string): {
         span = spanOf(raw);
       if (token.type === 'paragraph' || token.type === 'text' || token.type === 'heading') {
         (token.type === 'heading' ? result.headings : result.paragraphs).push(span);
-        inline(Lexer.lexInline(raw.text, syntax.defaults), raw);
+        inline(lexInline(raw.text), raw);
+        // Containers have already been stripped by contents(), not by a regex.
+        // Heading delimiters are block syntax too; retain only their inline text.
+        const content = token.type === 'heading' ? token.text : raw.text;
+        const inner = raw.text.indexOf(content);
+        if (inner < 0) fail();
+        const prose = slice(raw, inner, inner + content.length);
+        result.inlineBlocks.push({
+          text: prose.text,
+          offset: prose.offset,
+        });
       } else if (token.type === 'code' || token.type === 'html') {
         result.protected.push(span);
         if (token.type === 'code') result.code.push(span);
@@ -205,15 +227,36 @@ export function blockSpans(body: string): {
         for (const [row, cells] of [token.header, ...token.rows].entries()) {
           const index = row ? row + 1 : 0;
           const line = slice(raw, starts[index], starts[index + 1] ?? raw.text.length);
-          // Marked unescapes table pipes before inline tokenization. Keep exact columns.
-          const mappedRow = unescape(line, '|');
-          let cursor = 0;
-          for (const cell of cells) {
+          // Locate cells by unescaped separators, never by their possibly repeated text.
+          const ranges: Span[] = [];
+          let start = 0;
+          for (let at = 0; at < line.text.length; at++) {
+            if (line.text[at] !== '|') continue;
+            let escapes = 0;
+            for (let before = at - 1; before >= 0 && line.text[before] === '\\'; before--)
+              escapes++;
+            if (escapes % 2) continue;
+            ranges.push({ from: start, to: at });
+            start = at + 1;
+          }
+          ranges.push({ from: start, to: line.text.length });
+          if (!line.text.slice(ranges[0].from, ranges[0].to).trim()) ranges.shift();
+          const last = ranges[ranges.length - 1];
+          if (last && !line.text.slice(last.from, last.to).trim()) ranges.pop();
+          for (const [column, cell] of cells.entries()) {
             if (!cell.text) continue;
-            const at = mappedRow.text.indexOf(cell.text, cursor);
+            const range = ranges[column];
+            if (!range) fail();
+            const rawCell = slice(line, range.from, range.to);
+            // Marked unescapes pipes before inline tokenization; protect those tokens
+            // with that mapping, but project the original escape pair for safe insertion.
+            const mappedCell = unescape(rawCell, '|');
+            const at = mappedCell.text.indexOf(cell.text);
             if (at < 0) fail();
-            cursor = at + cell.text.length;
-            inline(Lexer.lexInline(cell.text, syntax.defaults), slice(mappedRow, at, cursor));
+            inline(cell.tokens, slice(mappedCell, at, at + cell.text.length));
+            const leading = rawCell.text.length - rawCell.text.trimStart().length;
+            const prose = slice(rawCell, leading, rawCell.text.trimEnd().length);
+            result.inlineBlocks.push({ text: prose.text, offset: prose.offset });
           }
         }
       } else if (token.type === 'blockquote') {
@@ -235,8 +278,16 @@ export function blockSpans(body: string): {
     0,
     ...[...body.matchAll(/\r\n?|\n/g)].map((match) => match.index! + match[0].length),
   ];
+  const parsed = Lexer.lex(source, syntax.defaults);
+  const lexInline = (text: string): Token[] => {
+    const lexer = new Lexer(syntax.defaults);
+    // Resolve references against this document, while preserving raw indentation
+    // that Marked's block text tokens may have normalized away.
+    lexer.tokens.links = parsed.links;
+    return lexer.inlineTokens(text);
+  };
   visit(
-    Lexer.lex(source, syntax.defaults),
+    parsed,
     mapped(source, origins, (at) => at),
   );
   return result;
