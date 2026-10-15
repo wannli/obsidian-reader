@@ -19,6 +19,7 @@ import { passages } from '../src/core/annotations';
 import { READER_VIEW, ReaderView, nativeLinkPath, openExistingNote } from '../src/reader/view';
 import * as surfaceModule from '../src/reader/surface';
 import ReaderPlugin from '../src/main';
+vi.mock('../src/host/read-later-setup', () => ({ showReadLaterSetup: vi.fn() }));
 import { showFeeds } from '../src/host/settings';
 import type { NodesApi, NodeResult } from '../src/host/nodes';
 import { gate, MemoryVault } from './helpers/memory-vault';

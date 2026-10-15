@@ -2,6 +2,9 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { runtimeFixture } from './helpers/folder-runtime';
 import { gate } from './helpers/memory-vault';
 import { Plugin } from 'obsidian';
+import { showReadLaterSetup } from '../src/host/read-later-setup';
+
+vi.mock('../src/host/read-later-setup', () => ({ showReadLaterSetup: vi.fn() }));
 
 let plugin: any;
 afterEach(() => {
@@ -33,6 +36,7 @@ async function fixture() {
   };
   return {
     ...f,
+    commands,
     expire,
     flushViews,
     async ready() {
@@ -171,6 +175,93 @@ it.each(['startup', 'foreground', 'metadata'])(
     expect(f.plugin.ingestion.refreshAll).not.toHaveBeenCalled();
   },
 );
+
+it('registers native capture setup without capturing, and ignores it after retirement', async () => {
+  const f = await fixture();
+  vi.mocked(showReadLaterSetup).mockClear();
+  const command = f.commands.mock.calls.find(([entry]) => entry.id === 'setup-ios-read-later')![0];
+  command.callback!();
+  expect(showReadLaterSetup).toHaveBeenCalledExactlyOnceWith(
+    f.app,
+    f.plugin.store.folders,
+    f.plugin.signal,
+  );
+  expect(f.plugin.ingestion.acquire).not.toHaveBeenCalled();
+  expect(f.plugin.ingestion.refreshAll).not.toHaveBeenCalled();
+  f.plugin.onunload();
+  command.callback!();
+  expect(showReadLaterSetup).toHaveBeenCalledOnce();
+});
+
+it.each(['foreground', 'changed', 'resolve', 'resolved'])(
+  'recovers an externally created empty native capture after %s without polling feeds',
+  async (trigger) => {
+    const f = await fixture();
+    const file = { path: 'Reading/Inbox/Native capture.md' };
+    const properties = { type: 'article', url: 'https://example.com/native?x=1&y=2' };
+    f.app.notes.set(file.path, { file, properties });
+    f.plugin.store.catalog.update(file.path, properties);
+    const cache = f.app.metadataCache.getFileCache(file);
+    f.app.metadataCache.getFileCache = () => ({ ...cache, sections: undefined });
+    f.runtime.watchers[0].changed({ path: file.path });
+    expect(f.plugin.ingestion.acquire).not.toHaveBeenCalled();
+    f.app.metadataCache.getFileCache = () => cache;
+    if (trigger === 'foreground') await f.event('visibilitychange');
+    else if (trigger === 'changed') f.runtime.watchers[0].changed({ path: file.path });
+    else await f.metadata(trigger, file);
+    expect(f.plugin.ingestion.acquire).toHaveBeenCalledExactlyOnceWith(file.path);
+    // Repeated native cache events cannot create a recovery loop.
+    f.runtime.watchers[0].changed({ path: file.path });
+    await f.metadata('resolve', file);
+    await f.event('visibilitychange');
+    expect(f.plugin.ingestion.acquire).toHaveBeenCalledOnce();
+    expect(f.plugin.ingestion.refreshAll).not.toHaveBeenCalled();
+  },
+);
+
+it.each([
+  { path: 'Native capture.md', properties: { type: 'article', url: 'https://example.com/a' } },
+  { path: 'Reading/Inbox/Invalid.md', properties: { type: 'article', url: '{{content}}' } },
+  { path: 'Reading/Inbox/Note.md', properties: { url: 'https://example.com/a' } },
+  {
+    path: 'Reading/Inbox/Body.md',
+    properties: { type: 'article', url: 'https://example.com/a' },
+    body: true,
+  },
+])('does not recover ineligible native capture $path', async ({ path, properties, body }) => {
+  const f = await fixture();
+  const file = { path };
+  f.app.notes.set(path, { file, properties });
+  f.plugin.store.catalog.update(path, properties);
+  if (body)
+    f.app.metadataCache.getFileCache = () => ({
+      frontmatter: properties,
+      sections: [{ type: 'yaml' }, { type: 'paragraph' }],
+    });
+  f.runtime.watchers[0].changed({ path });
+  await f.metadata('resolve', file);
+  await f.event('visibilitychange');
+  expect(f.plugin.ingestion.acquire).not.toHaveBeenCalled();
+  expect(f.plugin.ingestion.refreshAll).not.toHaveBeenCalled();
+});
+
+it('does not recover native captures while hidden or after generation retirement', async () => {
+  const f = await fixture();
+  const file = { path: 'Reading/Inbox/Native.md' };
+  const properties = { type: 'article', url: 'https://example.com/a' };
+  f.app.notes.set(file.path, { file, properties });
+  f.plugin.store.catalog.update(file.path, properties);
+  vi.stubGlobal('document', {
+    visibilityState: 'hidden',
+    body: { classList: { remove: vi.fn() } },
+  });
+  await f.metadata('resolve', file);
+  expect(f.plugin.ingestion.acquire).not.toHaveBeenCalled();
+  f.plugin.stopFolders();
+  await f.event('visibilitychange');
+  await f.metadata('resolve', file);
+  expect(f.plugin.ingestion.acquire).not.toHaveBeenCalled();
+});
 
 it('feed creation, enablement and metadata resolution never start imports', async () => {
   const f = await fixture();

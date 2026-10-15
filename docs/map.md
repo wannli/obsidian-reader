@@ -46,6 +46,7 @@ Runtime libraries: `yaml`, `marked`, `entities`, `dompurify`, `defuddle`. No UI 
 - `host/network.ts`: bounded request slots and delivery timeouts. An uncancellable timed-out request retains its slot until the host settles it.
 - `host/ingestion.ts`: local-only subscription creation (editable hostname title/prefix), explicit latest-20 Sync/Refresh feeds imports, dedupe, cancellation, and acquisition proof against current excerpt bytes. No automatic feed polling or add-time fetch/import.
 - `host/dialogs.ts` / `settings.ts`: native input/dialogs, staged independent-folder settings and subscription controls.
+- `host/read-later-setup.ts`: explicit create-only native iOS Quick Capture template installation and manual capture-location/Shortcuts instructions; no QuickAdd dependency, capture URI or native-settings writes.
 - `host/folder-settings.ts` / `folder-picker.ts`: explicit five-role folder-group persistence and native suggestions. Native Apply at the same current locations persisted `folders` in Reader `data.json`, preserving all three legacy keys/values; it aborted the old generation and opened a fresh list. All 43 Markdown/Base files were byte-identical across Apply: no automatic migration. Legacy keys stay inert; unknown settings remain preserved.
 - `host/nodes.ts`: optional public `fileclass-inline.api` v2. Link/Change and Create note require `pickNodeForLink` and delegate to Fileclass Inline’s shared picker. No Reader picker, All notes route, standalone fallback, private Fileclass calls or migration.
 

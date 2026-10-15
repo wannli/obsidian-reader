@@ -20,6 +20,24 @@ Markdown is the only article store. Reader preserves authored text, unknown YAML
 
 **Stream is disposable:** annotations and vault links promote articles to Inbox; unprotected entries older than one clamped UTC calendar month go to vault-local recoverable trash. Unknown-age and in-use notes are retained. See the [approved storage contract](docs/storage-contract.md).
 
+## Native iOS Read later setup
+
+Run **Reader: Set up native Read later**, then choose **Install Quick Capture template**. This creates `Templates/Reader Read later.md` without overwriting existing files or changing native capture settings. No QuickAdd dependency is required.
+
+On iOS (Obsidian **1.14+**, iOS/iPadOS **26+**):
+
+1. Open **Quick Capture**, tap its location, then **+**.
+2. Name it **Read later**, choose **New note**, this vault, and your configured **Inbox** folder.
+3. Select the installed template and enable **Open Note after Capture**.
+4. Optionally assign this location to Obsidian’s **Quick Capture** action in Apple Shortcuts or a widget.
+5. Capture **one plain HTTP(S) URL**, without a title, Markdown formatting, quotes or additional lines.
+
+The template places `{{content}}` in the existing `url` property and leaves the body empty. Reader starts Defuddle when Obsidian opens and is online; plugins cannot run inside background Quick Capture. Keep Obsidian open until extraction finishes. Offline captures retain their URL for foreground recovery. Native capture creates a new note per capture: it does not use Reader’s deduplication or filename generation. Use **Add URL** when those are needed.
+
+For Safari’s native **Share Sheet** instead (Obsidian **1.13+**, iOS **18+**), create a separate **New note** location in Inbox, enable **Full Text**, and select a template containing `type: article` and `url: {{url}}`. The Share Sheet appends native captured content; Reader preserves that text instead of replacing it. Do not use the Quick Capture `{{content}}` template for this location. A URL-only body is protected too, so use Full Text for readable content.
+
+See [Obsidian’s native iOS capture documentation](https://help.obsidian.md/mobile/ios). Setup choices and physical-device acceptance remain manual; Reader cannot install or configure the iOS shortcut silently.
+
 ## Markdown structure
 
 The default layout below is only a starting point: all five folders can live independently anywhere in the vault. A note's folder determines its queue; there is no queue property.

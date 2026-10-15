@@ -18,6 +18,7 @@ import { readDocument } from './core/document';
 import { ArticleStore } from './core/store';
 import { input } from './host/dialogs';
 import { Ingestion } from './host/ingestion';
+import { showReadLaterSetup } from './host/read-later-setup';
 import { ReaderSettings, showFeeds } from './host/settings';
 import { ObsidianVault, watchLibrary, type LibraryChange } from './host/vault';
 import { nativeLinkPath, READER_VIEW, ReaderView } from './reader/view';
@@ -101,6 +102,13 @@ export default class ReaderPlugin extends Plugin {
       },
     });
     this.addCommand({ id: 'add-url', name: 'Add URL', callback: () => this.capture() });
+    this.addCommand({
+      id: 'setup-ios-read-later',
+      name: 'Set up native Read later',
+      callback: () => {
+        if (!this.signal.aborted) showReadLaterSetup(this.app, this.store.folders, this.signal);
+      },
+    });
     this.addCommand({ id: 'manage-feeds', name: 'Manage feeds', callback: () => this.feeds() });
     this.addCommand({
       id: 'refresh-feeds',
@@ -187,7 +195,11 @@ export default class ReaderPlugin extends Plugin {
     );
     this.registerEvent(
       this.app.metadataCache.on('resolve', (file) => {
-        if (!this.signal.aborted) this.keepReferences(file);
+        if (!this.signal.aborted) {
+          this.keepReferences(file);
+          // Native Quick Capture may publish its body sections after `changed`.
+          this.recover(file);
+        }
         if (this.app.workspace.getActiveViewOfType(MarkdownView)?.file === file)
           this.routeArticle(file);
       }),
@@ -198,7 +210,11 @@ export default class ReaderPlugin extends Plugin {
         const first = !this.referencesRecovered;
         if (first && !this.recoverReferences()) return;
         this.referencesReady = true;
-        if (first) void this.expire().catch((error) => this.notice(error));
+        if (first) {
+          // Startup capture notes may have had no usable cache at layout-ready.
+          this.recoverCaptures();
+          void this.expire().catch((error) => this.notice(error));
+        }
       }),
     );
     this.app.workspace.onLayoutReady(() => {
@@ -575,6 +591,15 @@ export default class ReaderPlugin extends Plugin {
       if (!signal.aborted) this.notice(error);
     });
   }
+  private recoverCaptures(): void {
+    if (this.signal.aborted) return;
+    // Metadata-only enumeration. recover() filters queues/empty bodies and bounds
+    // each path to one attempt per generation (reset when connectivity returns).
+    for (const article of this.store.catalog.values()) {
+      const file = this.store.vault.file(article.path);
+      if (file) this.recover(file);
+    }
+  }
   private async tick(syncFeeds = false, recover = false, forceMaintenance = false): Promise<void> {
     const signal = this.signal,
       ingestion = this.ingestion;
@@ -590,11 +615,7 @@ export default class ReaderPlugin extends Plugin {
       return;
     }
     if (!this.referencesRecovered && this.recoverReferences()) this.referencesReady = true;
-    if (recover)
-      for (const article of this.store.catalog.values()) {
-        const file = this.store.vault.file(article.path);
-        if (file) this.recover(file);
-      }
+    if (recover) this.recoverCaptures();
     if (!syncFeeds && !forceMaintenance && Date.now() - this.lastMaintenance < 4 * 60 * 60 * 1000)
       return;
     this.refreshing = true;
