@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.11.0](https://github.com/wannli/obsidian-reader/compare/0.10.0...0.11.0) (2026-10-16)
+
+
+### Added
+
+* **reader:** resume dog-eared article from shortcut ([abb3703](https://github.com/wannli/obsidian-reader/commit/abb37037d7c5331ffe2596bfcb2d4e5cded0e4ec))
+
 ## [0.10.0](https://github.com/wannli/obsidian-reader/compare/0.9.2...0.10.0) (2026-10-16)
 
 
