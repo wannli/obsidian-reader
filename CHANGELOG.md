@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.9.1](https://github.com/wannli/obsidian-reader/compare/0.9.0...0.9.1) (2026-10-16)
+
+
+### Fixed
+
+* **selection:** observe gesture releases before propagation stops ([aa88616](https://github.com/wannli/obsidian-reader/commit/aa88616fa9452a502e47b0629a73bd56e44d6b0b))
+
 ## [0.9.0](https://github.com/wannli/obsidian-reader/compare/0.8.1...0.9.0) (2026-10-15)
 
 
