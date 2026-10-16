@@ -60,8 +60,9 @@ Only notes with explicit `status: feed` can expire, one calendar month after the
 
 - **Open reading list**, **Open Archive**, and **Manage feeds** are available from the command palette.
 - Use **Previous / Next** to browse articles and **List** to return to where you started.
-- Use native **Obsidian search** to find articles; Reader has no separate search bar.
-- Use **Open Markdown** to edit an article, or **Topics** to associate it with existing topic notes.
+- Use native **Obsidian search** for general search, or filter a reading list by a **topic or phrase**. Topic filters include aliases, explicit topic assignments, and case-insensitive whole-word/phrase matches in article titles and saved bodies. Free text works without creating a topic note.
+- An active topic filter uses Obsidian's accent colour and displays **Reading list: topic** in the list and above articles opened from it. Click the active filter button to clear it; click it when inactive to open the picker. From an article, return to **List** first. Switching queues retains the filter; Previous/Next follows the filtered list.
+- Use **Open Markdown** to edit an article, or the bottom-bar **Topics** multiselect to assign existing topics. Tap a topic row to select it; selected topics stay visible while searching. Save confirms the write before closing and keeps your choices if it fails. **Add topic** creates a note through compatible Fileclass Inline; see below. Filtering is read-only; assigning topics to a Feed article retains it in Later.
 - On desktop, **j / k** navigate articles. At article boundaries, **Up / PageUp** and **Down / PageDown** move to the previous or next article, resuming its saved position.
 - On iPhone, **Copy reading-list link** gives you a vault-aware link for a Shortcuts **URL → Open URLs → Add to Home Screen** shortcut.
 
@@ -84,6 +85,8 @@ Highlights live where they belong: alongside the words you were reading, as ordi
 For **Link to note / Change link** and **Create note**, install a compatible Fileclass Inline integration. These actions use its shared note picker and require **Obsidian 1.12.7+** and public **Nodes API v2** (`fileclass-inline.api`) with `pickNodeForLink` support.
 
 Without that integration, you can still highlight, open existing passage links, and remove links. Reader does not provide a separate note-creation fallback. Cancelling a linking or creation flow may leave a newly created note; Reader never deletes it for you.
+
+The **Topics** multiselect can also **Add topic** through optional API v2 `createNodeForLink`. Configure a Fileclass named `topic` with binding property `type`, so it creates ordinary `type: topic` notes. Fileclass Inline owns the name, destination and required fields. Creation immediately links the new topic to the article; Cancel keeps that note/link but discards other unsaved multiselect changes. Without compatible creation support, selecting existing topics still works.
 
 ## Offline reading and capture
 
@@ -170,6 +173,6 @@ mise exec -- npm run check                     # format, metadata, types, tests,
 mise exec -- npm run benchmark:scale           # opt-in: 10k articles / 100 feeds
 ```
 
-Targets are under 5 seconds for focused checks and under 10 seconds for the automated test suite locally. There is no automated E2E suite; native touch, e-ink, and real sync behavior require separate manual checks. The scale benchmark retains synthetic files and measurements in the marked dummy vault, not a personal vault.
+Targets are under 5 seconds for focused checks and under 10 seconds for the automated test suite locally. There is no general automated E2E suite; [topic-filter acceptance](docs/topic-filter.md) includes a local synthetic-host browser run, not native certification. Native touch, e-ink, and real sync behavior require separate manual checks. The scale benchmark retains synthetic files and measurements in the marked dummy vault, not a personal vault.
 
 Start with the [codebase map](docs/map.md), [approved scope](docs/rebuild-spec.md), [storage contract](docs/storage-contract.md), and [mobile smoke plan](docs/mobile-smoke.md).

@@ -159,6 +159,7 @@ vi.mock('../src/host/dialogs', () => ({
   input: mocks.input,
   confirmWebLink: mocks.confirmWebLink,
 }));
+vi.mock('../src/host/topic-filter-dialog', () => ({ chooseTopicFilter: vi.fn() }));
 vi.mock('../src/host/settings', () => ({ ReaderSettings: class {}, showFeeds: vi.fn() }));
 vi.mock('../src/host/vault', () => ({
   ObsidianVault: class {
@@ -634,12 +635,13 @@ describe('automatic selection event ownership', () => {
     expect((await f.store.read(f.article.path)).body).toBe(f.body);
   });
 
-  it('mounts one aligned article column with exactly six persistent actions outside the scroller', () => {
+  it('mounts one aligned article column with exactly seven persistent actions outside the scroller', () => {
     const column = f.view.contentEl.querySelector('.reader-article')!;
     const actions = column.querySelector('.reader-actions')!;
     expect([...actions.querySelectorAll('button')].map(actionName)).toEqual([
       'Previous',
       'Next',
+      'Article topics',
       'Read later',
       'Archive',
       'Delete',
@@ -2521,16 +2523,22 @@ describe('safe default article routing', () => {
 });
 
 describe('bounded Reader UI', () => {
-  it('keeps library titles as text, with four bottom actions and no search/subtitles/Archive/Feeds buttons', async () => {
+  it('keeps library titles as text, with five bottom actions and no search/subtitles/Archive/Feeds buttons', async () => {
     const f = hostFixture();
     await f.note('Reading/Inbox/Visible title.md');
     f.view.showList();
     const buttons = [
       ...f.view.contentEl.querySelectorAll<HTMLButtonElement>('.reader-toolbar button'),
     ];
-    expect(buttons.map(actionName)).toEqual(['Inbox', 'Later', 'Feed articles', 'Add URL']);
+    expect(buttons.map(actionName)).toEqual([
+      'Inbox',
+      'Later',
+      'Feed articles',
+      'Add URL',
+      'Filter by topic',
+    ]);
     expect(buttons.map((button) => button.querySelector('svg')?.getAttribute('data-icon'))).toEqual(
-      ['inbox', 'clock', 'rss', 'plus'],
+      ['inbox', 'clock', 'rss', 'plus', 'list-filter'],
     );
     for (const button of buttons) {
       expect(button.textContent).toBe('');
@@ -2632,7 +2640,7 @@ describe('bounded Reader UI', () => {
     },
   );
 
-  it('shares the library action treatment with six uniform article icons, without hiding authored hr or modal controls', async () => {
+  it('shares the library action treatment with seven uniform article icons, without hiding authored hr or modal controls', async () => {
     const f = hostFixture();
     const style = document.head.appendChild(document.createElement('style'));
     style.textContent = readFileSync(new URL('../src/reader/styles.css', import.meta.url), 'utf8');
@@ -2655,17 +2663,19 @@ describe('bounded Reader UI', () => {
       ];
       expect(
         buttons.map((button) => button.querySelector('svg')?.getAttribute('data-icon')),
-      ).toEqual(['chevron-left', 'chevron-right', 'clock', 'archive', 'trash-2', 'list']);
+      ).toEqual(['chevron-left', 'chevron-right', 'tags', 'clock', 'archive', 'trash-2', 'list']);
       expect(buttons.map((button) => button.getAttribute('aria-label'))).toEqual([
         'Previous article',
         'Next article',
+        'Article topics',
         'Read later',
         'Archive and advance',
         'Trash article and advance',
         'List',
       ]);
-      expect(setTooltip).toHaveBeenCalledWith(buttons[2], 'Read later');
-      expect(setTooltip).toHaveBeenCalledWith(buttons[3], 'Archive');
+      expect(setTooltip).toHaveBeenCalledWith(buttons[2], 'Article topics');
+      expect(setTooltip).toHaveBeenCalledWith(buttons[3], 'Read later');
+      expect(setTooltip).toHaveBeenCalledWith(buttons[4], 'Archive');
       expect(buttons[0].disabled).toBe(true);
       for (const button of buttons) {
         const css = window.getComputedStyle(button);
@@ -2793,7 +2803,7 @@ describe('Reader mobile control styling', () => {
       await f.view.openArticle(article.path, true);
       const actions =
         f.view.contentEl.querySelectorAll<HTMLButtonElement>('.reader-actions button');
-      expect(actions).toHaveLength(6);
+      expect(actions).toHaveLength(7);
       for (const button of actions) checkIcon(button, '100%');
       expect(actions[0].disabled).toBe(true);
       expect(window.getComputedStyle(actions[0]).opacity).toBe('0.45');
@@ -2822,7 +2832,7 @@ describe('Reader mobile control styling', () => {
 
 describe('leaf-scoped floating Reader layout', () => {
   it.each([390, 1280].flatMap((width) => [false, true].map((paged) => ({ width, paged }))))(
-    'uses full-pane CSS with compact 4/6-action overlays (width=$width, paged=$paged)',
+    'uses full-pane CSS with compact 5/7-action overlays (width=$width, paged=$paged)',
     async ({ width, paged }) => {
       const f = hostFixture();
       const file = await f.note('Reading/Inbox/Title.md');
@@ -2845,7 +2855,7 @@ describe('leaf-scoped floating Reader layout', () => {
         const library = f.view.contentEl.querySelector('.reader-bottom-controls')!;
         expect(f.view.contentEl.firstElementChild).toBe(list);
         expect(f.view.contentEl.lastElementChild).toBe(library);
-        expect(library.querySelectorAll('button')).toHaveLength(4);
+        expect(library.querySelectorAll('button')).toHaveLength(5);
         expect(window.getComputedStyle(library).position).toBe('absolute');
         expect(window.getComputedStyle(f.view.contentEl).position).toBe('relative');
         expect(window.getComputedStyle(list).flex).toBe('1 1 auto');
@@ -2854,7 +2864,7 @@ describe('leaf-scoped floating Reader layout', () => {
         await f.view.openArticle(file.path, true);
         const column = f.view.contentEl.querySelector('.reader-article')!;
         const actions = column.querySelector('.reader-bottom-controls')!;
-        expect(actions.querySelectorAll('button')).toHaveLength(6);
+        expect(actions.querySelectorAll('button')).toHaveLength(7);
         expect(actions.parentElement).toBe(column);
         expect(column.firstElementChild).toBe(f.probe.status);
         expect(window.getComputedStyle(column).position).toBe('relative');
@@ -3262,6 +3272,84 @@ describe('YAML queue presentation', () => {
 });
 
 describe('browsing context and presentation', () => {
+  it('refreshes the native list title when a filter changes or clears without persisting it', () => {
+    const f = hostFixture();
+    const refresh = vi.fn(async () => {});
+    f.host.refreshPresentation = refresh;
+    f.view.showList();
+    expect(f.view.getDisplayText()).toBe('Reading list');
+    f.probe.topicFilter = { label: 'sea level', terms: ['sea level'] };
+    f.view.showList();
+    expect(f.view.getDisplayText()).toBe('Reading list: sea level');
+    expect(refresh).toHaveBeenCalledTimes(2);
+    expect(f.view.getState()).toEqual({ file: undefined, queue: 'Inbox' });
+    f.view.contentEl.querySelector<HTMLButtonElement>('[aria-label="Filter by topic"]')!.click();
+    expect(f.view.getDisplayText()).toBe('Reading list');
+    expect(refresh).toHaveBeenCalledTimes(3);
+    expect(f.view.contentEl.querySelector('.reader-topic-filter-state')).toBeNull();
+    f.view.stopForUnload();
+  });
+  it('returns a promoted article to the filtered list before clearing via the filter toggle', async () => {
+    const f = hostFixture();
+    const before = await f.note('Reading/Feed/A.md', 'sea level');
+    const current = await f.note('Reading/Feed/B.md', 'sea level');
+    const after = await f.note('Reading/Feed/C.md', 'sea level');
+    const topic = await f.note('Topics/Sea.md', '', 'topic');
+    for (const file of f.vault.files.values())
+      Object.assign(file, { stat: { mtime: 1, size: f.vault.bytes.get(file)!.length } });
+    f.probe.topicFilter = { label: 'sea level', terms: ['sea level'] };
+    f.view.showList('Feed');
+    for (let i = 0; i < 100; i++) await Promise.resolve();
+    await f.view.openArticle(current.path, true);
+    mocks.topics.mockImplementation(async (_app, _files, _selected, _signal, _creation, commit) => {
+      await commit([topic.path]);
+      return [topic.path];
+    });
+    await f.probe.topics();
+    expect((await f.store.read(current.path)).properties.status).toBe('later');
+    expect(f.view.getDisplayText()).toBe('Reader: B');
+    expect(f.view.contentEl.querySelector('.reader-topic-filter-state')).toBeNull();
+    await f.view.readingList();
+    for (let i = 0; i < 100; i++) await Promise.resolve();
+    expect(f.view.getDisplayText()).toBe('Reading list: sea level');
+    const write = vi.spyOn(f.vault, 'process');
+    f.host.ingestion.acquire.mockClear();
+    f.view.contentEl.querySelector<HTMLButtonElement>('[aria-label="Filter by topic"]')!.click();
+    expect(f.view.getDisplayText()).toBe('Reading list');
+    expect(f.probe.topicFilter).toBeUndefined();
+    expect(f.view.contentEl.querySelectorAll('.reader-list-item')).toHaveLength(2);
+    expect(write).not.toHaveBeenCalled();
+    expect(f.host.ingestion.acquire).not.toHaveBeenCalled();
+    await f.view.openArticle(before.path, true);
+    await f.view.navigate(1);
+    expect(f.view.file).toBe(after);
+    f.view.stopForUnload();
+  });
+  it('navigates the actual filtered article snapshot next/previous and returns to the filtered list', async () => {
+    const f = hostFixture();
+    const first = await f.note('Reading/Inbox/A.md', 'sea level');
+    await f.note('Reading/Inbox/B.md', 'unrelated');
+    const last = await f.note('Reading/Inbox/C.md', 'SEA LEVEL');
+    for (const file of f.vault.files.values())
+      Object.assign(file, { stat: { mtime: 1, size: f.vault.bytes.get(file)!.length } });
+    f.probe.topicFilter = { label: 'sea level', terms: ['sea level'] };
+    f.view.showList();
+    for (let i = 0; i < 100; i++) await Promise.resolve();
+    expect(f.view.contentEl.querySelectorAll('.reader-list-item')).toHaveLength(2);
+    await f.view.openArticle(first.path, true);
+    await f.view.navigate(1);
+    expect(f.view.file).toBe(last);
+    await f.view.navigate(-1);
+    expect(f.view.file).toBe(first);
+    expect(f.view.getDisplayText()).toBe('Reader: A');
+    expect(f.view.contentEl.querySelector('.reader-topic-filter-state')).toBeNull();
+    await f.view.readingList();
+    for (let i = 0; i < 100; i++) await Promise.resolve();
+    expect(f.view.contentEl.querySelectorAll('.reader-list-item')).toHaveLength(2);
+    expect(f.probe.topicFilter.label).toBe('sea level');
+    expect(f.view.getDisplayText()).toBe('Reading list: sea level');
+    f.view.stopForUnload();
+  });
   it.each(['Inbox', 'Feed', 'Later', 'Archive'] as const)(
     'Read later moves from %s without advancing or losing the original browsing context',
     async (queue) => {
@@ -3560,7 +3648,10 @@ describe('commit-time annotation targets', () => {
       return path === 'Short topic name' ? target : null;
     });
     await f.view.openArticle(article.path);
-    mocks.topics.mockResolvedValue([target.path]);
+    mocks.topics.mockImplementation(async (_app, _files, _selected, _signal, _creation, commit) => {
+      await commit([target.path]);
+      return [target.path];
+    });
     await f.probe.topics();
     expect(mocks.topics.mock.calls[0][2]).toEqual(new Set([target.path]));
     expect((await f.store.read(article.path)).properties.topics).toEqual([
@@ -3608,13 +3699,35 @@ describe('commit-time annotation targets', () => {
       article = await f.note('Reading/Inbox/A.md'),
       target = await f.note('Topics/One.md', '', 'topic');
     await f.view.openArticle(article.path);
-    mocks.topics.mockResolvedValue([target.path]);
+    const before = await f.vault.read(article);
+    let cancel!: () => void;
+    let error: unknown;
+    let draft: string[] = [];
+    mocks.topics.mockImplementation(async (_app, _files, _selected, _signal, _creation, commit) => {
+      draft = [target.path];
+      try {
+        await commit(draft);
+      } catch (cause) {
+        error = cause; // The picker displays this and keeps the same draft until Cancel.
+      }
+      return new Promise<null>((resolve) => {
+        cancel = () => resolve(null);
+      });
+    });
     const original = f.vault.process.bind(f.vault);
     vi.spyOn(f.vault, 'process').mockImplementation(async (file, transform) => {
       f.cache.set(target, { frontmatter: { type: 'person' } });
       return original(file, transform);
     });
-    await expect(f.probe.topics()).rejects.toThrow('topic changed');
+    const pending = f.probe.topics();
+    for (let i = 0; i < 100 && !error; i++) await Promise.resolve();
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toContain('topic changed');
+    expect(draft).toEqual([target.path]);
+    expect(mocks.topics).toHaveBeenCalledOnce();
+    expect(await f.vault.read(article)).toBe(before);
+    cancel();
+    await pending;
     expect((await f.store.read(article.path)).properties.topics).toBeUndefined();
   });
 

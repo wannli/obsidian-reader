@@ -32,6 +32,22 @@ it('accepts optional shared picker without calling either creation method', () =
   expect(value.pickNodeForLink).not.toHaveBeenCalled();
 });
 
+it('accepts optional linked creation without invoking it or requiring the shared picker', () => {
+  const value = { ...api(), createNodeForLink: vi.fn(async () => null) };
+  expect(detect(value)).toBe(value);
+  expect(value.createNodeForLink).not.toHaveBeenCalled();
+  expect(value.createNode).not.toHaveBeenCalled();
+  delete (value as Partial<typeof value>).createNodeForLink;
+  expect(detect(value)).toBe(value);
+});
+
+it.each([null, false, 'not a method'])(
+  'rejects malformed optional linked creation (%s)',
+  (value) => {
+    expect(detect({ ...api(), createNodeForLink: value })).toBeUndefined();
+  },
+);
+
 it('keeps Nodes optional when the plugin or plugin manager is absent', () => {
   expect(nodesApi({} as App)).toBeUndefined();
   expect(nodesApi({ plugins: { getPlugin: () => undefined } } as unknown as App)).toBeUndefined();

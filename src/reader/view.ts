@@ -19,6 +19,9 @@ import {
   type Passage,
 } from '../core/annotations';
 import { ReadingQueue } from '../core/catalog';
+import { matchesTopicArticle, type TopicFilter } from '../core/topic-filter';
+import { chooseTopicFilter } from '../host/topic-filter-dialog';
+import { TopicScanner } from './topic-scan';
 import { patchProperties, readDocument, readingMarker, replaceBody } from '../core/document';
 import { renderedHighlight } from '../core/markdown';
 import { articleInfo, linkPath, queues, text, vaultLink, type Queue } from '../core/model';
@@ -37,7 +40,7 @@ type PendingSelection = {
   >;
   readonly body: string;
 };
-type BrowsingContext = { queue: Queue; paths: string[] };
+type BrowsingContext = { queue: Queue; paths: string[]; filtered?: boolean };
 /** Rendered hrefs are encoded once. Never reinterpret a decoded URI as a vault path. */
 export function nativeLinkPath(value: string, encoded = true): string | undefined {
   let path: string;
@@ -100,6 +103,7 @@ export class ReaderView extends ItemView {
   private lifetime = new AbortController();
   private articleLifetime = new AbortController();
   private nodeCreationEpoch = 0;
+  private topicAssignment?: AbortController;
   private indicatorReads = 0;
   private indicatorPump?: () => void;
   private boundaryNavigation = false;
@@ -127,6 +131,13 @@ export class ReaderView extends ItemView {
   private refreshPending = false;
   private listLimit = 50;
   private search = '';
+  private topicFilter?: TopicFilter;
+  /** Only an article reached through a filtered browsing snapshot carries this origin. */
+  private filteredOrigin = false;
+  private filteredPaths: string[] = [];
+  private topicScan?: AbortController;
+  private topicScanner = new TopicScanner();
+  private topicPicker?: AbortController;
   constructor(
     leaf: WorkspaceLeaf,
     readonly host: ReaderHost,
@@ -138,7 +149,10 @@ export class ReaderView extends ItemView {
     return READER_VIEW;
   }
   getDisplayText(): string {
-    return this.file ? `Reader: ${this.articleLabel()}` : 'Reading list';
+    return this.file ? `Reader: ${this.articleLabel()}` : this.listLabel();
+  }
+  private listLabel(): string {
+    return this.topicFilter ? `Reading list: ${this.currentTopicFilter().label}` : 'Reading list';
   }
   private articleLabel(): string {
     return this.snapshot
@@ -369,7 +383,7 @@ export class ReaderView extends ItemView {
     const title = this.articleLabel();
     if (this.surface) this.surface.setTitle(title);
     else if (this.articleTitle) this.articleTitle.textContent = title;
-    const key = JSON.stringify([this.file?.path, this.queue, title]);
+    const key = JSON.stringify([this.file?.path, this.queue, this.getDisplayText()]);
     if (!this.stopping && !this.host.signal.aborted && key !== this.presentationKey) {
       this.presentationKey = key;
       // The host owns native transitions, including this presentation-only request.
@@ -411,6 +425,8 @@ export class ReaderView extends ItemView {
     return button;
   }
   private clear(): void {
+    this.topicScan?.abort();
+    this.topicScan = undefined;
     clearTimeout(this.selectionTimer);
     this.articleLifetime.abort();
     this.articleLifetime = new AbortController();
@@ -448,10 +464,15 @@ export class ReaderView extends ItemView {
   }
   showList(queue = this.queue): void {
     this.clear();
+    this.filteredOrigin = false;
     this.snapshot = undefined;
     this.queue = queue;
     this.syncPresentation();
     const list = this.contentEl.createDiv({ cls: 'reader-list' });
+    if (this.topicFilter) {
+      const heading = list.createEl('h2', { cls: 'reader-list-heading' });
+      heading.textContent = this.listLabel();
+    }
     const tabs = this.contentEl.createEl('nav', {
       cls: 'reader-toolbar reader-bottom-controls',
       attr: { 'aria-label': 'Reading list actions' },
@@ -470,12 +491,36 @@ export class ReaderView extends ItemView {
       button.classList.toggle('mod-cta', name === queue);
     }
     this.button(tabs, 'Add URL', () => this.host.capture(), 'plus');
+    const filterButton = this.button(
+      tabs,
+      'Filter by topic',
+      () => {
+        if (!this.topicFilter) return this.selectTopicFilter();
+        this.topicPicker?.abort();
+        this.topicFilter = undefined;
+        this.filteredPaths = [];
+        this.listLimit = 50;
+        this.showList();
+      },
+      'list-filter',
+    );
+    filterButton.classList.toggle('reader-filter-active', !!this.topicFilter);
+    filterButton.setAttribute('aria-pressed', String(!!this.topicFilter));
     let stopIndicators: (() => void) | undefined;
     const render = () => {
       stopIndicators?.();
-      list.empty();
+      // Keep the integrated heading across scan completion and Show more rerenders.
+      for (const child of Array.from(list.children))
+        if (!child.classList.contains('reader-list-heading')) child.remove();
       const visibleRows = new Map<HTMLElement, string>();
-      const rows = this.host.store.catalog.list(queue, this.search, 0, this.listLimit + 1);
+      const rows = this.topicFilter
+        ? this.filteredPaths
+            .flatMap((path) => {
+              const article = this.host.store.catalog.article(path);
+              return article?.queue === queue ? [article] : [];
+            })
+            .slice(0, this.listLimit + 1)
+        : this.host.store.catalog.list(queue, this.search, 0, this.listLimit + 1);
       for (const article of rows.slice(0, this.listLimit)) {
         const button = this.button(list, '', () => this.openArticle(article.path, true));
         button.addClass('reader-list-item');
@@ -483,7 +528,12 @@ export class ReaderView extends ItemView {
         visibleRows.set(button, article.path);
       }
       stopIndicators = this.observeRowIndicators(list, visibleRows);
-      if (!rows.length) list.createEl('p', { text: 'No articles in this queue.' });
+      if (!rows.length)
+        list.createEl('p', {
+          text: this.topicFilter
+            ? 'No matching articles in this queue.'
+            : 'No articles in this queue.',
+        });
       if (rows.length > this.listLimit)
         this.button(
           list,
@@ -495,7 +545,132 @@ export class ReaderView extends ItemView {
           'chevrons-down',
         );
     };
-    render();
+    if (!this.topicFilter) {
+      render();
+      return;
+    }
+    this.filteredPaths = [];
+    list.createEl('p', { text: 'Filtering articles…', attr: { role: 'status' } });
+    const controller = new AbortController();
+    this.topicScan = controller;
+    const lifetime = this.articleLifetime.signal;
+    const abort = () => controller.abort();
+    lifetime.addEventListener('abort', abort, { once: true });
+    this.host.signal.addEventListener('abort', abort, { once: true });
+    const filter = this.currentTopicFilter();
+    const generation = this.generation;
+    const candidates = this.host.store.catalog.list(queue, '', 0, this.host.store.catalog.size);
+    const resolve = (link: string, source: string) =>
+      this.app.metadataCache.getFirstLinkpathDest(link, source)?.path;
+    void this.topicScanner
+      .scan(candidates, {
+        signal: controller.signal,
+        file: (path) => this.host.store.vault.file(path),
+        read: (file) => this.host.store.vault.read(file),
+        metadataMatch: (article) => matchesTopicArticle(article, '', filter, resolve),
+        bodyMatch: (raw, article) => {
+          const document = readDocument(raw);
+          // Body matching is intentionally read-only and never triggers acquisition.
+          return (
+            document.properties.type === 'article' &&
+            matchesTopicArticle(article, document.body, filter, resolve)
+          );
+        },
+      })
+      .then(({ paths, uncertain }) => {
+        if (
+          controller.signal.aborted ||
+          this.stopping ||
+          this.generation !== generation ||
+          this.topicScan !== controller
+        )
+          return;
+        this.filteredPaths = paths;
+        render();
+        if (uncertain)
+          list.createEl('p', {
+            text: `${uncertain} article(s) could not be checked. Reopen the list to retry.`,
+            attr: { role: 'status' },
+          });
+      })
+      .catch((error) => {
+        if (!controller.signal.aborted && this.generation === generation) {
+          for (const child of Array.from(list.children))
+            if (!child.classList.contains('reader-list-heading')) child.remove();
+          list.createEl('p', {
+            text: 'Could not filter articles. Reopen the list to retry.',
+            attr: { role: 'alert' },
+          });
+          this.error(error);
+        }
+      })
+      .finally(() => {
+        lifetime.removeEventListener('abort', abort);
+        this.host.signal.removeEventListener('abort', abort);
+      });
+  }
+  /** Resolve aliases afresh so metadata edits do not leave a stale filter vocabulary. */
+  private currentTopicFilter(): TopicFilter {
+    const filter = this.topicFilter!;
+    if (!filter.path) return filter;
+    return (
+      this.availableTopics().find((topic) => topic.path === filter.path) ?? {
+        label: `${filter.label} (unavailable)`,
+        terms: [],
+      }
+    );
+  }
+  private availableTopics(): TopicFilter[] {
+    return this.app.vault
+      .getMarkdownFiles()
+      .flatMap((file) => {
+        const properties = this.app.metadataCache.getFileCache(file)?.frontmatter;
+        if (properties?.type !== 'topic') return [];
+        const aliases = Array.isArray(properties.aliases)
+          ? properties.aliases
+          : typeof properties.aliases === 'string'
+            ? [properties.aliases]
+            : [];
+        return [
+          {
+            label: file.basename,
+            path: file.path,
+            terms: [
+              file.basename,
+              ...aliases.filter(
+                (value): value is string => typeof value === 'string' && !!value.trim(),
+              ),
+            ],
+          },
+        ];
+      })
+      .sort((a, b) => a.label.localeCompare(b.label));
+  }
+  private async selectTopicFilter(): Promise<void> {
+    this.topicPicker?.abort();
+    const controller = new AbortController();
+    this.topicPicker = controller;
+    const abort = () => controller.abort();
+    // List data refreshes must not close the picker or discard an invalidation.
+    this.lifetime.signal.addEventListener('abort', abort, { once: true });
+    this.host.signal.addEventListener('abort', abort, { once: true });
+    try {
+      if (this.lifetime.signal.aborted || this.host.signal.aborted) return;
+      const selected = await chooseTopicFilter(
+        this.app,
+        this.availableTopics(),
+        this.topicFilter,
+        controller.signal,
+      );
+      if (!selected || controller.signal.aborted || this.stopping || this.snapshot) return;
+      this.topicFilter = selected;
+      this.listLimit = 50;
+      this.showList();
+    } finally {
+      this.lifetime.signal.removeEventListener('abort', abort);
+      this.host.signal.removeEventListener('abort', abort);
+      if (this.topicPicker === controller) this.topicPicker = undefined;
+    }
   }
   /** Positive-only, visible-row decoration. No catalog scan, promotion or persisted state. */
   private observeRowIndicators(list: HTMLElement, rows: Map<HTMLElement, string>): () => void {
@@ -610,22 +785,27 @@ export class ReaderView extends ItemView {
   }
   openArticle(path: string, fromList = false, signal?: AbortSignal): Promise<void> {
     if (signal?.aborted) return Promise.resolve();
+    this.topicPicker?.abort();
     this.cancelNodeCreation();
     // Snapshot every matching result at the click, not just the rendered first 50.
     const browsing = fromList
       ? {
           queue: this.queue,
-          paths: this.host.store.catalog
-            .list(this.queue, this.search, 0, this.host.store.catalog.size)
-            .map((article) => article.path),
+          filtered: !!this.topicFilter,
+          paths: this.topicFilter
+            ? [...this.filteredPaths]
+            : this.host.store.catalog
+                .list(this.queue, this.search, 0, this.host.store.catalog.size)
+                .map((article) => article.path),
         }
       : undefined;
-    return this.operation(() => this.openArticleNow(path, browsing, signal), false);
+    return this.operation(() => this.openArticleNow(path, browsing, signal, !fromList), false);
   }
   private async openArticleNow(
     path: string,
     browsing?: BrowsingContext,
     signal?: AbortSignal,
+    direct = false,
   ): Promise<void> {
     if (signal?.aborted) return;
     const request = ++this.opening;
@@ -648,6 +828,14 @@ export class ReaderView extends ItemView {
         return;
       targetFile = snapshot.file;
       const article = articleInfo(path, snapshot.properties)!;
+      // Commit direct entry only after leaving and destination reads succeed. A failed
+      // save/cancel must leave the current article and its filtered List route intact.
+      if (direct) {
+        this.filteredOrigin = false;
+        this.topicFilter = undefined;
+        this.filteredPaths = [];
+        this.readingQueue = new ReadingQueue();
+      }
       const origin =
         browsing ??
         (!this.readingQueue.current
@@ -661,6 +849,7 @@ export class ReaderView extends ItemView {
       this.clear();
       token = this.generation;
       this.snapshot = snapshot;
+      if (browsing) this.filteredOrigin = browsing.filtered === true;
       if (origin) {
         this.queue = origin.queue;
         const paths = origin.paths.map((item) => (item === path ? snapshot.path : item));
@@ -684,6 +873,12 @@ export class ReaderView extends ItemView {
       );
       this.surface = surface;
       this.articleTitle = surface.title;
+      if (this.filteredOrigin && this.topicFilter) {
+        const context = surface.title.ownerDocument.createElement('div');
+        context.className = 'reader-article-context';
+        context.textContent = this.listLabel();
+        surface.title.before(context);
+      }
       this.syncPresentation();
       surface.setBody(snapshot.body, article.url);
       if (this.surface !== surface) return; // The synchronous error callback installed the escape hatch.
@@ -750,6 +945,7 @@ export class ReaderView extends ItemView {
         this.host.paged ? `${label} page or article` : `${label} article`,
       );
     }
+    this.button(this.actions, 'Article topics', () => this.topics(), 'tags');
     this.button(this.actions, 'Read later', () => this.move('Later'), 'clock');
     this.button(this.actions, 'Archive', () => this.finish('keep'), 'archive').setAttribute(
       'aria-label',
@@ -1124,12 +1320,13 @@ export class ReaderView extends ItemView {
         .getMarkdownFiles()
         .filter((file) => this.app.metadataCache.getFileCache(file)?.frontmatter?.type === 'topic');
       this.assertDisplayed(snapshot, true);
-      const stored = snapshot.properties.topics;
+      let expectedBody = snapshot.body;
+      let stored = snapshot.properties.topics;
       if (stored !== undefined && !Array.isArray(stored))
         throw new Error(
           'Topics contains unrecognized data. Edit it in Markdown; Reader has not changed it.',
         );
-      const originals = (stored ?? []).map((value) => {
+      let originals = (stored ?? []).map((value) => {
         const link = linkPath(text(value));
         const file = link
           ? this.app.metadataCache.getFirstLinkpathDest(link, snapshot.file.path)
@@ -1140,58 +1337,224 @@ export class ReaderView extends ItemView {
           );
         return { value, link, file, path: file.path };
       });
-      const selected = await chooseTopics(
-        this.app,
-        files,
-        new Set(originals.map((original) => original.path)),
-        signal,
-      );
-      if (selected === null || signal.aborted || !this.current(snapshot, generation)) return;
-      await this.positionWrite;
-      if (signal.aborted || !this.current(snapshot, generation)) return;
-      const base = this.snapshot!;
-      if (
-        base.body !== snapshot.body ||
-        JSON.stringify(base.properties.topics) !== JSON.stringify(stored)
-      )
-        throw new Error('The article or topics changed while the picker was open. Reopen Topics.');
-      const targets = selected.map((path) => ({
-        path,
-        file: files.find((file) => file.path === path),
-      }));
-      const saved = await this.host.store.annotate(base, (raw) => {
+      const save = async (selected: string[], validate = () => {}) => {
+        if (signal.aborted || !this.current(snapshot, generation))
+          throw new Error('The article changed.');
+        await this.positionWrite;
         if (signal.aborted || !this.current(snapshot, generation))
           throw new Error('The article changed; reopen Topics.');
-        this.assertDisplayed(base, true);
-        for (const { path, file } of targets) {
-          if (
-            !file ||
-            file.path !== path ||
-            this.host.store.vault.file(path) !== file ||
-            this.app.metadataCache.getFileCache(file)?.frontmatter?.type !== 'topic'
-          )
-            throw new Error('A topic changed; reopen the picker.');
+        const base = this.snapshot!;
+        if (
+          base.body !== expectedBody ||
+          JSON.stringify(base.properties.topics) !== JSON.stringify(stored)
+        )
+          throw new Error(
+            'The article or topics changed while the picker was open. Reopen Topics.',
+          );
+        const targets = selected.map((path) => ({
+          path,
+          file: files.find((file) => file.path === path),
+        }));
+        const saved = await this.host.store.annotate(base, (raw) => {
+          if (signal.aborted || !this.current(snapshot, generation))
+            throw new Error('The article changed; reopen Topics.');
+          this.assertDisplayed(base, true);
+          validate();
+          for (const { path, file } of targets) {
+            if (
+              !file ||
+              file.path !== path ||
+              this.host.store.vault.file(path) !== file ||
+              this.app.metadataCache.getFileCache(file)?.frontmatter?.type !== 'topic'
+            )
+              throw new Error('A topic changed; reopen the picker.');
+          }
+          const retained = originals.filter((original) => selected.includes(original.path));
+          for (const original of retained) {
+            if (
+              this.app.metadataCache.getFirstLinkpathDest(original.link, snapshot.file.path) !==
+              original.file
+            )
+              throw new Error('An existing topic link changed meaning. Reopen Topics.');
+          }
+          const values = [
+            ...retained.map((original) => original.value),
+            ...selected
+              .filter((path) => !retained.some((original) => original.path === path))
+              .map(vaultLink),
+          ];
+          return patchProperties(raw, { topics: values.length ? values : undefined });
+        });
+        if (!this.current(snapshot, generation) || this.stopping) return;
+        this.adoptSnapshot(saved);
+        if (saved.body !== base.body) this.surface?.setBody(saved.body, text(saved.properties.url));
+        expectedBody = saved.body;
+        stored = saved.properties.topics;
+        originals = ((stored as string[] | undefined) ?? []).map((value) => {
+          const link = linkPath(value)!;
+          const file = this.app.metadataCache.getFirstLinkpathDest(link, saved.path)!;
+          return { value, link, file, path: file.path };
+        });
+        this.controls();
+        return saved;
+      };
+      let api: NodesApi | undefined;
+      let capable = false;
+      let disabledReason =
+        'Add topic requires Fileclass Inline with linked topic creation support.';
+      try {
+        api = nodesApi(this.app);
+        if (api?.createNodeForLink) {
+          capable = api.listTypes().some(({ type }) => type === 'topic');
+          disabledReason = 'Add topic requires an exact topic class in Fileclass Inline.';
         }
-        const retained = originals.filter((original) => selected.includes(original.path));
-        for (const original of retained) {
-          if (
-            this.app.metadataCache.getFirstLinkpathDest(original.link, snapshot.file.path) !==
-            original.file
-          )
-            throw new Error('An existing topic link changed meaning. Reopen Topics.');
-        }
-        const values = [
-          ...retained.map((original) => original.value),
-          ...selected
-            .filter((path) => !retained.some((original) => original.path === path))
-            .map(vaultLink),
-        ];
-        return patchProperties(raw, { topics: values.length ? values : undefined });
-      });
-      if (!this.current(snapshot, generation) || this.stopping) return;
-      this.snapshot = saved;
-      this.controls();
+      } catch {
+        disabledReason =
+          'Fileclass Inline topic creation is unavailable. Existing topics can still be selected.';
+      }
+      let creationWork: Promise<void> | undefined;
+      const assignment = new AbortController();
+      this.topicAssignment = assignment;
+      const abortAssignment = () => assignment.abort();
+      for (const lifetime of [signal, this.host.signal]) {
+        if (lifetime.aborted) abortAssignment();
+        else lifetime.addEventListener('abort', abortAssignment, { once: true });
+      }
+      try {
+        const selected = await chooseTopics(
+          this.app,
+          files,
+          new Set(originals.map((original) => original.path)),
+          assignment.signal,
+          {
+            disabledReason,
+            create: capable
+              ? (modalSignal, added, suggestedTitle) => {
+                  creationWork = this.createArticleTopic(
+                    api!,
+                    modalSignal,
+                    async (node, validate) => {
+                      const file = this.host.store.vault.file(node.path);
+                      if (
+                        !file ||
+                        readDocument(await this.host.store.vault.read(file)).properties.type !==
+                          'topic'
+                      )
+                        throw new Error(
+                          'The created note must have exact type: topic. Configure the Fileclass binding; Reader has not changed it.',
+                        );
+                      validate();
+                      if (!files.includes(file)) files.push(file);
+                      const saved = await save(
+                        [...new Set([...originals.map((original) => original.path), file.path])],
+                        validate,
+                      );
+                      if (!saved) throw new Error('The topic link was not committed.');
+                      added(file);
+                      return saved;
+                    },
+                    suggestedTitle,
+                  );
+                  return creationWork;
+                }
+              : undefined,
+          },
+          async (draft) => {
+            if (assignment.signal.aborted) throw new Error('The article changed; reopen Topics.');
+            const saved = await save(draft);
+            if (!saved) throw new Error('The topic link was not committed.');
+          },
+        );
+        // The modal can close while the provider is running. Drain our dispatched write,
+        // not the provider: createArticleTopic races cancellation itself.
+        await creationWork?.catch(() => {}); // The modal already displayed creation failures.
+        if (selected === null || signal.aborted || !this.current(snapshot, generation)) return;
+      } finally {
+        for (const lifetime of [signal, this.host.signal])
+          lifetime.removeEventListener('abort', abortAssignment);
+        if (this.topicAssignment === assignment) this.topicAssignment = undefined;
+      }
     });
+  }
+  private async createArticleTopic(
+    api: NodesApi,
+    modalSignal: AbortSignal,
+    commit: (node: NodeResult, validate: () => void) => Promise<Snapshot<TFile>>,
+    suggestedTitle?: string,
+  ): Promise<void> {
+    const source = this.snapshot;
+    if (!source) throw new Error('The article is no longer open.');
+    this.dialog = true;
+    const request = { controller: new AbortController(), source, writing: false };
+    this.nodeCreation = request;
+    const signals = [modalSignal, this.articleLifetime.signal, this.host.signal];
+    const abort = () => request.controller.abort();
+    for (const signal of signals) {
+      if (signal.aborted) abort();
+      else signal.addEventListener('abort', abort, { once: true });
+    }
+    let cancel!: () => void;
+    const cancelled = new Promise<void>((resolve) => {
+      cancel = resolve;
+      if (request.controller.signal.aborted) cancel();
+      else request.controller.signal.addEventListener('abort', cancel, { once: true });
+    });
+    let accepting = true,
+      attempted = false;
+    let pending: Promise<void> | undefined;
+    const check = () => {
+      if (!accepting || request.controller.signal.aborted)
+        throw new Error('Topic creation was cancelled or has finished.');
+      if (nodesApi(this.app) !== api || !api.listTypes().some(({ type }) => type === 'topic'))
+        throw new Error('Fileclass topic creation changed. Reopen Topics.');
+    };
+    const link = (node: NodeResult): Promise<void> => {
+      const run = async () => {
+        check();
+        if (attempted) throw new Error('The topic creation callback already ran.');
+        attempted = true;
+        const target = this.targetGuard(node.path, api, 'topic');
+        request.writing = true;
+        try {
+          request.source = await commit(node, () => {
+            check();
+            target();
+          });
+        } finally {
+          request.writing = false;
+        }
+        await this.checkNodeCreation();
+        check();
+      };
+      const result = run();
+      if (!pending) {
+        pending = result;
+        void pending.catch(() => {});
+      }
+      return result;
+    };
+    try {
+      check();
+      await Promise.race([
+        api.createNodeForLink!(
+          {
+            type: 'topic',
+            suggestedTitle,
+            sourcePath: source.path,
+            signal: request.controller.signal,
+          },
+          link,
+        ),
+        cancelled,
+      ]);
+    } finally {
+      accepting = false;
+      for (const signal of signals) signal.removeEventListener('abort', abort);
+      request.controller.signal.removeEventListener('abort', cancel);
+      if (this.nodeCreation === request) this.nodeCreation = undefined;
+      this.dialog = false;
+      await pending;
+    }
   }
   private async openLinked(target: string, newLeaf = false): Promise<void> {
     const snapshot = this.snapshot,
@@ -1466,6 +1829,7 @@ export class ReaderView extends ItemView {
     // Explicit navigation/action intent only, never save/render/position/background flush.
     // Run before entering the operation queue that Nodes currently occupies.
     this.nodeCreationEpoch++;
+    this.topicAssignment?.abort();
     this.nodeCreation?.controller.abort();
   }
   /** Validate only the active Nodes request, independently of its occupied operation queue.
@@ -1510,7 +1874,13 @@ export class ReaderView extends ItemView {
         else await this.checkNodeCreation();
       }
     }
-    if (change.previousPath) this.readingQueue.rename(change.previousPath, change.path);
+    if (change.previousPath) {
+      this.readingQueue.rename(change.previousPath, change.path);
+      if (this.topicFilter?.path === change.previousPath)
+        this.topicFilter = { ...this.topicFilter, path: change.path };
+    }
+    if (this.topicFilter && this.snapshot && change.path === this.topicFilter.path) this.controls();
+    if (this.topicFilter && !this.snapshot) this.topicScan?.abort();
     if (this.loadingPath) {
       if (
         this.snapshot &&
@@ -1525,14 +1895,14 @@ export class ReaderView extends ItemView {
         return;
       }
       // Batch arriving feeds and leave a focused search input untouched.
-      if (change.metadataChanged && this.listFrame === undefined)
+      if ((change.metadataChanged || this.topicFilter) && this.listFrame === undefined)
         this.listFrame = requestAnimationFrame(() => {
           this.listFrame = undefined;
           if (
             !this.snapshot &&
             !this.loadingPath &&
             !this.lifetime.signal.aborted &&
-            this.contentEl.ownerDocument.activeElement?.tagName !== 'INPUT'
+            (this.topicFilter || this.contentEl.ownerDocument.activeElement?.tagName !== 'INPUT')
           )
             this.showList();
         });

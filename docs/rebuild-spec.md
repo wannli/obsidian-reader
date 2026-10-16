@@ -78,7 +78,7 @@
 - Link highlighted passages to existing vault notes while preserving the original wording.
 - Remove highlight, change target, and unlink while keeping the highlight are supported.
 - Passage-menu language is “note”: Open note (linked), Link to note / Change link, Create note, then separated Remove link and Remove highlight actions. Approved shared-picker update: both Link/Change and Create note open Fileclass Inline’s existing picker, seeded with the passage title, for existing notes or inline creation. Remove All notes entirely; Reader owns no note picker.
-- Topics are links to existing topic notes in frontmatter; no topic creation interface.
+- Topics are frontmatter links to notes with exact `type: topic`. Approved 16 October: bottom-toolbar multiselect assignment, and transient current-queue filtering by topic name/aliases or free text, matching explicit links OR whole words/phrases in titles/bodies. The Reader-owned list heading and filtered article context read `Reading list: <topic>`; Obsidian's host-owned native navigation header need not refresh. The accent filter button clears on click, without a separate banner. Wannes additionally approved Create topic through Fileclass Inline API v2 `createNodeForLink`, linking before required completion; no Reader-owned creation fallback. See [topic-filter acceptance scope](topic-filter.md).
 - Optional Nodes integration supports schema-aware search of existing nodes AND node creation.
 - Joint-testing follow-up requires public **Nodes API v2** (`fileclass-inline.api`), not Reader-created node files/forms/schemas or private Fileclass calls. Older API versions are not silently accepted.
 - V2 exposes Fileclass classes/icons, not schema colors; highlights keep their standard appearance. This replaces the earlier v1 color integration requirement.
@@ -131,7 +131,7 @@ Five focused responsibilities, not five independent frameworks:
 - Prefer a safely retained/promoted article over deletion after a partial failure; report failures.
 - Do not remount the article for position saves, unrelated feed updates, or list changes.
 - Parse/render an article body when needed, not every article to populate a list.
-- No full-vault body scan on navigation, highlighting, or reading-position updates.
+- No full-vault body scan on navigation, highlighting, or reading-position updates. An explicitly active topic filter may read the current queue on demand with bounded concurrency and cancellation; no acquisition, mutation or persistent body index.
 - Keep list rendering and background concurrency bounded; cancel work when no longer relevant.
 - Do not replace platform constraints with a fake browser application or large automation framework.
 
@@ -151,7 +151,7 @@ Changes to this contract still require approval. Development uses an explicitly 
 - Target <5 seconds for focused checks and <10 seconds for the full automated test suite locally.
 - Keep all correctness tests enabled and isolated; do not meet budgets by weakening assertions.
 - Prefer pure Node tests; create DOM environments only for behavior that needs them.
-- No automated E2E suite: explicitly rejected by Wannes. No live network, deliberate sleeps, or release builds in routine unit/component tests.
+- No general automated E2E suite. Wannes requested local E2E acceptance for topic filtering on 16 October before remote delivery; a synthetic-host browser run is not native/device acceptance. No live network, deliberate sleeps, or release builds in routine unit/component tests.
 - Time and report actual runs; physical-device acceptance stays explicit and separate.
 
 ## Performance and acceptance
