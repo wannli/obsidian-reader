@@ -10,6 +10,8 @@ export interface ArticleInfo {
   queue?: Queue;
   /** Only a validated, explicitly persisted status; missing Feed is not expirable. */
   status?: ArticleStatus;
+  /** The one article to resume from the iOS shortcut (independent of bookmark position). */
+  dogEar: boolean;
   published?: string;
   feed?: string;
   topics: string[];
@@ -124,6 +126,7 @@ export function articleInfo(path: string, properties: Properties): ArticleInfo |
     url,
     queue: queueAt(properties),
     status: Object.hasOwn(properties, 'status') ? articleStatus(properties.status) : undefined,
+    dogEar: properties.dog_ear === true,
     published,
     feed: text(properties.feed) || undefined,
     topics: Array.isArray(properties.topics)

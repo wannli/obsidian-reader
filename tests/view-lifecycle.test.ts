@@ -494,8 +494,9 @@ describe('Reader operation and close lifecycle', () => {
     });
     const updating = f.view.changed({ path: a.path });
     await started.promise;
-    await f.view.openArticle(b.path);
+    const navigating = f.view.openArticle(b.path);
     finish.resolve();
+    await navigating;
     await updating;
     expect(f.view.file).toBe(b);
     expect(f.probe.surface.body.textContent).toBe('new article');
@@ -1128,7 +1129,10 @@ describe('automatic selection event ownership', () => {
       expect(f.vault.trashed).toEqual(label === 'Delete' ? [originalPath] : []);
       if (label !== 'Delete') {
         expect(await f.vault.read(f.article)).toBe(
-          label === 'Archive' ? patchProperties(original, { status: 'archive' }) : original,
+          patchProperties(original, {
+            dog_ear: undefined,
+            ...(label === 'Archive' ? { status: 'archive' } : {}),
+          }),
         );
         expect(f.article.path).toBe(originalPath);
       }
@@ -1539,6 +1543,55 @@ describe('public article commands', () => {
     f.signal.abort();
     for (const id of ['move', 'topics', 'open-markdown']) expect(command(id)).toBe(false);
     f.view.stopForUnload();
+  });
+});
+
+describe('public dog-ear command and URI', () => {
+  afterEach(() => vi.unstubAllGlobals());
+  it('moves the dog ear on next navigation without changing either reading-position bookmark', async () => {
+    const f = hostFixture();
+    const first = await f.note('Reading/Inbox/A.md', 'first article');
+    const second = await f.note('Reading/Inbox/B.md', 'second article');
+    await f.view.openArticle(first.path, true);
+    expect((await f.store.read(first.path)).properties.dog_ear).toBe(true);
+    await f.view.navigate(1);
+    expect(f.view.file).toBe(second);
+    expect((await f.store.read(first.path)).properties).not.toHaveProperty('dog_ear');
+    expect((await f.store.read(second.path)).properties.dog_ear).toBe(true);
+    expect((await f.store.read(first.path)).properties).not.toHaveProperty('bookmark');
+  });
+  it.each(['command', 'uri'])(
+    'opens the marked article and falls back to newest Inbox (%s)',
+    async (route) => {
+      const f = await pluginFixture();
+      const older = await f.note('Reading/Inbox/Older.md');
+      const newest = await f.note('Reading/Inbox/Newest.md');
+      vi.mocked(f.app.workspace.getActiveViewOfType).mockReturnValue(f.view);
+      // Same date: title sorts before path, so Older precedes Newest by title.
+      const first = f.store.catalog.list('Inbox', '', 0, 1)[0].path;
+      const invoke = () =>
+        route === 'command'
+          ? mocks.commands.get('open-dog-ear')!.callback!()
+          : mocks.protocols.get('obsidian-reader')!({ view: 'dog-ear' });
+      invoke();
+      await vi.waitFor(() => expect(f.view.file?.path).toBe(first));
+      await f.store.dogEar(first === older.path ? newest.path : older.path);
+      invoke();
+      await vi.waitFor(() =>
+        expect(f.view.file?.path).toBe(first === older.path ? newest.path : older.path),
+      );
+    },
+  );
+  it('copies a vault-aware shortcut link only on request', async () => {
+    const clipboard = { writeText: vi.fn(async (_link: string) => {}) };
+    vi.stubGlobal('navigator', { clipboard });
+    const f = await pluginFixture();
+    vi.mocked(f.app.vault.getName).mockReturnValue('iPhone & Boox');
+    expect(clipboard.writeText).not.toHaveBeenCalled();
+    await mocks.commands.get('copy-dog-ear-link')!.callback!();
+    expect(clipboard.writeText).toHaveBeenCalledWith(
+      'obsidian://obsidian-reader?vault=iPhone%20%26%20Boox&view=dog-ear',
+    );
   });
 });
 
@@ -2822,7 +2875,7 @@ describe('Reader mobile control styling', () => {
         expect(css.height).toBe('100px');
         expect(css.boxShadow).not.toBe('none');
       }
-      expect(await f.vault.read(article)).toBe(raw);
+      expect(await f.vault.read(article)).toBe(patchProperties(raw, { dog_ear: true }));
     } finally {
       host.remove();
       reader.remove();
@@ -2917,7 +2970,7 @@ describe('leaf-scoped floating Reader layout', () => {
         expect(
           rule('.reader-view .reader-bottom-controls').getPropertyValue('backdrop-filter'),
         ).toBe('');
-        expect(await f.vault.read(file)).toBe(raw);
+        expect(await f.vault.read(file)).toBe(patchProperties(raw, { dog_ear: true }));
       } finally {
         style.remove();
       }
@@ -3229,7 +3282,7 @@ describe('YAML queue presentation', () => {
       f.store.catalog.update(article.path, readDocument(raw).properties);
       expect(f.store.catalog.article(article.path)?.queue).toBe(queue);
       await f.view.openArticle(article.path);
-      expect(await f.vault.read(article)).toBe(raw);
+      expect(await f.vault.read(article)).toBe(patchProperties(raw, { dog_ear: true }));
       f.probe.surface.selectionValue = { quote: 'words', before: 'before ', after: ' after' };
       await f.probe.saveSelection();
       const saved = await f.store.read(article.path);
@@ -3266,7 +3319,7 @@ describe('YAML queue presentation', () => {
       const original = await f.vault.read(article);
       await f.view.openArticle(article.path);
       expect(f.probe.surface.restore).toHaveBeenCalledWith(bookmark ?? '');
-      expect(await f.vault.read(article)).toBe(original);
+      expect(await f.vault.read(article)).toBe(patchProperties(original, { dog_ear: true }));
     },
   );
 });
@@ -3424,7 +3477,7 @@ describe('browsing context and presentation', () => {
     await f.probe.finish('keep');
     expect(b.path).toBe('Cache/Feed/B.md');
     expect(f.vault.bytes.get(a)).toBe(rawA);
-    expect(f.vault.bytes.get(b)).toBe(patchProperties(rawB!, { status: 'archive' }));
+    expect(f.vault.bytes.get(b)).toBe(patchProperties(rawB!, { status: 'archive', dog_ear: true }));
   });
   it('snapshots every matching search result, excluding unrelated and later-arriving articles', async () => {
     const f = hostFixture();
@@ -3511,7 +3564,7 @@ describe('browsing context and presentation', () => {
       const raw = await f.vault.process(file, (current) => patchProperties(current, properties));
       await f.view.openArticle(file.path);
       expect(file.path).toBe('Reading/Feed/Article.md');
-      expect(await f.vault.read(file)).toBe(raw);
+      expect(await f.vault.read(file)).toBe(patchProperties(raw, { dog_ear: true }));
       expect((await f.store.read(file.path)).properties.status).toBe('feed');
     },
   );
@@ -3672,7 +3725,7 @@ describe('commit-time annotation targets', () => {
     await f.view.openArticle(article.path);
     await expect(f.probe.topics()).rejects.toThrow(/Markdown/);
     expect(mocks.topics).not.toHaveBeenCalled();
-    expect(await f.vault.read(article)).toBe(original);
+    expect(await f.vault.read(article)).toBe(patchProperties(original, { dog_ear: true }));
   });
 
   it('retains an article promoted before a link target disappears, without saving the stale link', async () => {

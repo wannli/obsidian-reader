@@ -17,6 +17,7 @@ feed: '[[Reading/Feeds/Example.md]]'
 topics:
   - '[[Topics/Example topic.md]]'
 bookmark: These words identify the reading position
+dog_ear: true
 ---
 
 The article is ordinary Markdown.
@@ -33,9 +34,10 @@ A ==[**formatted** passage](/Nodes/Example.md)== preserves its formatting.
 - Only an explicit, freshly verified `status: feed` is eligible for expiry. Displayed queue membership is never deletion authority.
 - Normal transitions: Inbox → Later/Archive; Feed → Later/Archive; Later → Archive; Archive → Later. Manual queue selection is reversible and writes the chosen status. A changed explicit status moves the note only if that status has a folder mapping; same-status selection leaves its path unchanged.
 - A saved highlight or user-created passage link promotes Feed (including missing status) to Later before annotation is committed. Inbox, Later and Archive annotations leave status unchanged. Removing a highlight never demotes an article. Publisher links do not count.
-- Opening, scrolling, reaching the end, or saving a bookmark never changes status. There is no completion flag or read history.
+- Opening, scrolling, reaching the end, or saving a bookmark never changes status. There is no completion flag or read history. Opening an article in Reader moves the optional `dog_ear: true` current-article pointer to it, without changing status or its own reading-position `bookmark`.
 - `title`, `published`, `feed`, `topics`, `bookmark`, and `error` are optional. Existing notes may lack dates; there is no legacy backfill. The `feed` link retains subscription provenance after status changes; `status: feed` does not identify a subscription note.
 - `bookmark` is the existing bounded text-anchor representation, not a pixel offset, percentage, favorite or completion marker. It may cross inline formatting. Duplicate passages remain best effort; image-only pages keep the last valid text anchor.
+- `dog_ear: true` identifies the last successfully opened Reader article for the Open dog-eared article command and URI. The pointer moves on article entry, not on list display, and is independent of position and queue. If no usable pointer exists, the route opens the newest Inbox article. Only exact boolean `true` counts; other authored values are never overwritten automatically. The handoff writes two Markdown notes with ordinary guarded writes; cross-device Sync cannot make them atomic, so interruptions or concurrent device edits can temporarily leave multiple pointers.
 - `reading_position` is no longer read or written. Existing values are preserved as unknown data, with no automatic conversion or fallback.
 - Reader captures always write `published`: a valid supplied publication wins, otherwise the original capture time. New writes use an unquoted local wall-clock minute in Obsidian's `YYYY-MM-DDTHH:mm` format, without seconds or timezone suffix. Zone-free values follow the current device's timezone/DST interpretation, not a unique instant across devices or repeated DST hours. Existing date-only, offset and full ISO values remain readable and are never normalized by unrelated edits.
 - Externally created articles qualify only through a live native vault `create` event after layout readiness, with a finite `file.stat.ctime` between that readiness boundary and event observation. Reader freezes its local minute then, waits for exact `type: article`, and adds `published` only when the property is absent. Nonempty/offline bodies are preserved. Dirty or racing notes can retry on metadata/editor-layout changes. Every existing publication value, including empty, null or invalid values, stays untouched.

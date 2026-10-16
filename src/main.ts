@@ -103,6 +103,18 @@ export default class ReaderPlugin extends Plugin {
     this.registerObsidianProtocolHandler(READER_VIEW, (params) => {
       // Core Obsidian URI routing selects the vault. Interpret only our view selector.
       if (params.view === 'list') openReadingList();
+      else if (params.view === 'dog-ear')
+        void this.openDogEar().catch((error) => this.notice(error));
+    });
+    this.addCommand({
+      id: 'open-dog-ear',
+      name: 'Open dog-eared article',
+      callback: () => void this.openDogEar().catch((error) => this.notice(error)),
+    });
+    this.addCommand({
+      id: 'copy-dog-ear-link',
+      name: 'Copy dog-ear link',
+      callback: () => void this.copyReaderLink('dog-ear'),
     });
     this.addCommand({
       id: 'copy-reading-list-link',
@@ -709,21 +721,50 @@ export default class ReaderPlugin extends Plugin {
     }
   }
   private async copyReadingListLink(): Promise<void> {
+    await this.copyReaderLink('list');
+  }
+  private async copyReaderLink(view: 'list' | 'dog-ear'): Promise<void> {
     if (this.signal.aborted) return;
+    const label = view === 'list' ? 'reading-list' : 'dog-ear',
+      display = view === 'list' ? 'Reading-list' : 'Dog-ear';
     try {
       const clipboard = navigator.clipboard;
       if (typeof clipboard?.writeText !== 'function') {
-        this.notice('Clipboard is unavailable on this device. Reading-list link was not copied.');
+        this.notice(`Clipboard is unavailable on this device. ${display} link was not copied.`);
         return;
       }
-      const link = `obsidian://${READER_VIEW}?vault=${encodeURIComponent(this.app.vault.getName())}&view=list`;
+      const link = `obsidian://${READER_VIEW}?vault=${encodeURIComponent(this.app.vault.getName())}&view=${view}`;
       await clipboard.writeText(link);
-      this.notice('Reading-list link copied.');
+      this.notice(`${view === 'list' ? 'Reading-list' : 'Dog-ear'} link copied.`);
     } catch (error) {
       this.notice(
-        `Could not copy the reading-list link: ${error instanceof Error ? error.message : String(error)}`,
+        `Could not copy the ${label} link: ${error instanceof Error ? error.message : String(error)}`,
       );
     }
+  }
+  private async openDogEar(): Promise<void> {
+    const signal = this.signal;
+    if (signal.aborted) return;
+    const marked = [...this.store.catalog.values()].filter((article) => article.dogEar);
+    const inbox = this.store.catalog.list('Inbox', '', 0, this.store.catalog.size);
+    let path: string | undefined;
+    for (const article of [...marked, ...inbox]) {
+      if (signal.aborted) return;
+      try {
+        const snapshot = await this.store.read(article.path);
+        if (marked.includes(article) && snapshot.properties.dog_ear !== true) continue;
+        path = snapshot.path;
+        break;
+      } catch {
+        // A removed/stale indexed article cannot be the shortcut destination.
+      }
+    }
+    if (!path || signal.aborted) {
+      if (!signal.aborted) this.notice('No dog-eared article or Inbox article found.');
+      return;
+    }
+    const view = this.app.workspace.getActiveViewOfType(ReaderView) ?? (await this.openList());
+    if (!signal.aborted) await view.openArticle(path);
   }
   async openList(queue?: Queue): Promise<ReaderView> {
     const signal = this.signal;

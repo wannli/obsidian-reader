@@ -64,7 +64,7 @@ Only notes with explicit `status: feed` can expire, one calendar month after the
 - An active topic filter uses Obsidian's accent colour and displays **Reading list: topic** in the list and above articles opened from it. Click the active filter button to clear it; click it when inactive to open the picker. From an article, return to **List** first. Switching queues retains the filter; Previous/Next follows the filtered list.
 - Use **Open Markdown** to edit an article, or the bottom-bar **Topics** multiselect to assign existing topics. Tap a topic row to select it; selected topics stay visible while searching. Save confirms the write before closing and keeps your choices if it fails. **Add topic** creates a note through compatible Fileclass Inline; see below. Filtering is read-only; assigning topics to a Feed article retains it in Later.
 - On desktop, **j / k** navigate articles. At article boundaries, **Up / PageUp** and **Down / PageDown** move to the previous or next article, resuming its saved position.
-- On iPhone, **Copy reading-list link** gives you a vault-aware link for a Shortcuts **URL → Open URLs → Add to Home Screen** shortcut.
+- On iPhone, **Copy reading-list link** opens the library. **Copy dog-ear link** opens the last article you opened in Reader, or the first (newest) Inbox article if none is marked. Each gives you a vault-aware link for a Shortcuts **URL → Open URLs → Add to Home Screen** shortcut. You can also use **Open dog-eared article** from the command palette.
 
 Lists follow the note’s `status`, not its folder. Optional **Status folders** settings can move articles when their status changes, and place new Reader captures in the matching folder. Applying these settings does not reorganize existing notes. Leave a mapping blank for no move; use `/` for the vault root. Moves respect Obsidian’s internal-link update preference; disabling it can leave links broken.
 
@@ -119,6 +119,7 @@ feed: '[[Reading/Feeds/Example feed.md]]'
 topics:
   - '[[Topics/Reading.md]]'
 bookmark: An important passage remains ordinary Markdown
+dog_ear: true
 ---
 
 An ==important passage== remains ordinary Markdown.
@@ -126,7 +127,7 @@ An ==important passage== remains ordinary Markdown.
 A ==[[Notes/A useful idea.md|linked passage]]== links directly to a note.
 ```
 
-`title`, `published`, `feed`, `topics`, and `bookmark` are optional. Local articles do not need a URL to be read. The bookmark is a text anchor, not a page number, completion flag, or reading history. Pagination preferences stay device-local.
+`title`, `published`, `feed`, `topics`, `bookmark`, and `dog_ear` are optional. Local articles do not need a URL to be read. The bookmark is a text anchor, not a page number, completion flag, or reading history. Reader moves `dog_ear: true` when it opens another article; it does not replace any article's bookmark. Pagination preferences stay device-local.
 
 A subscription might look like this:
 

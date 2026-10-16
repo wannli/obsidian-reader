@@ -61,6 +61,7 @@ export interface Snapshot<File extends NoteFile> {
 export class ArticleStore<File extends NoteFile> {
   readonly catalog: Catalog;
   private writes = new SerialWrites<File>();
+  private dogEarWrites = new SerialWrites<string>();
   private creates = new SerialWrites<string>();
   // Imports and explicit trash share a lane through the final native operation.
   private rss = new SerialWrites<string>();
@@ -461,6 +462,37 @@ export class ArticleStore<File extends NoteFile> {
       });
       if (promote && folder !== undefined) return this.relocate(annotated, 'later', folder);
       return annotated;
+    });
+  }
+  /** One serialized local transition; native Sync cannot make two-note writes atomic. */
+  dogEar(path: string, guard: () => void = () => {}): Promise<Snapshot<File>> {
+    return this.dogEarWrites.run('current', async () => {
+      guard();
+      const destination = await this.read(path);
+      guard();
+      if (destination.properties.dog_ear !== undefined && destination.properties.dog_ear !== true)
+        throw new Error('Unsupported dog_ear value; preserved the note.');
+      // Write the destination first: an unsuccessful write never removes the old pointer.
+      const marked = await this.writes.run(destination.file, async () => {
+        guard();
+        const fresh = await this.read(destination.file.path);
+        guard();
+        return this.commit(fresh, (raw) => {
+          guard();
+          return patchProperties(raw, { dog_ear: true });
+        });
+      });
+      for (const article of this.catalog.values()) {
+        if (!article.dogEar || article.path === marked.path) continue;
+        const file = this.vault.file(article.path);
+        if (!file) continue;
+        await this.writes.run(file, async () => {
+          const previous = await this.read(file.path);
+          if (previous.properties.dog_ear === true)
+            await this.commit(previous, (raw) => patchProperties(raw, { dog_ear: undefined }));
+        });
+      }
+      return marked;
     });
   }
   position(path: string, marker: string): Promise<Snapshot<File>> {

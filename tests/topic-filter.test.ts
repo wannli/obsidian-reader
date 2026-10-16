@@ -9,6 +9,7 @@ const article: ArticleInfo = {
   topics: [],
   date: 0,
   queue: 'Later',
+  dogEar: false,
 };
 const filter: TopicFilter = {
   label: 'Climate change',

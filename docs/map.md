@@ -56,7 +56,7 @@ Runtime libraries: `yaml`, `marked`, `entities`, `dompurify`, `defuddle`. No UI 
 
 ## Reader: presentation and transient state
 
-- `reader/view.ts`: flat library/article UI, original browsing context, selection operations, guarded async lifetimes, native menus and Markdown escape. Transient topic filters retain filtered navigation; the Topics toolbar action reuses guarded assignment. Opened-before (not finished) and highlight indicators use existing `bookmark` + Markdown highlights only; no new metadata/YAML/history.
+- `reader/view.ts`: flat library/article UI, original browsing context, selection operations, guarded async lifetimes, native menus and Markdown escape. Transient topic filters retain filtered navigation; the Topics toolbar action reuses guarded assignment. Opened-before (not finished) and highlight indicators use existing `bookmark` + Markdown highlights only; the separate `dog_ear` pointer is for shortcut navigation, not an indicator or read history.
 - `core/topic-filter.ts`, `reader/topic-scan.ts`, `host/topic-filter-dialog.ts`: pure topic/alias/visible-text matching, cancellable current-queue reads and the topic/free-text filter picker. Filtering never acquires or writes articles; see [acceptance scope](topic-filter.md).
 - `reader/render.ts`: sanitized Markdown rendering and lazy remote images with failure cooldown.
 - `reader/images.ts`: disposable click/tap/keyboard image enlargement; inline image height remains bounded by the reading viewport.
@@ -92,7 +92,7 @@ Final overall backup audit: 43 → 43, no additions/deletions; only `reading_pos
 
 See [recorded evidence and phone checklist](mobile-smoke.md) (`reader-redesign-audit.json`, `native-folder-apply.json`, `native-resume.json`, `routing.json`, `uri.json`) and the [historical/current report](rebuild-report.html). That installed build's recorded validation: 1042 unit + 72 tooling = 1114; test-only 8.258s, full check 12.361s. Automated geometry and the four-width production Surface browser checks are not physical-device evidence.
 
-The source additionally preserves image enlargement, web-link capture, transient highlight acknowledgement and tracked native-title refresh. The six-action toolbar sets Later (clock) without advancing, or Archive (archive icon) and advances; queue changes write YAML and leave paths unchanged unless that status has an opt-in folder mapping. Reading state is now `bookmark`, with legacy position values preserved/inert. Source regressions do not extend earlier native acceptance; implementation does not install, convert or reload a vault.
+The source additionally preserves image enlargement, web-link capture, transient highlight acknowledgement and tracked native-title refresh. The six-action toolbar sets Later (clock) without advancing, or Archive (archive icon) and advances; queue changes write YAML and leave paths unchanged unless that status has an opt-in folder mapping. Reading position is `bookmark`, with legacy position values preserved/inert; `dog_ear` independently identifies the current shortcut article. Source regressions do not extend earlier native acceptance; implementation does not install, convert or reload a vault.
 
 Remaining checks require a future authorized window; the current native hold remains true:
 

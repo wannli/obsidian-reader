@@ -891,7 +891,16 @@ export class ReaderView extends ItemView {
         attr: { 'aria-label': 'Article actions' },
       });
       this.controls();
-      if (article.url)
+      try {
+        const marked = await this.host.store.dogEar(snapshot.path, () => {
+          if (!this.current(snapshot, token!) || signal?.aborted || request !== this.opening)
+            throw new Error('Article navigation was cancelled.');
+        });
+        if (this.current(snapshot, token)) this.adoptSnapshot(marked);
+      } catch (error) {
+        if (this.current(snapshot, token)) this.error(error);
+      }
+      if (article.url && this.current(snapshot, token))
         void this.host.ingestion.acquire(snapshot.path, true).catch((error) => this.error(error));
     } catch (error) {
       if (signal?.aborted) return;

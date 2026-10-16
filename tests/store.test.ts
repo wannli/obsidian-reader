@@ -26,6 +26,57 @@ function highlight(raw: string): string {
   return replaceBody(raw, body, addHighlight(body, range.from, range.to));
 }
 
+describe('dog-ear handoff', () => {
+  it('marks the destination, removes the old marker and preserves independent bookmarks', async () => {
+    const { store, vault, file } = await setup('Inbox');
+    const second = await store.capture({ url: 'https://example.com/two', queue: 'Inbox' });
+    await store.position(file.path, 'A meaningful passage.');
+    await store.dogEar(file.path);
+    await store.dogEar(second.path);
+    expect((await store.read(file.path)).properties).toMatchObject({
+      bookmark: 'A meaningful passage.',
+    });
+    expect((await store.read(file.path)).properties).not.toHaveProperty('dog_ear');
+    expect((await store.read(second.path)).properties.dog_ear).toBe(true);
+    expect(
+      [...store.catalog.values()].filter((item) => item.dogEar).map((item) => item.path),
+    ).toEqual([second.path]);
+    expect(vault.files.size).toBe(2);
+  });
+  it('retains both pointers rather than overwriting unsafe old-note bytes after marking a new article', async () => {
+    const { store, vault, file } = await setup();
+    const second = await store.capture({ url: 'https://example.com/two' });
+    await store.dogEar(file.path);
+    const process = vault.process.bind(vault);
+    vault.process = async (target, update) => {
+      if (target === file) throw new Error('Old note is not writable');
+      return process(target, update);
+    };
+    await expect(store.dogEar(second.path)).rejects.toThrow('Old note is not writable');
+    expect((await store.read(file.path)).properties.dog_ear).toBe(true);
+    expect((await store.read(second.path)).properties.dog_ear).toBe(true);
+    vault.process = process;
+    await store.dogEar(second.path);
+    expect((await store.read(file.path)).properties).not.toHaveProperty('dog_ear');
+  });
+  it('leaves the old marker if the destination is unsafe or its write fails', async () => {
+    const { store, vault, file } = await setup();
+    const second = await store.capture({ url: 'https://example.com/two' });
+    await store.dogEar(file.path);
+    vault.failWrite = true;
+    await expect(store.dogEar(second.path)).rejects.toThrow('Disk full');
+    vault.failWrite = false;
+    expect((await store.read(file.path)).properties.dog_ear).toBe(true);
+    expect((await store.read(second.path)).properties).not.toHaveProperty('dog_ear');
+    vault.bytes.set(
+      second,
+      (await vault.read(second)).replace('type: article', 'type: article\ndog_ear: other'),
+    );
+    await expect(store.dogEar(second.path)).rejects.toThrow('Unsupported dog_ear');
+    expect((await store.read(file.path)).properties.dog_ear).toBe(true);
+  });
+});
+
 describe('guarded article operations', () => {
   it('rechecks capture-modal cancellation immediately before moving a duplicate to Inbox', async () => {
     const { vault, store, file, snapshot } = await setup();

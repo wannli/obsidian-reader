@@ -56,7 +56,7 @@
 - Floating controls stay within the Reader pane, with safe-area and final-content clearance. Desktop uses the available pane width, and scrollbars must not overlap text.
 - Right-side indicators show opened-before (existing usable `bookmark`, not completion) and highlights (derived Markdown). Use bounded, cancellable reads; no whole-vault body scan, new YAML fields, timestamps, sidecars or persisted read/annotation history.
 - Archive and subscription-management buttons are absent from the main view; Open Archive and Manage feeds commands retain access without deleting data.
-- Open reading list and Copy reading-list link commands share a navigation-only URI route using the current device’s encoded vault name; clipboard access is explicit and write-only.
+- Open reading list and Copy reading-list link commands share a navigation-only URI route using the current device’s encoded vault name; clipboard access is explicit and write-only. Open dog-eared article and Copy dog-ear link use the same vault-aware route (`view=dog-ear`); without a valid pointer they open the newest Inbox article.
 - Read later (clock) writes `status: later`, stays open and preserves browsing context. Archive writes `status: archive` and advances; Delete uses recoverable trash and advances. Previous/Next retain the original browsing context; List returns to it.
 - Open Markdown, Topics and explicit Change article status remain context-aware commands, not duplicate article buttons. Visually avoid a repeated leading title without rewriting authored Markdown/headings.
 - Ordinary highlights must remain visible when the host does not define its optional highlight-colour variable; preserve native theme integration with a safe fallback.
@@ -64,7 +64,7 @@
 - No user-facing batch-delete or "delete newer articles" command in v1.
 - Exact `type: article` notes open in Reader. Open Markdown explicitly retains the native editor; dirty/uncertain editors, stale files and navigation intent are protected.
 - Ordinary notes remain native; article queues are independent of folders. Invalid-status articles remain readable but unqueued.
-- Remember reading position as a text anchor in `bookmark` and restore it across sessions/devices via vault sync. Legacy `reading_position` remains preserved and inert, without fallback or conversion. List opens and next/previous navigation, including boundary keys, resume each article’s own saved position; do not force next-start/previous-end entry.
+- Remember reading position as a text anchor in `bookmark` and restore it across sessions/devices via vault sync. The separate `dog_ear: true` current-article pointer moves on successful article entry and leaves reading-position anchors intact. Legacy `reading_position` remains preserved and inert, without fallback or conversion. List opens and next/previous navigation, including boundary keys, resume each article’s own saved position; do not force next-start/previous-end entry.
 - Desktop j/k navigates articles, except while typing or interacting with menus/dialogs.
 - Use native typography, themes, menus, and pickers; no Reader theme/type settings.
 - Hide the floating mobile navigation bar only while Reader is active; restore it on normal notes/exit/unload, without hiding capture/keyboard controls.
