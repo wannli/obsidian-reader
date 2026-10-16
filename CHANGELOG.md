@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.9.2](https://github.com/wannli/obsidian-reader/compare/0.9.1...0.9.2) (2026-10-16)
+
+
+### Fixed
+
+* **selection:** reconcile stale touch pointers after native release ([f54f604](https://github.com/wannli/obsidian-reader/commit/f54f6040a3081994dbf7016a29b5bc7002ce0f9a))
+
 ## [0.9.1](https://github.com/wannli/obsidian-reader/compare/0.9.0...0.9.1) (2026-10-16)
 
 
