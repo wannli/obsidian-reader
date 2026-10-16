@@ -535,6 +535,49 @@ it.each(['pointerup', 'pointercancel'])(
   },
 );
 
+it.each(['touchend'])(
+  'independently releases only touch pointers on authoritative empty %s',
+  (release) => {
+    fixture();
+    const down = (id: number, pointerType: string) => {
+      const event = new MouseEvent('pointerdown', { button: 0, bubbles: true });
+      Object.assign(event, { pointerId: id, pointerType });
+      surface.body.dispatchEvent(event);
+    };
+    const touch = (active?: number[]) => {
+      const event = new Event(release, { bubbles: true });
+      Object.assign(event, {
+        changedTouches: [{ identifier: 999 }],
+        ...(active === undefined ? {} : { touches: active.map((identifier) => ({ identifier })) }),
+      });
+      document.body.dispatchEvent(event);
+    };
+    surface.setBody('Original.', '');
+    down(17, 'touch');
+    down(18, 'touch');
+    surface.setBody('Replacement.', '');
+    touch([999]);
+    touch();
+    expect(surface.pointerActive).toBe(true);
+    expect(surface.displayedBody).toBe('Original.');
+    down(20, 'mouse');
+    down(21, 'pen');
+    touch([]);
+    expect(surface.pointerActive).toBe(true);
+    pointer('pointerup', document, 20);
+    expect(surface.pointerActive).toBe(true);
+    expect(surface.displayedBody).toBe('Original.');
+    pointer('pointerup', document, 21);
+    expect(surface.pointerActive).toBe(false);
+    expect(surface.displayedBody).toBe('Replacement.');
+    down(22, 'touch');
+    surface.setBody('Final.', '');
+    touch([]);
+    expect(surface.pointerActive).toBe(false);
+    expect(surface.displayedBody).toBe('Final.');
+  },
+);
+
 it('keeps deferring after pointerup while a noncollapsed native selection remains', () => {
   fixture().setBody(markdown, '');
   pointer('pointerdown');

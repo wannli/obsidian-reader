@@ -804,6 +804,94 @@ describe('automatic selection event ownership', () => {
     },
   );
 
+  function nativeTouch(type: string, changed: number[], active?: number[]): void {
+    const event = new Event(type, { bubbles: true });
+    Object.assign(event, {
+      changedTouches: changed.map((identifier) => ({ identifier })),
+      ...(active === undefined ? {} : { touches: active.map((identifier) => ({ identifier })) }),
+    });
+    f.surface.body.dispatchEvent(event);
+  }
+
+  it.each(['touchend'])(
+    'reconciles accumulated iOS pointers only at authoritative empty %s',
+    async (release) => {
+      const annotate = vi.spyOn(f.store, 'annotate');
+      gesture('pointerdown', f.surface.body, 'touch', 17);
+      nativeTouch('touchstart', [42], [42]);
+      gesture('pointerdown', f.surface.body, 'touch', 18);
+      nativeTouch('touchstart', [43], [42, 43]);
+      f.select(0);
+      nativeTouch(release, [42, 43], [99]); // Active touch can be outside Reader.
+      vi.advanceTimersByTime(1200);
+      expect(f.probe.selecting).toBe(true);
+      expect(f.surface.pointerActive).toBe(true);
+      expect(annotate).not.toHaveBeenCalled();
+      // A later pointerdown is not proof that earlier pointers lifted.
+      gesture('pointerdown', f.surface.body, 'touch', 19);
+      nativeTouch('touchstart', [44], [44]);
+      nativeTouch(release, [44]); // Missing native list remains conservative.
+      vi.advanceTimersByTime(1200);
+      expect(f.probe.selecting).toBe(true);
+      expect(f.surface.pointerActive).toBe(true);
+      expect(annotate).not.toHaveBeenCalled();
+      nativeTouch('touchcancel', [], []); // Native takeover is not proof of lift.
+      vi.advanceTimersByTime(1200);
+      expect(f.probe.selecting).toBe(true);
+      expect(f.surface.pointerActive).toBe(true);
+      expect(annotate).not.toHaveBeenCalled();
+      nativeTouch(release, [], []); // Also clears stale native touch identifiers.
+      expect(f.probe.selecting).toBe(false);
+      expect(f.surface.pointerActive).toBe(false);
+      vi.advanceTimersByTime(899);
+      await f.probe.operations;
+      expect(annotate).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(1);
+      await f.probe.operations;
+      expect(annotate).toHaveBeenCalledOnce();
+    },
+  );
+
+  it('does not treat a lone zero-touch cancellation as a missing pointer release', async () => {
+    const annotate = vi.spyOn(f.store, 'annotate');
+    gesture('pointerdown', f.surface.body, 'touch', 17);
+    nativeTouch('touchstart', [42], [42]);
+    f.select(0);
+    nativeTouch('touchcancel', [42], []);
+    vi.advanceTimersByTime(1200);
+    await f.probe.operations;
+    expect(f.probe.selecting).toBe(true);
+    expect(f.surface.pointerActive).toBe(true);
+    expect(annotate).not.toHaveBeenCalled();
+  });
+
+  it('keeps simultaneous mouse and pen guards after native touches lift', async () => {
+    const annotate = vi.spyOn(f.store, 'annotate');
+    for (const [id, kind] of [
+      [17, 'touch'],
+      [18, 'mouse'],
+      [19, 'pen'],
+    ] as const)
+      gesture('pointerdown', f.surface.body, kind, id);
+    nativeTouch('touchstart', [42], [42]);
+    f.select(0);
+    nativeTouch('touchend', [], []);
+    gesture('pointerup', f.surface.body, 'mouse', 18);
+    vi.advanceTimersByTime(1200);
+    expect(f.probe.selecting).toBe(true);
+    expect(f.surface.pointerActive).toBe(true);
+    expect(annotate).not.toHaveBeenCalled();
+    gesture('pointerup', f.surface.body, 'pen', 19);
+    expect(f.probe.selecting).toBe(false);
+    expect(f.surface.pointerActive).toBe(false);
+    vi.advanceTimersByTime(899);
+    await f.probe.operations;
+    expect(annotate).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1);
+    await f.probe.operations;
+    expect(annotate).toHaveBeenCalledOnce();
+  });
+
   it('restarts the full 900ms quiet period for every adjustment, including repeated text', async () => {
     const annotate = vi.spyOn(f.store, 'annotate');
     f.select(0);

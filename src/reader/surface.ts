@@ -24,7 +24,7 @@ export class ReadingSurface {
   // Device-local position for image-only viewports; never sent to position().
   private fallback?: { page: number; left: number; top: number };
   private explicitRestore = false;
-  private readonly pointers = new Set<number>();
+  private readonly pointers = new Map<number, string>();
   private dead = false;
   private restoring = false;
   private layoutPending = false;
@@ -89,7 +89,7 @@ export class ReadingSurface {
     this.viewport.addEventListener(
       'pointerdown',
       (event) => {
-        if (!this.dead && event.button === 0) this.pointers.add(event.pointerId);
+        if (!this.dead && event.button === 0) this.pointers.set(event.pointerId, event.pointerType);
       },
       { capture: true, passive: true, signal: this.events.signal },
     );
@@ -98,6 +98,19 @@ export class ReadingSurface {
     };
     document.addEventListener('pointerup', release, { capture: true, signal: this.events.signal });
     document.addEventListener('pointercancel', release, {
+      capture: true,
+      signal: this.events.signal,
+    });
+    const releaseTouches = (event: TouchEvent) => {
+      if (this.dead || event.touches?.length !== 0) return;
+      // iOS native selection can omit pointerup. Touch IDs cannot identify
+      // pointer IDs; an empty native list releases only touch-type pointers.
+      let released = false;
+      for (const [id, type] of this.pointers)
+        if (type === 'touch') released = this.pointers.delete(id) || released;
+      if (released) this.refresh();
+    };
+    document.addEventListener('touchend', releaseTouches, {
       capture: true,
       signal: this.events.signal,
     });

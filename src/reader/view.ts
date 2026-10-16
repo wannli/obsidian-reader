@@ -169,13 +169,22 @@ export class ReaderView extends ItemView {
   async onOpen(): Promise<void> {
     const doc = this.containerEl.ownerDocument,
       options = { signal: this.lifetime.signal };
-    const pointers = new Set<number>(),
+    const pointers = new Map<number, string>(),
       touches = new Set<number>();
     const release = (event: Event) => {
       if (this.stopping || this.host.signal.aborted) return;
       if (event.type.startsWith('touch')) {
         for (const touch of Array.from((event as TouchEvent).changedTouches ?? []))
           touches.delete(touch.identifier);
+        const active = (event as TouchEvent).touches;
+        if (active) {
+          touches.clear();
+          for (const touch of Array.from(active)) touches.add(touch.identifier);
+          // Touch identifiers and pointer IDs are unrelated. Only an authoritative
+          // empty touchend proves all touch pointers lifted; cancellation may be takeover.
+          if (event.type === 'touchend' && active.length === 0)
+            for (const [id, type] of pointers) if (type === 'touch') pointers.delete(id);
+        }
       } else pointers.delete((event as PointerEvent).pointerId);
       this.selecting = pointers.size > 0 || touches.size > 0;
       this.invalidateSelection();
@@ -188,7 +197,7 @@ export class ReaderView extends ItemView {
       'pointerdown',
       (event) => {
         if (this.stopping || this.host.signal.aborted) return;
-        pointers.add(event.pointerId);
+        pointers.set(event.pointerId, event.pointerType);
         this.selecting = true;
         this.invalidateSelection();
       },
@@ -226,7 +235,11 @@ export class ReaderView extends ItemView {
       )
         return;
       if (event.type === 'touchstart') {
-        for (const touch of Array.from((event as TouchEvent).changedTouches ?? []))
+        // Refresh stale touch identifiers across gestures, but never infer pointer
+        // releases from a new start: native touchend may itself be deferred.
+        const active = (event as TouchEvent).touches;
+        if (active) touches.clear();
+        for (const touch of Array.from(active ?? (event as TouchEvent).changedTouches ?? []))
           touches.add(touch.identifier);
         this.selecting = true;
         this.invalidateSelection();
