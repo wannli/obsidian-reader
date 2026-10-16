@@ -745,6 +745,65 @@ describe('automatic selection event ownership', () => {
     },
   );
 
+  it.each(['pointerup', 'pointercancel'])(
+    'saves pointer-only desktop selection after stopped %s and Surface capture release',
+    async (release) => {
+      const annotate = vi.spyOn(f.store, 'annotate');
+      f.surface.body.addEventListener(release, (event) => event.stopPropagation(), { once: true });
+      gesture('pointerdown', f.surface.body, 'mouse', 17);
+      f.select(0); // selectionchange arrives before release, while both trackers are held.
+      vi.advanceTimersByTime(1200);
+      await f.probe.operations;
+      expect(annotate).not.toHaveBeenCalled();
+      gesture(release, f.surface.body, 'mouse', 17);
+      expect(f.surface.pointerActive).toBe(false);
+      expect(f.probe.selecting).toBe(false);
+      vi.advanceTimersByTime(899);
+      await f.probe.operations;
+      expect(annotate).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(1);
+      await f.probe.operations;
+      expect(annotate).toHaveBeenCalledOnce();
+      expect(document.getSelection()!.toString()).toBe('Alpha');
+    },
+  );
+
+  it.each(
+    ['pointerup', 'pointercancel'].flatMap((pointerRelease) =>
+      ['touchend', 'touchcancel'].flatMap((touchRelease) =>
+        [true, false].map((pointerFirst) => ({ pointerRelease, touchRelease, pointerFirst })),
+      ),
+    ),
+  )(
+    'observes stopped mixed-stream termination: $pointerRelease / $touchRelease, pointer first=$pointerFirst',
+    async ({ pointerRelease, touchRelease, pointerFirst }) => {
+      const annotate = vi.spyOn(f.store, 'annotate');
+      const target = f.surface.body;
+      for (const type of [pointerRelease, touchRelease])
+        target.addEventListener(type, (event) => event.stopPropagation(), { once: true });
+      gesture('pointerdown', target, 'touch', 17);
+      gesture('touchstart', target, 'touch', 42);
+      f.select(0);
+      const pointer = () => gesture(pointerRelease, target, 'touch', 17);
+      const touch = () => gesture(touchRelease, target, 'touch', 42);
+      (pointerFirst ? pointer : touch)();
+      vi.advanceTimersByTime(1200);
+      await f.probe.operations;
+      expect(annotate).not.toHaveBeenCalled();
+      expect(f.probe.selecting).toBe(true);
+      (pointerFirst ? touch : pointer)();
+      expect(f.surface.pointerActive).toBe(false);
+      expect(f.probe.selecting).toBe(false);
+      vi.advanceTimersByTime(899);
+      await f.probe.operations;
+      expect(annotate).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(1);
+      await f.probe.operations;
+      expect(annotate).toHaveBeenCalledOnce();
+      expect(document.getSelection()!.toString()).toBe('Alpha');
+    },
+  );
+
   it('restarts the full 900ms quiet period for every adjustment, including repeated text', async () => {
     const annotate = vi.spyOn(f.store, 'annotate');
     f.select(0);

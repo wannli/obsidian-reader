@@ -178,7 +178,10 @@ export class ReaderView extends ItemView {
           touches.delete(touch.identifier);
       } else pointers.delete((event as PointerEvent).pointerId);
       this.selecting = pointers.size > 0 || touches.size > 0;
-      this.selectionChanged();
+      this.invalidateSelection();
+      // Surface may register its document capture listener after ours. Wait until
+      // dispatch completes so both trackers have released before checking the range.
+      this.selectionTimer = setTimeout(() => this.selectionChanged(), 0);
     };
     doc.addEventListener('selectionchange', () => this.selectionChanged(), options);
     this.contentEl.addEventListener(
@@ -191,8 +194,10 @@ export class ReaderView extends ItemView {
       },
       options,
     );
+    // Observe termination before host/native gesture handlers stop bubbling.
+    // Surface's capture listener also releases its pointer before the quiet timer runs.
     for (const type of ['pointerup', 'pointercancel', 'touchend', 'touchcancel'])
-      doc.addEventListener(type, release, options);
+      doc.addEventListener(type, release, { ...options, capture: true });
     doc.defaultView?.addEventListener(
       'blur',
       () => {
@@ -226,8 +231,6 @@ export class ReaderView extends ItemView {
         this.selecting = true;
         this.invalidateSelection();
       }
-      if (['pointerup', 'pointercancel', 'touchend', 'touchcancel'].includes(event.type))
-        release(event); // Document bubble cannot observe this isolated release.
       event.stopPropagation();
     };
     for (const type of [
