@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.10.0](https://github.com/wannli/obsidian-reader/compare/0.9.2...0.10.0) (2026-10-16)
+
+
+### Added
+
+* **reader:** filter reading lists by topic and create topic notes ([d9f83a4](https://github.com/wannli/obsidian-reader/commit/d9f83a4126b525145b78fb5dab272a578def216a))
+
+
+### Fixed
+
+* **docs:** make the reader readme more user friendly ([69a6a02](https://github.com/wannli/obsidian-reader/commit/69a6a028161bfe9eddc780b201049e56899f8d76))
+
 ## [0.9.2](https://github.com/wannli/obsidian-reader/compare/0.9.1...0.9.2) (2026-10-16)
 
 
