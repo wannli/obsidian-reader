@@ -1,49 +1,109 @@
 # Reader
 
-A small Markdown-first article and RSS reader for Obsidian desktop, iPhone/iPad, and Android/e-ink. Requires Obsidian **1.8.0 or newer**.
+**Save for later. Read in Obsidian. Keep what matters.**
 
-## Read and keep
+[![Latest release](https://img.shields.io/github/v/release/wannli/obsidian-reader)](https://github.com/wannli/obsidian-reader/releases/latest)
+[![Obsidian 1.8.0+](https://img.shields.io/badge/Obsidian-1.8.0%2B-7C3AED)](https://obsidian.md)
+[![Markdown-first](https://img.shields.io/badge/storage-Markdown-blue)](#your-reading-library-is-just-markdown)
 
-- **Add URL** saves a note immediately, including offline; available article text is acquired while Reader is active and online. Clicking a web link offers **Save to Inbox**, **Open link** or **Cancel**; saving keeps the current article open and reuses existing-URL deduplication.
-- **Run Defuddle again (replace article content)** re-fetches the current article after a destructive-action confirmation. It replaces the body, including highlights and inline links, but preserves unknown frontmatter and explicit titles. A download/extraction failure leaves the existing body intact; concurrent edits and dirty editors remain protected. Use it in Reader or native Reading view; source/live-preview editors stay protected. Ordinary Retry never overrides authored text.
-- **Add feed** saves an RSS/Atom subscription without importing articles, so you can edit its parameters first. **Sync feeds explicitly** when ready; startup and periodic timers do not refresh feeds. Each Sync considers at most the **latest 20 entries**, before age filtering and deduplication. There is no backlog/history service.
-- Browse **Inbox, Later and Feed** in a flat, titles-only list; use **Open Archive** and **Manage feeds** commands for those views. Search through native Obsidian rather than an embedded search bar. Source URLs remain stored in the notes.
-- Right-side indicators show **Opened before** from an existing saved reading position and **Has highlights** from Markdown. No extra metadata, completion flag or persisted history is added.
-- Select text to highlight it or add topic links. Link/Change and Create note use Fileclass Inline’s shared picker for existing notes or inline creation through the optional public **Nodes API v2** integration.
-- Both views use compact, leaf-owned **floating bottom controls**, accessible labels and 44px targets. Articles use the pane width, one title and scrollbar/final-text clearance. **Previous, Next, Read later, Archive, Delete, List** have no action divider. Read later (clock) sets Later and keeps the article open; Archive and recoverable Delete advance within the original browsing context. Queue changes update YAML, never move the file.
-- Exact `type: article` notes open in Reader; **Open Markdown** preserves an explicit native-editor escape, and dirty editors are protected. **Topics** and **Change article status** remain commands. Reading position travels with the note; pagination is device-local.
-- Obsidian’s separate floating mobile navigation bar hides only while Reader is active. At article boundaries, **Up/PageUp** opens the previous article and **Down/PageDown** the next, without held-key skipping or interfering with editing. Every article entry still resumes its own saved position.
-- **Open reading list** forces the library. On iPhone, **Copy reading-list link** supplies a vault-aware `obsidian://obsidian-reader` URL for a Shortcuts **URL → Open URLs → Add to Home Screen** shortcut; no extra plugin is needed.
+Reader brings your read-later list and RSS feeds into your Obsidian vault. Save an interesting article, settle into a clean reading view, and highlight the passages worth keeping—all without moving your reading into a separate app.
 
-The combined integration requires Obsidian **1.12.7 or newer** and `fileclass-inline.api` v2 with `pickNodeForLink`. Both note actions open the shared picker seeded with the passage title; Reader commits the guarded source link before required-field completion. There is no All notes route or standalone creation fallback. Missing/older APIs or v2 without this capability leave linking/creation unavailable; highlights, opening existing links and unlinking still work. Failed/cancelled linking can leave a note: Reader never prunes it. V2 supplies class membership/icons, not schema colors. Reader does not use the old `obsidian-nodes` ID or migrate plugin settings/data.
+Your articles are ordinary Markdown notes. Your highlights stay in the text. Your reading position travels with your notes through your existing vault sync.
 
-Markdown is the only article store. Reader preserves authored text, unknown YAML, and existing links; it does not maintain sidecars, copied highlights, custom sync, or migration code. Images remain remote; inline images fit the reading area and open a larger view when clicked or tapped.
+[Get started](#get-started) · [Reading workflow](#a-place-for-every-article) · [Feeds](#follow-feeds-without-the-backlog) · [Markdown format](#your-reading-library-is-just-markdown) · [Development](#development)
 
-**Explicit `status: feed` is disposable:** annotations and authored vault links promote these articles to Later; unprotected entries older than one clamped UTC calendar month go to recoverable trash. Missing status appears in Feed but never expires. Unknown-age and in-use notes are retained. See the [approved storage contract](docs/storage-contract.md).
+## Why Reader?
 
-## Native iOS capture
+- **Save now, read when you have time.** Add a URL to your Inbox. Offline? Reader saves the URL immediately and can fetch the article when Obsidian is active and online again. Saving the same URL opens the existing article instead of making a duplicate.
+- **Make room for focused reading.** A simple, titles-only list and a full-width article view keep the interface out of the way. Reader uses Obsidian’s typography and themes, with touch-friendly controls and a paged mode for e-ink reading.
+- **Pick up where you left off.** Each article remembers your place, including when you move between articles. List indicators help you spot articles you’ve opened or highlighted.
+- **Keep the good parts in context.** Select a passage to highlight it directly in the article. With the optional Fileclass Inline integration, connect passages to existing notes or create a note from an idea.
+- **Keep your library yours.** No separate article database, copied highlight collection, or custom sync service. Read and edit your Markdown even without Reader.
 
-Configure capture locations, templates and shortcuts directly in [Obsidian](https://help.obsidian.md/mobile/ios); Reader does not install templates or provide a setup command. Existing vault templates are left untouched.
+Reader targets Obsidian desktop, iPhone/iPad, and Android/e-ink. Physical-device and cross-device acceptance checks are tracked separately in the [mobile smoke plan](docs/mobile-smoke.md); automated tests are not device certification.
 
-Configure native captures with `type: article`, `status: inbox` and `url` properties, wherever you choose to store them. Reader starts Defuddle for Inbox/Later articles while Obsidian is active and online when the body is empty or contains only a single Markdown source link matching that URL. Missing-status articles appear in Feed and do not enter automatic Inbox/Later capture recovery; Reader does not infer status from a folder or rewrite old notes. Extra text, annotations and native Full Text captures remain protected; a plain URL body is not a supported placeholder. Offline captures retain their URL for foreground recovery.
+## Get started
 
-Native capture keeps its own filenames and creates a note per capture, without Reader’s deduplication. Use **Add URL** when those features are needed. Physical-device acceptance remains manual.
+### Install
 
-## Markdown structure
+Requires **Obsidian 1.8.0 or newer**.
 
-Reader discovers articles and subscriptions anywhere by their `type`. Folders control only where new notes are created; users may arrange existing files freely. The two capture destinations default to `Reading/Articles` and `Reading/Feeds`; they may be the same, nested, or the vault root.
+- **With BRAT:** add `wannli/obsidian-reader` as a beta plugin repository.
+- **Manually:** download `main.js`, `manifest.json`, and `styles.css` from the same [release](https://github.com/wannli/obsidian-reader/releases), place them in `<vault>/.obsidian/plugins/obsidian-reader/`, and enable **Reader** in Community plugins.
 
-| Article `status` | Queue                                     | Automatic expiry                             |
-| ---------------- | ----------------------------------------- | -------------------------------------------- |
-| `inbox`          | Inbox: manually captured                  | No                                           |
-| `feed`           | Feed: not explicitly retained             | After one calendar month, with safety checks |
-| `later`          | Later: saved for further attention        | No                                           |
-| `archive`        | Archive: kept without requiring attention | No                                           |
-| Missing          | Feed                                      | Never                                        |
+This README describes the current source. An installed release may not include every change shown here; check its release notes.
 
-Invalid statuses remain readable but unqueued and never expire. Highlighting/linking a Feed article, including one without status, sets `later` before saving the annotation. Other statuses remain unchanged. Reading and saving a bookmark do not change status. Archive does not imply finished; users can return an archived article to Later. Removing highlights does not undo retention.
+### Save your first article
 
-An article such as `Reading/Articles/261014 A useful article.md`:
+1. Open Obsidian’s command palette and run Reader’s **Add URL** command.
+2. Paste an article URL. Reader saves it to **Inbox** and extracts readable text when online.
+3. Use **Open reading list** to return to your library. Select text in an article to highlight it, choose **Read later** to keep it on your list, or **Archive** to set it aside.
+
+The default capture folders are `Reading/Articles` and `Reading/Feeds`. Change them in Reader settings if you prefer; Reader finds articles and subscriptions anywhere in your vault.
+
+## A place for every article
+
+| List        | What belongs here                                    | Kept automatically?                         |
+| ----------- | ---------------------------------------------------- | ------------------------------------------- |
+| **Inbox**   | Articles you’ve saved and haven’t sorted yet         | Yes                                         |
+| **Feed**    | New articles from your subscriptions                 | No—unprotected entries expire after a month |
+| **Later**   | Articles you want to spend more time with            | Yes                                         |
+| **Archive** | Articles you want to keep, but not on your next list | Yes                                         |
+
+**Read later** keeps the article open. **Archive** and **Delete** advance to the next article in your original browsing list. Deletion uses recoverable Obsidian trash.
+
+Highlighting or linking a passage in a Feed article moves it to Later before saving the annotation. **Simply opening or reading a Feed article does not keep it.** Choose Later or Archive if you want to retain it.
+
+Only notes with explicit `status: feed` can expire, one calendar month after their publication date (or filename date as a fallback)—not a month after import. Annotated, in-use, and unknown-age notes are protected. Notes without a status appear in Feed but never expire; invalid statuses remain outside the lists and do not expire. See the [storage contract](docs/storage-contract.md) for the full safety rules.
+
+### Find your way around
+
+- **Open reading list**, **Open Archive**, and **Manage feeds** are available from the command palette.
+- Use **Previous / Next** to browse articles and **List** to return to where you started.
+- Use native **Obsidian search** to find articles; Reader has no separate search bar.
+- Use **Open Markdown** to edit an article, or **Topics** to associate it with existing topic notes.
+- On desktop, **j / k** navigate articles. At article boundaries, **Up / PageUp** and **Down / PageDown** move to the previous or next article, resuming its saved position.
+- On iPhone, **Copy reading-list link** gives you a vault-aware link for a Shortcuts **URL → Open URLs → Add to Home Screen** shortcut.
+
+Lists follow the note’s `status`, not its folder. Optional **Status folders** settings can move articles when their status changes, and place new Reader captures in the matching folder. Applying these settings does not reorganize existing notes. Leave a mapping blank for no move; use `/` for the vault root. Moves respect Obsidian’s internal-link update preference; disabling it can leave links broken.
+
+## Follow feeds without the backlog
+
+Run **Add feed** with an RSS or Atom URL. Reader saves the subscription first, giving you time to edit its title and options. Then use **Sync** in **Manage feeds**, or the **Refresh feeds** command, to bring in articles.
+
+- **You choose when to refresh.** No startup or scheduled feed polling.
+- **Each refresh considers the latest 20 entries per feed**, before deduplication and age filtering. Reader is for recent reading, not a complete feed archive; busy feeds can have entries you miss between refreshes.
+- **Available feed text is saved first.** Missing full text can be fetched when you open an article or move it to Inbox/Later.
+- **Delete once through Reader.** The subscription remembers explicitly deleted article URLs so later refreshes skip them. This is per subscription: another feed or a device that hasn’t synced the deletion record can still import the URL. It does not cover external deletions or automatic expiry, and you can still save the URL manually.
+- **Unsubscribe without losing saved articles.** Removing a subscription leaves its articles alone.
+
+## Highlight now, connect ideas later
+
+Highlights live where they belong: alongside the words you were reading, as ordinary `==Markdown highlights==`.
+
+For **Link to note / Change link** and **Create note**, install a compatible Fileclass Inline integration. These actions use its shared note picker and require **Obsidian 1.12.7+** and public **Nodes API v2** (`fileclass-inline.api`) with `pickNodeForLink` support.
+
+Without that integration, you can still highlight, open existing passage links, and remove links. Reader does not provide a separate note-creation fallback. Cancelling a linking or creation flow may leave a newly created note; Reader never deletes it for you.
+
+## Offline reading and capture
+
+**Saved article text is available offline.** Text that hasn’t been fetched yet is not, and images remain remote rather than being downloaded for permanent offline access. Tap or click an image to open a larger view.
+
+While reading, clicking a web link offers **Save to Inbox**, **Open link**, or **Cancel**. Saving keeps your current article open.
+
+For native iOS capture, configure locations, templates, and shortcuts directly in [Obsidian](https://help.obsidian.md/mobile/ios). Give captured notes `type: article`, `status: inbox`, and a `url` property. Reader can fetch the article while active and online when the body is empty or contains only a Markdown source link matching that URL. A plain URL body is not a supported placeholder.
+
+Reader leaves extra text, annotations, and native Full Text captures intact. Native captures keep their own filenames and do not use Reader’s URL deduplication; use **Add URL** when you want that behavior. Reader does not install templates or change your capture setup.
+
+Reader sanitizes imported content, but is not a sandbox for third-party Markdown processors. Detected default Dataview/Templater expressions can block capture; custom processor configurations are outside that protection.
+
+If extraction fails, the URL and available text remain, and you can retry. **Run Defuddle again (replace article content)** is a separate, confirmed action: it replaces the body, **including highlights and inline links**. A failed download leaves the current body intact. Ordinary Retry does not overwrite authored text.
+
+## Your reading library is just Markdown
+
+Reader identifies articles by `type: article` and subscriptions by `type: feed`, wherever you store them. You can move and rename the files yourself.
+
+An article might look like this:
 
 ```markdown
 ---
@@ -63,13 +123,9 @@ An ==important passage== remains ordinary Markdown.
 A ==[[Notes/A useful idea.md|linked passage]]== links directly to a note.
 ```
 
-`type: article` identifies the note. Capture/acquisition uses `url`; local articles can be read without it. `title`, `published`, `feed`, `topics` and `bookmark` are optional; `error` can describe an acquisition failure. The position is a text anchor, not a page number or completion flag. Inline highlights and passage links live in the body; feed and topic links are frontmatter properties.
+`title`, `published`, `feed`, `topics`, and `bookmark` are optional. Local articles do not need a URL to be read. The bookmark is a text anchor, not a page number, completion flag, or reading history. Pagination preferences stay device-local.
 
-Every new Reader capture writes `published`: valid supplied publication wins, otherwise the original capture time. Eligible live external `type: article` creates receive a missing publication from frozen host ctime, without altering status, body or any existing publication value. Startup/cold-launch files and older/unknown ctimes are excluded; fresh Sync ctime is not proof of original share time. See the [storage contract](docs/storage-contract.md) for provenance limits.
-
-New publication writes use an unquoted **local wall-clock minute** in Obsidian’s `YYYY-MM-DDTHH:mm` format, without seconds or a timezone suffix. Zone-free values follow the current device’s timezone and native date/DST interpretation; they do not preserve a unique instant across timezones or repeated DST hours. Existing date-only, offset and full ISO values remain readable and are not rewritten or migrated. UTC filename dates still come from the original parsed publication instant, before local formatting.
-
-A subscription such as `Reading/Feeds/Example feed.md`:
+A subscription might look like this:
 
 ```yaml
 ---
@@ -83,67 +139,37 @@ deleted_urls:
 ---
 ```
 
-Subscriptions need `type: feed` and a URL. `title`, `prefix` and `enabled` are optional; enabled defaults to true, and `error` may describe a failed refresh. Removing a subscription does not delete its articles. Optional `deleted_urls` remembers articles deleted through Reader so RSS Sync does not import them again. It syncs with the subscription note; remove a URL to allow importing it again. Past deletions, external deletions and automatic expiry are not recorded. Manual Add URL still works.
+Subscriptions need only `type: feed` and `url`; `enabled` defaults to true. Optional `deleted_urls` records Reader deletions; remove an entry to allow that URL to be imported again. An optional `error` property on either note type can describe a failed fetch.
 
-Reader adds no note IDs, ownership stamps, copied highlight collections or persisted read history. Unknown YAML and authored text are preserved. See the [storage contract](docs/storage-contract.md) for acquisition, promotion and expiry rules.
+Reader preserves unknown properties and user-authored content during normal updates. It adds no note IDs, sidecars, or copied highlight collections, and does not migrate legacy settings or reading positions. New publication dates use Obsidian’s local `YYYY-MM-DDTHH:mm` format; existing dates are not rewritten. For exact capture, date, folder-move, and retention behavior, see the [storage contract](docs/storage-contract.md).
 
-## Install a release
+## Development
 
-This checkout contains the rebuilt implementation; it has **not been published as a new release**.
-
-For an available release, use BRAT with `wannli/obsidian-reader`, or download `main.js`, `manifest.json`, and `styles.css` from the same release into `<vault>/.obsidian/plugins/obsidian-reader/`, then enable Reader in Community plugins. Installing a released version does not install uncommitted work from this checkout.
-
-Optionally map each YAML status (`inbox`, `feed`, `later`, `archive`) to a folder in **Status folders** settings. Blank means no move; `/` means vault root. Reader status changes (including annotation promotion) and observed manual/native/synced YAML transitions move mapped articles safely through Obsidian's link-aware rename. Same-status choices, body edits and manual file moves do not reapply mappings. Dirty editors defer relocation until safe; collisions get a suffix. YAML stays authoritative if relocation fails. Reader-created articles use their initial status mapping; external creates/startup notes are not swept. Applying mappings never relocates existing notes. Native link-update preferences are respected; Sync moves are not cross-device atomic.
-
-Choose **article and subscription capture folders** in Reader settings. These affect only new notes (as fallback when no status folder is mapped), never queue membership or discovery. Settings use the new `captureFolders` group; older folder/root settings remain preserved but inert. Applying destinations does not move or rewrite notes. Existing `reading_position` properties remain untouched and are not used as bookmarks; no automatic conversion is performed.
-
-## Develop safely
-
-Use the pinned Node runtime. The setup/watcher commands below are for an isolated development profile—not the currently connected joint-test vault. In that shared vault, keep Hot Reload and the watcher stopped and use validated artifact-only updates.
+Use the pinned Node runtime and an isolated, repository-owned synthetic vault—never a personal vault.
 
 ```sh
 mise install
 mise exec -- npm ci
 mise exec -- npm run check
+
+# Optional: set up an isolated Obsidian development vault
 mise exec -- npm run dev:setup
 mise exec -- npm run dev
 ```
 
-- `dev:setup` explicitly bootstraps the owned `.sandbox/Reader2 Test Vault` and installs pinned Hot Reload **0.3.1**. Existing vault files/settings are preserved.
-- Open that folder using Obsidian’s **Open folder as vault**, then confirm Reader and Hot Reload are enabled. Setup does not register a vault in Obsidian’s global vault switcher; files on disk alone do not prove a native reload.
-- `dev` watches source and builds directly into that vault's installed plugin. It does not seed files, enable plugins, download dependencies, or create a second development bundle.
-- `build` creates release-shaped artifacts in ignored `dist/`; it does not install or publish them.
-- `vault:update` backs up and replaces only the three plugin artifacts in the owned vault, publishing `main.js` last.
-- Ownership, path/link checks, and safety holds fail closed. Never point tooling at a personal vault or remove a hold to force progress.
-- `.sandbox`, installed plugins/configuration, `.hotreload`, `dist`, and dependency caches stay out of Git/releases.
+`dev:setup` bootstraps `.sandbox/Reader2 Test Vault` and installs pinned Hot Reload **0.3.1**. Open that folder as a vault in Obsidian and confirm Reader and Hot Reload are enabled. `dev` builds directly into it; `build` writes release-shaped artifacts to ignored `dist/` without installing or publishing them. `vault:update` backs up and replaces only the three plugin artifacts in the owned vault.
 
-## Checks and code
+Keep Hot Reload and watchers out of the shared Sync acceptance profile. Ownership checks and native-input holds must be respected; never bypass a hold to force an update.
 
 ```sh
-mise exec -- npm test -- tests/documents.test.ts  # focused
-mise exec -- npm test                           # unit/component
-mise exec -- npm run test:tooling                # guarded build/setup/release tests
-mise exec -- npm run format                     # consistent source formatting
-mise exec -- npm run check                      # all checks and release build
-mise exec -- npm run benchmark:scale            # opt-in 10k articles / 100 feeds
+mise exec -- npm test -- tests/documents.test.ts # focused tests
+mise exec -- npm test                          # unit/component tests
+mise exec -- npm run test:tooling              # guarded tooling tests
+mise exec -- npm run format                    # shared formatting
+mise exec -- npm run check                     # format, metadata, types, tests, build
+mise exec -- npm run benchmark:scale           # opt-in: 10k articles / 100 feeds
 ```
 
-Targets: focused checks under 5 seconds; the full automated **test suite** under 10 seconds locally. Typecheck, formatting and release building are additionally included in `check`. No automated E2E suite; DOM geometry tests are not hardware acceptance.
+Targets are under 5 seconds for focused checks and under 10 seconds for the automated test suite locally. There is no automated E2E suite; native touch, e-ink, and real sync behavior require separate manual checks. The scale benchmark retains synthetic files and measurements in the marked dummy vault, not a personal vault.
 
-The opt-in scale benchmark generates real synthetic Markdown files in an isolated hidden subtree of the marked dummy vault, preserving existing notes. It retains its corpus and JSON measurements for inspection. Core/filesystem timings and fixture-network feed throughput are not native Obsidian startup, rendering, device or sync measurements. It is separate from the fast test suite.
-
-Start with the [codebase map](docs/map.md), [approved scope](docs/rebuild-spec.md), [storage contract](docs/storage-contract.md), and [visual rebuild report](docs/rebuild-report.html).
-
-The [joint iPhone smoke plan](docs/mobile-smoke.md) uses one disposable Sync vault for Reader, Nodes and Fileclass, excluding Hot Reload and instrumentation. Sync is connected and running with Wannes’s restored choices; do not change those settings or request device-plugin disabling. Native-input holds still govern shared installation/checks.
-
-Native Hot Reload, touch selection, physical iOS/Boox pagination, and real sync need separate manual acceptance in synthetic vaults. They are not claimed as verified by automated tests. Local commits/merges do not authorize personal-vault installation, pushing, version changes or publication.
-
-Release Please remains the only release/version path. Wannes merges its release PR to authorize publication. The serialized Release workflow builds and validates the **exact existing release-tag commit**, not the commit that triggered the workflow. It uploads only `main.js`, `manifest.json`, and `styles.css`, verifies the complete remote asset set, then publishes the existing draft without changing its tag or notes.
-
-Failed or partial publication can safely retry: matching assets are reused; conflicting bytes fail without overwriting. The workflow also recovers an existing current-version draft when Release Please reports no newly created release. To recover a specific existing draft without running Release Please:
-
-```sh
-gh workflow run release.yml --ref main -f existing_tag=0.7.1
-```
-
-Recovery never creates or moves a tag, creates another release, or changes version metadata. Published releases are not overwritten.
+Start with the [codebase map](docs/map.md), [approved scope](docs/rebuild-spec.md), [storage contract](docs/storage-contract.md), and [mobile smoke plan](docs/mobile-smoke.md).
