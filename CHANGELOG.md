@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.12.0](https://github.com/wannli/obsidian-reader/compare/0.11.0...0.12.0) (2026-10-19)
+
+
+### Added
+
+* **reader:** add manual status folder organization command ([3a9d307](https://github.com/wannli/obsidian-reader/commit/3a9d307e91dc5083b49e28523aa6fee42343ee52))
+* **reader:** restore folder-authoritative article queues ([990f612](https://github.com/wannli/obsidian-reader/commit/990f6124a0287cd4a84d75d4d45208470c99fd7b))
+
+
+### Fixed
+
+* **content:** preserve bracketed image alt text ([887f3f5](https://github.com/wannli/obsidian-reader/commit/887f3f5a8793100267d4255df473956983b524c2))
+* **reader:** separate paged page and article navigation ([d40f487](https://github.com/wannli/obsidian-reader/commit/d40f487ddeb300ccf114def06c13136a5bd93b0d))
+
 ## [0.11.0](https://github.com/wannli/obsidian-reader/compare/0.10.0...0.11.0) (2026-10-16)
 
 
