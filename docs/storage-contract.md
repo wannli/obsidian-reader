@@ -1,10 +1,10 @@
 # Reader storage contract
 
-Approved by Wannes: articles and subscriptions are identified by YAML anywhere in the vault; capture folders determine creation placement, with optional status-folder mappings for future transitions. Article statuses, automatic expiry, missing-status protection and `bookmark` were approved on 15 October. This is not authorization to convert existing Markdown or install the plugin into a vault.
+Approved by Wannes: articles and subscriptions are identified by YAML outside Templates and .trash; folder membership determines article queue, while YAML status remains a mirror for Reader status actions. Four configurable queue folders determine article placement. Article statuses, automatic expiry, missing-status protection and `bookmark` were approved on 15 October. This is not authorization to convert existing Markdown or install the plugin into a vault.
 
 ## Article
 
-Example: `Reading/Articles/261015 A useful article.md`. Users may move or rename it anywhere in the vault without changing its Reader state.
+Example: `Reading/Inbox/261015 A useful article.md`. Moving an article between queue folders changes its Reader queue without rewriting YAML.
 
 ```markdown
 ---
@@ -27,13 +27,13 @@ A ==[[Nodes/Example.md|linked passage]]== preserves its words.
 A ==[**formatted** passage](/Nodes/Example.md)== preserves its formatting.
 ```
 
-- Identification: exact `type: article`, independent of location. A source URL is needed for capture/acquisition, not for reading an existing local article.
-- `status` is one of `inbox`, `feed`, `later`, `archive`. It controls queue membership, never completion; optional settings can map each status to a physical folder.
+- Identification: exact `type: article`, except in Templates or .trash at any depth. Typed articles outside the four queue folders remain readable but unqueued. A source URL is needed for capture/acquisition, not for reading an existing local article.
+- `status` remains in YAML as a mirror of Reader status actions; queue membership comes from physical folder, not this property. When they disagree, folder wins. External folder moves do not rewrite YAML.
 - `inbox`: manually captured, awaiting attention. `feed`: imported, not explicitly retained. `later`: deliberately retained for further attention. `archive`: retained, no longer needing attention; not necessarily finished.
-- A missing `status` appears in Feed but is never automatically expired. Reading does not add a status. Explicit null, empty, malformed or unknown statuses remain readable but unqueued and protected from expiry; they are not treated as missing.
-- Only an explicit, freshly verified `status: feed` is eligible for expiry. Displayed queue membership is never deletion authority.
-- Normal transitions: Inbox → Later/Archive; Feed → Later/Archive; Later → Archive; Archive → Later. Manual queue selection is reversible and writes the chosen status. A changed explicit status moves the note only if that status has a folder mapping; same-status selection leaves its path unchanged.
-- A saved highlight or user-created passage link promotes Feed (including missing status) to Later before annotation is committed. Inbox, Later and Archive annotations leave status unchanged. Removing a highlight never demotes an article. Publisher links do not count.
+- Missing, invalid or conflicting YAML status does not change folder-derived list membership. Reading does not add a status. Expiry still requires fresh explicit `status: feed` in the Feed folder; missing/conflicting values protect against deletion.
+- Only a note in the Feed folder with explicit, freshly verified `status: feed` is eligible for expiry. Topics, highlights and other annotations block Reader trash and archive on explicit Delete or expiry instead.
+- Reader queue selection is reversible and writes the chosen status then moves the note into the corresponding folder, even if YAML already had that value but placement disagreed. No startup/settings-apply migration or bulk YAML rewrite runs.
+- A saved highlight or user-created passage link promotes an article in the Feed folder to Later before annotation is committed, regardless of existing YAML status. Inbox, Later and Archive annotations leave status unchanged. Removing a highlight never demotes an article. Publisher links do not count.
 - Opening, scrolling, reaching the end, or saving a bookmark never changes status. There is no completion flag or read history. Opening an article in Reader moves the optional `dog_ear: true` current-article pointer to it, without changing status or its own reading-position `bookmark`.
 - `title`, `published`, `feed`, `topics`, `bookmark`, and `error` are optional. Existing notes may lack dates; there is no legacy backfill. The `feed` link retains subscription provenance after status changes; `status: feed` does not identify a subscription note.
 - `bookmark` is the existing bounded text-anchor representation, not a pixel offset, percentage, favorite or completion marker. It may cross inline formatting. Duplicate passages remain best effort; image-only pages keep the last valid text anchor.
@@ -90,18 +90,17 @@ Articles deleted outside Reader or before suppression was recorded can return wh
 - Publisher content is sanitized and bounded. Executable fence labels are removed; default Dataview/Templater expressions fail capture, including in titles. Reader is not a sandbox for arbitrary third-party processors.
 - Promotion must succeed before annotation commit. Status is saved first, annotation second, optional relocation last in the same file lane, so native relative-link rewriting never invalidates selection offsets. Failure can leave a retained Later note (with a saved annotation), never an annotation committed to stale Feed bytes. Browsing context and bookmark survive status changes.
 - Native/synced annotations and authored vault links must also be protected before expiry. Publisher web/section links do not protect feed articles.
-- Deletion and expiry use recoverable Obsidian trash only. No bulk note rewrites or migration. Opt-in status moves and retitling use guarded link-aware native rename; Obsidian's link-update setting is respected, not changed.
+- Unprotected deletions and expiry use recoverable Obsidian trash only. Reader archives articles with topics, highlights or other annotations instead of deleting them. No bulk note rewrites or migration. Reader status moves and retitling use guarded link-aware native rename; Obsidian's link-update setting is respected, not changed.
 
 ## Expiry and settings
 
-- Expiry applies only to explicit `status: feed`, after one clamped UTC calendar month. Explicit-zone and date-only values use strict before-cutoff comparison. Local-minute values retain their full minute: eligible only when minute start plus 60 seconds is at or before cutoff. Both candidate filtering and the final fresh-byte trash guard enforce this.
+- Expiry applies only inside the Feed folder with explicit `status: feed`, after one clamped UTC calendar month. Explicit-zone and date-only values use strict before-cutoff comparison. Local-minute values retain their full minute: eligible only when minute start plus 60 seconds is at or before cutoff. Both candidate filtering and the final fresh-byte trash guard enforce this.
 - Use publication date; otherwise filename `YYMMDD` interpreted in 2000–2099. Unknown age is retained. Old published feed entries are skipped to prevent import/expiry loops.
 - In-use articles, pending writes/promotion and uncertain backlink resolution remain protected. Final trash validation rechecks status, identity, current bytes and annotations; UI classification alone never authorizes expiry.
-- Two configurable creation destinations: articles (default `Reading/Articles`) and subscriptions (default `Reading/Feeds`). Same, nested and vault-root destinations are allowed; paths must remain safe and vault-relative. These are not discovery scopes or queue boundaries.
+- Manual Add URL and browser-link Save create articles in Inbox; feed imports create in Feed. A live observed native/QuickAdd article with explicit `status: inbox` is moved into Inbox after its creation is validated. Captures made while Reader is inactive must target Inbox in the external tool. Subscriptions default to `Reading/Feeds`. The old `captureFolders.articles` key is preserved but inert. Queue folders are discovery scopes for queue membership, not article identity.
 - New configuration is stored in `captureFolders`; previous `folders`, root and flat settings remain inert and preserved. Applying destinations does not migrate files, rewrite Markdown, acquire articles or promote them.
-- Optional `statusFolders` maps lowercase `inbox`/`feed`/`later`/`archive` to safe vault-relative folders. An absent key is unmapped; `""` maps to vault root (shown as `/` in settings). Shared/nested paths are allowed. Reader-created articles use their initial status mapping, falling back to the article capture folder. Subscriptions are unaffected.
-- Observed manual/native/synced YAML transitions also move mapped articles, after exact durable-byte checks. Initial indexing/creates, body-only edits, same-status choices and path-only moves do not organize existing notes. Missing → explicit valid status is a transition. Dirty/uncertain editors defer bounded session-local work until a safe editor/workspace event; file lanes serialize busy writes. Superseding status, rename, deletion, settings changes or unload invalidate pending work. Permanent move failures are reported, not retried indefinitely; status/contents are not rolled back. No startup or settings-apply sweep, note schema change or migration.
-- The explicit **Organize articles into status folders** command is the only bulk reconciliation: it scans the current article index on demand, reads each note's fresh YAML and moves valid mapped statuses without rewriting notes. Unmapped, missing or invalid statuses remain in place. Unsafe/stale moves fail individually; the command reports counts and errors. Applying mappings and startup still never sweep.
+- Four `statusFolders` destinations default to `Reading/Inbox`, `Reading/Stream`, `Reading/Later`, `Reading/Treasury`. Existing partial settings inherit missing defaults; paths must be nonempty, nonoverlapping, and outside Templates/.trash. Subscriptions are unaffected.
+- Native/synced YAML edits do not move articles. Initial indexing, body-only edits, and path-only moves never migrate or rewrite existing notes; only observed live new native Inbox captures receive placement. Unsafe editors and races block placement; no startup or settings-apply sweep or migration occurs.
 - Moves recheck identity, bytes, editor safety and late collisions, preserve filenames where available and add a collision suffix rather than overwrite. Native rename can rewrite links, so Reader rereads the result. Cross-device Sync and native I/O are not atomic transactions; disabled native link updates cannot guarantee link repair.
 - E-ink pagination is device-local. `bookmark` travels with the note through existing vault sync.
 

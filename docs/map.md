@@ -2,7 +2,7 @@
 
 One runtime, one Markdown store. Start with the [approved scope](rebuild-spec.md) and [storage contract](storage-contract.md); neither a cache nor UI state is write authority.
 
-The YAML-status/bookmark update is source-only and has not received native/device acceptance. Earlier folder-queue evidence below is historical, not validation of the new schema.
+The folder-authoritative queue update is source-only and has not received native/device acceptance. Earlier folder-queue evidence below is historical, not validation of the current storage rules.
 
 The last native build verified by this rebuild is `f4bf22574068b7605753cced90af11dc018602804b238c6dad71f53b2041224d`, Reader-only reloaded 2026-10-14T14:46:50.332Z. Bounded Mac acceptance and the final audit are complete; actual iPhone/Boox tests remain pending. The native lane is **returned to Wannes / hold true**: he can use the window now; agents must not access native Obsidian without fresh clearance.
 
@@ -19,19 +19,19 @@ src/main.ts                         Obsidian lifecycle, commands, routing
 
 ## Core: data and guarded writes
 
-| File in `src/core/`      | Responsibility                                                             |
-| ------------------------ | -------------------------------------------------------------------------- |
-| `model.ts`               | Article/feed types, paths, URLs, safe filenames, calendar-month age        |
-| `folders.ts`             | Two creation destinations, portable validation; root/shared/nested allowed |
-| `document.ts`            | YAML AST updates and exact-revision Markdown snapshots                     |
-| `capture-placeholder.ts` | Exact singleton native source-link eligibility; no authored-body override  |
-| `catalog.ts`             | Metadata-only queue/search/URL index and stable browsing snapshots         |
-| `store.ts`               | Serialized capture, acquisition, annotations, bookmark, status and trash   |
-| `annotations.ts`         | Inline highlight/link operations, annotation detection, import escaping    |
-| `projection.ts`          | Conservative mapping from rendered words to original Markdown ranges       |
-| `work.ts`                | Small keyed work queue and file-identity write serialization               |
+| File in `src/core/`      | Responsibility                                                                                  |
+| ------------------------ | ----------------------------------------------------------------------------------------------- |
+| `model.ts`               | Article/feed types, paths, URLs, safe filenames, calendar-month age                             |
+| `folders.ts`             | Feed-subscription creation destination and preserved inert article setting; portable validation |
+| `document.ts`            | YAML AST updates and exact-revision Markdown snapshots                                          |
+| `capture-placeholder.ts` | Exact singleton native source-link eligibility; no authored-body override                       |
+| `catalog.ts`             | Metadata-only queue/search/URL index and stable browsing snapshots                              |
+| `store.ts`               | Serialized capture, acquisition, annotations, bookmark, status and trash                        |
+| `annotations.ts`         | Inline highlight/link operations, annotation detection, import escaping                         |
+| `projection.ts`          | Conservative mapping from rendered words to original Markdown ranges                            |
+| `work.ts`                | Small keyed work queue and file-identity write serialization                                    |
 
-`store.ts` is the mutation boundary. It rechecks current identity/revision, promotes Feed/missing status to Later before annotation, writes queue changes in YAML, then optionally relocates mapped transitions using guarded native moves (also used for capture retitling). Annotation promotion saves Later, then the annotation, then moves; postmove snapshots use actual bytes/links. Session-only capture receipts permit safe filename retitling; they never become persisted ownership stamps. Explicit Reader deletion records feed-associated URLs in subscription `deleted_urls` before trash; RSS import rechecks suppression under a shared local import/delete lane. Expiry does not record suppression: it requires explicit `status: feed` in metadata and fresh bytes, protects active work/backlinks, then reads only candidate bodies. Missing status displays in Feed but never expires; invalid statuses remain unqueued/protected.
+`store.ts` is the mutation boundary. It rechecks current identity/revision, promotes Feed-folder articles to Later before annotation, writes Reader status changes in YAML, then moves them to their queue folder using guarded native moves (also used for capture retitling). Annotation promotion saves Later, then the annotation, then moves; postmove snapshots use actual bytes/links. Session-only capture receipts permit safe filename retitling; they never become persisted ownership stamps. Explicit Reader deletion archives annotated/topic-bearing articles; unprotected feed-associated deletions record URLs in subscription `deleted_urls` before trash; RSS import rechecks suppression under a shared local import/delete lane. Expiry does not record suppression: it requires explicit `status: feed` in metadata and fresh bytes, protects active work/backlinks, then reads only candidate bodies. Folder determines queue; expiry additionally requires explicit fresh `status: feed` in the Feed folder.
 
 ## Content: untrusted publisher input
 
@@ -50,8 +50,8 @@ Runtime libraries: `yaml`, `marked`, `entities`, `dompurify`, `defuddle`. No UI 
 - `host/network.ts`: bounded request slots and delivery timeouts. An uncancellable timed-out request retains its slot until the host settles it.
 - `host/ingestion.ts`: local-only subscription creation (editable hostname title/prefix), explicit latest-20 Sync/Refresh feeds imports, dedupe, cancellation, and acquisition proof against current excerpt/standalone native source-link bytes. Explicit confirmed re-download is separate from conservative acquisition/Retry and retains snapshot/editor/lifetime guards. No automatic feed polling or add-time fetch/import.
 - `host/dialogs.ts` / `settings.ts`: native input/dialogs, staged independent-folder settings and subscription controls.
-- `host/folder-settings.ts` / `folder-picker.ts`: two creation destinations in `captureFolders`, native suggestions including vault root. Existing legacy folder settings stay inert/preserved; no conversion or migration. Applying destinations drains old work and creates fresh list views without acquisition or promotion. Exact article/feed types are indexed anywhere in the vault.
-- `core/status-folders.ts` / `host/status-observer.ts`: optional `statusFolders` settings, mapped capture placement and observed explicit YAML transitions. Exact-byte own-write receipts and synchronous write notifications prevent delayed metadata from replaying moves. Identity baselines exclude startup/body/path-only sweeps; an explicit command can reconcile currently mapped articles on demand. Bounded unsafe-editor deferral retries on workspace events and busy file lanes. Superseded status/path/settings/unload cancels pending work. Native link-update preferences remain untouched; failures do not roll back retained YAML or saved annotations.
+- `host/folder-settings.ts` / `folder-picker.ts`: feed subscription creation destination in `captureFolders`; old article destination remains inert/preserved. Applying destinations drains old work and creates fresh list views without acquisition or promotion. Exact article/feed types outside Templates/.trash are indexed anywhere in the vault.
+- `core/status-folders.ts`: four required, nonoverlapping queue destinations with defaults including `Reading/Later`. Folder membership alone determines lists; Templates and .trash are excluded. Observed live native Inbox captures are moved after creation, while startup/settings/body/path-only changes never sweep old files. Native link-update preferences remain untouched; failed moves do not roll back retained YAML or saved annotations.
 - `host/nodes.ts`: optional public `fileclass-inline.api` v2. Passage Link/Change and Create note require `pickNodeForLink` and delegate to Fileclass Inline’s shared picker. Topic creation within the assignment multiselect uses optional `createNodeForLink` constrained to the exact `topic` class, with guarded source linking before required completion. No Reader-owned creation form, All notes route, standalone fallback, private Fileclass calls or migration.
 
 ## Reader: presentation and transient state
@@ -92,7 +92,7 @@ Final overall backup audit: 43 → 43, no additions/deletions; only `reading_pos
 
 See [recorded evidence and phone checklist](mobile-smoke.md) (`reader-redesign-audit.json`, `native-folder-apply.json`, `native-resume.json`, `routing.json`, `uri.json`) and the [historical/current report](rebuild-report.html). That installed build's recorded validation: 1042 unit + 72 tooling = 1114; test-only 8.258s, full check 12.361s. Automated geometry and the four-width production Surface browser checks are not physical-device evidence.
 
-The source additionally preserves image enlargement, web-link capture, transient highlight acknowledgement and tracked native-title refresh. The six-action toolbar sets Later (clock) without advancing, or Archive (archive icon) and advances; queue changes write YAML and leave paths unchanged unless that status has an opt-in folder mapping. Reading position is `bookmark`, with legacy position values preserved/inert; `dog_ear` independently identifies the current shortcut article. Source regressions do not extend earlier native acceptance; implementation does not install, convert or reload a vault.
+The source additionally preserves image enlargement, web-link capture, transient highlight acknowledgement and tracked native-title refresh. The six-action toolbar sets Later (clock) without advancing, or Archive (archive icon) and advances; Reader queue changes write YAML and move into the corresponding queue folder. Reading position is `bookmark`, with legacy position values preserved/inert; `dog_ear` independently identifies the current shortcut article. Source regressions do not extend earlier native acceptance; implementation does not install, convert or reload a vault.
 
 Remaining checks require a future authorized window; the current native hold remains true:
 

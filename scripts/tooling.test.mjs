@@ -264,8 +264,11 @@ test('seed library emits YAML-backed inline Markdown without active sidecars', (
       assert.equal(metadata.url, 'https://example.invalid/reader/feed.xml');
     } else {
       assert.equal(metadata.type, 'article');
-      assert.ok(path.startsWith('Reading/Articles/'));
       assert.ok(['inbox', 'later', 'feed', 'archive'].includes(metadata.status));
+      const folder = { inbox: 'Inbox', feed: 'Stream', later: 'Later', archive: 'Treasury' }[
+        metadata.status
+      ];
+      assert.ok(path.startsWith(`Reading/${folder}/`));
       assert.ok(body.trim());
       for (const key of [
         'id',
@@ -279,7 +282,7 @@ test('seed library emits YAML-backed inline Markdown without active sidecars', (
         assert.equal(Object.hasOwn(metadata, key), false, `${path}: ${key}`);
     }
   }
-  const path = `Reading/Articles/261009 ${seedTitle}.md`;
+  const path = `Reading/Inbox/261009 ${seedTitle}.md`;
   assert.ok(files[path].endsWith(seedBody));
   assert.equal(parsed(files[path]).metadata.url, 'https://example.invalid/reader/quiet-library');
   assert.equal(parsed(files[path]).metadata['test-note'], 'Preserve this unknown property');

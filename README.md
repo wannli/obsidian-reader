@@ -39,7 +39,7 @@ This README describes the current source. An installed release may not include e
 2. Paste an article URL. Reader saves it to **Inbox** and extracts readable text when online.
 3. Use **Open reading list** to return to your library. Select text in an article to highlight it, choose **Read later** to keep it on your list, or **Archive** to set it aside.
 
-The default capture folders are `Reading/Articles` and `Reading/Feeds`. Change them in Reader settings if you prefer; Reader finds articles and subscriptions anywhere in your vault.
+Manual and browser-link captures go to `Reading/Inbox`; imported feed articles go to `Reading/Stream`. New native/QuickAdd notes with `type: article` and `status: inbox` are placed in Inbox when Reader observes their live creation. Configure the native capture tool to target Inbox too, especially for captures made while Reader is not running. Subscription notes default to `Reading/Feeds` (configurable). Reader can still read typed articles elsewhere, but they are not in a reading list.
 
 ## A place for every article
 
@@ -54,7 +54,7 @@ The default capture folders are `Reading/Articles` and `Reading/Feeds`. Change t
 
 Highlighting or linking a passage in a Feed article moves it to Later before saving the annotation. **Simply opening or reading a Feed article does not keep it.** Choose Later or Archive if you want to retain it.
 
-Only notes with explicit `status: feed` can expire, one calendar month after their publication date (or filename date as a fallback)—not a month after import. Annotated, in-use, and unknown-age notes are protected. Notes without a status appear in Feed but never expire; invalid statuses remain outside the lists and do not expire. See the [storage contract](docs/storage-contract.md) for the full safety rules.
+Only notes in the Feed folder with explicit `status: feed` can expire, one calendar month after their publication date (or filename date as a fallback)—not a month after import. Articles with topics, highlights or other annotations are archived rather than trashed by Reader. In-use and unknown-age notes are protected. A missing or conflicting YAML status never authorizes deletion. See the [storage contract](docs/storage-contract.md) for the full safety rules.
 
 ### Find your way around
 
@@ -66,7 +66,7 @@ Only notes with explicit `status: feed` can expire, one calendar month after the
 - On desktop, **j / k** navigate articles. At article boundaries, **Up / PageUp** and **Down / PageDown** move to the previous or next article, resuming its saved position.
 - On iPhone, **Copy reading-list link** opens the library. **Copy dog-ear link** opens the last article you opened in Reader, or the first (newest) Inbox article if none is marked. Each gives you a vault-aware link for a Shortcuts **URL → Open URLs → Add to Home Screen** shortcut. You can also use **Open dog-eared article** from the command palette.
 
-Lists follow the note’s `status`, not its folder. Optional **Status folders** settings can move articles when their status changes, and place new Reader captures in the matching folder. Applying these settings does not reorganize existing notes. Run **Organize articles into status folders** from the command palette when you want to move existing articles with a valid mapped YAML status; unmapped or invalid statuses stay where they are. Leave a mapping blank for no move; use `/` for the vault root. Moves respect Obsidian’s internal-link update preference; disabling it can leave links broken.
+Lists follow the article's folder, not its YAML `status`. The four queue folders default to `Reading/Inbox`, `Reading/Stream` (Feed), `Reading/Later`, and `Reading/Treasury` (Archive), and can be changed in Reader settings. Folders must be distinct and cannot overlap. A folder move made outside Reader changes the list without rewriting YAML; a Reader status action updates YAML and moves the file. Applying settings does not move existing notes, and no automatic migration runs. `Templates/` and `.trash/` (including nested folders with those names) are excluded from Reader entirely. Moves respect Obsidian’s internal-link update preference; disabling it can leave links broken.
 
 ## Follow feeds without the backlog
 
@@ -94,7 +94,7 @@ The **Topics** multiselect can also **Add topic** through optional API v2 `creat
 
 While reading, clicking a web link offers **Save to Inbox**, **Open link**, or **Cancel**. Saving keeps your current article open.
 
-For native iOS capture, configure locations, templates, and shortcuts directly in [Obsidian](https://help.obsidian.md/mobile/ios). Give captured notes `type: article`, `status: inbox`, and a `url` property. Reader can fetch the article while active and online when the body is empty or contains only a Markdown source link matching that URL. A plain URL body is not a supported placeholder.
+For native iOS/QuickAdd capture, configure the destination as `Reading/Inbox` (or your configured Inbox folder), along with templates and shortcuts, directly in [Obsidian](https://help.obsidian.md/mobile/ios). Give captured notes `type: article`, `status: inbox`, and a `url` property. Reader can fetch the article while active and online when the body is empty or contains only a Markdown source link matching that URL. A plain URL body is not a supported placeholder.
 
 Reader leaves extra text, annotations, and native Full Text captures intact. Native captures keep their own filenames and do not use Reader’s URL deduplication; use **Add URL** when you want that behavior. Reader does not install templates or change your capture setup.
 

@@ -153,7 +153,7 @@ async function fixture() {
   };
   const old = await note('Topics/Old.md', { type: 'topic' });
   const other = await note('Topics/Other.md', { type: 'topic' });
-  const article = await note('Article.md', {
+  const article = await note('Reading/Stream/Article.md', {
     type: 'article',
     status: 'feed',
     topics: ['[[Topics/Old.md]]'],
@@ -436,7 +436,7 @@ describe('article topics creation and draft', () => {
       let complete = false;
       f.api.createNodeForLink = vi.fn(async (options, link) => {
         expect(options.type).toBe('topic');
-        expect(options.sourcePath).toBe('Article.md');
+        expect(options.sourcePath).toBe('Reading/Stream/Article.md');
         await f.note('Topics/New.md', { type: 'topic' });
         await link(f.node('Topics/New.md'));
         const saved = await f.saved();
@@ -491,7 +491,7 @@ describe('article topics creation and draft', () => {
 
   it('advances its own body/path baseline after relocation and supports another creation then Save', async () => {
     const f = await fixture();
-    f.store.setStatusFolders({ later: 'Later' });
+    f.store.setStatusFolders({ later: 'Reading/Later' });
     const move = f.vault.move.bind(f.vault);
     vi.spyOn(f.vault, 'move').mockImplementation(async (file, path, guard) => {
       await move(file, path, guard);
@@ -504,7 +504,9 @@ describe('article topics creation and draft', () => {
     f.probe.surface = { setBody };
     let count = 0;
     f.api.createNodeForLink = async (options, link) => {
-      expect(options.sourcePath).toBe(count === 0 ? 'Article.md' : 'Later/Article.md');
+      expect(options.sourcePath).toBe(
+        count === 0 ? 'Reading/Stream/Article.md' : 'Reading/Later/Article.md',
+      );
       const path = `Topics/New${++count}.md`;
       await f.note(path, { type: 'topic' });
       await link(f.node(path));
@@ -513,7 +515,7 @@ describe('article topics creation and draft', () => {
     const { pending } = await f.open();
     button('Add topic').click();
     await tick();
-    expect(f.article.path).toBe('Later/Article.md');
+    expect(f.article.path).toBe('Reading/Later/Article.md');
     expect(setBody).toHaveBeenCalledOnce();
     button('Add topic').click();
     await tick();

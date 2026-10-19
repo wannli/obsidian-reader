@@ -561,7 +561,7 @@ describe('final native trash validation', () => {
       url: 'https://example.com/one',
     };
     const file = f.note(
-      'Reading/Feed/260801 Story.md',
+      'Reading/Stream/260801 Story.md',
       createDocument(properties, 'Publisher text.'),
     );
     store.catalog.update(file.path, properties);
@@ -587,7 +587,7 @@ describe('final native trash validation', () => {
         store = new ArticleStore(f.adapter);
       const properties = { type: 'article', status: 'feed', published: '2026-08-01' };
       const file = f.note(
-        'Reading/Feed/260801 Story.md',
+        'Reading/Stream/260801 Story.md',
         createDocument(properties, 'Publisher text.'),
       );
       store.catalog.update(file.path, properties);
@@ -1016,11 +1016,12 @@ describe('native YAML-link annotation events', () => {
 });
 
 describe('folder-only library events', () => {
-  it('preserves YAML queue and feed membership after native folder moves', () => {
+  it('reclassifies by folder while preserving YAML and feed membership after native folder moves', () => {
     const f = libraryFixture();
     const article = f.add('Reading/Inbox/Group/Article.md', { type: 'article', status: 'later' });
     f.renameFolder(f.folder('Reading/Inbox/Group'), 'Reading/Later/Group');
     expect(f.store.catalog.article(article.path)?.queue).toBe('Later');
+    expect(f.store.catalog.article(article.path)?.status).toBe('later');
     const feed = f.add('Reading/Feeds/Group/Feed.md', {
       type: 'feed',
       url: 'https://example.com/feed',
@@ -1036,12 +1037,12 @@ describe('folder-only library events', () => {
     'reindexes article/feed descendants after a folder-only rename (omitted children: %s)',
     (omitChildren) => {
       const f = libraryFixture();
-      const article = f.add('Reading/Feeds/Group/Story.md', {
+      const article = f.add('Reading/Stream/Group/Story.md', {
         type: 'article',
         url: 'https://example.com/story',
       });
-      const nested = f.add('Reading/Feeds/Group/Nested/Other.md', { type: 'article' });
-      const feed = f.add('Reading/Feeds/Group/Nested/Feed.md', {
+      const nested = f.add('Reading/Stream/Group/Nested/Other.md', { type: 'article' });
+      const feed = f.add('Reading/Stream/Group/Nested/Feed.md', {
         type: 'feed',
         url: 'https://example.com/feed',
       });
@@ -1051,7 +1052,7 @@ describe('folder-only library events', () => {
       });
       const old = [article.path, nested.path, feed.path],
         revoked = vi.spyOn(f.store, 'noteRenamed');
-      f.renameFolder(f.folder('Reading/Feeds/Group'), 'Reading/Feeds/Renamed', omitChildren);
+      f.renameFolder(f.folder('Reading/Stream/Group'), 'Reading/Stream/Renamed', omitChildren);
       for (const path of old) {
         expect(f.store.catalog.article(path)).toBeUndefined();
         expect(f.store.catalog.feed(path)).toBeUndefined();
@@ -1089,9 +1090,9 @@ describe('folder-only library events', () => {
     const file = await f.store.capture({ url: 'https://example.com/capture' });
     const original = file.path;
     f.caches.set(file, { frontmatter: readDocument(f.bytes.get(file)!).properties });
-    const folder = f.folder('Reading/Articles');
+    const folder = f.folder('Reading/Inbox');
     f.renameFolder(folder, 'Elsewhere/Temporary');
-    f.renameFolder(folder, 'Reading/Articles');
+    f.renameFolder(folder, 'Reading/Inbox');
     expect(f.vault.read).not.toHaveBeenCalled();
     const saved = await f.store.acquire(
       await f.store.read(original),
@@ -1106,11 +1107,11 @@ describe('folder-only library events', () => {
     'removes article/feed index descendants on folder deletion (omitted children: %s)',
     (omitChildren) => {
       const f = libraryFixture();
-      const article = f.add('Reading/Feeds/Group/Story.md', {
+      const article = f.add('Reading/Stream/Group/Story.md', {
         type: 'article',
         url: 'https://example.com/story',
       });
-      const feed = f.add('Reading/Feeds/Group/Nested/Feed.md', {
+      const feed = f.add('Reading/Stream/Group/Nested/Feed.md', {
         type: 'feed',
         url: 'https://example.com/feed',
       });
@@ -1119,7 +1120,7 @@ describe('folder-only library events', () => {
         status: 'inbox',
       });
       const revoked = vi.spyOn(f.store, 'noteRenamed');
-      f.deleteFolder(f.folder('Reading/Feeds/Group'), omitChildren);
+      f.deleteFolder(f.folder('Reading/Stream/Group'), omitChildren);
       expect(f.store.catalog.article(article.path)).toBeUndefined();
       expect(f.store.catalog.feed(feed.path)).toBeUndefined();
       expect(f.store.catalog.findUrl('https://example.com/story')).toBeUndefined();
@@ -1150,9 +1151,9 @@ describe('folder-only library events', () => {
     const folder = f.folder('Reading/Inbox/Group'),
       revoke = vi.spyOn(f.store, 'noteRenamed');
     f.stop();
-    expect(f.offref).toHaveBeenCalledTimes(7);
+    expect(f.offref).toHaveBeenCalledTimes(6);
     f.stop();
-    expect(f.offref).toHaveBeenCalledTimes(7);
+    expect(f.offref).toHaveBeenCalledTimes(6);
     f.renameFolder(folder, 'Reading/Later/Group');
     f.deleteFolder(folder);
     expect(f.changes).toEqual([]);

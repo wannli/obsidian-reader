@@ -188,7 +188,7 @@ describe('guarded article operations', () => {
   });
   it('expiry promotes source-authored annotations, ignores publisher links, and uses recoverable trash', async () => {
     const { store, vault } = await setup();
-    await store.capture({
+    const annotated = await store.capture({
       url: 'https://example.com/two',
       body: 'An ==annotated passage==.',
       queue: 'Feed',
@@ -200,10 +200,16 @@ describe('guarded article operations', () => {
       queue: 'Feed',
       published: '2026-08-01',
     });
+    const annotatedBody = (await store.read(annotated.path)).body;
     const result = await store.expire(new Date('2026-10-13'));
     expect(result).toEqual({ deleted: 2, promoted: 1, retained: 0 });
     expect(vault.trashed).toHaveLength(2);
-    expect(store.catalog.list('Later')).toHaveLength(1);
+    expect(store.catalog.list('Archive').map((article) => article.path)).toEqual([
+      'Reading/Treasury/' + annotated.path.split('/').pop(),
+    ]);
+    expect((await store.read(annotated.path)).properties.status).toBe('archive');
+    expect((await store.read(annotated.path)).body).toBe(annotatedBody);
+    expect(vault.trashed).not.toContain(annotated.path);
   });
   it.each([
     '> ==first\n> second==',
@@ -246,10 +252,11 @@ describe('guarded article operations', () => {
         promoted: 1,
         retained: 0,
       });
-      expect((await store.read(file.path)).properties.status).toBe('later');
+      expect(file.path).toMatch(/^Reading\/Treasury\//);
+      expect((await store.read(file.path)).properties.status).toBe('archive');
       expect(readDocument(await vault.read(file)).properties).toEqual({
         ...readDocument(raw).properties,
-        status: 'later',
+        status: 'archive',
       });
       expect((await store.read(file.path)).body).toBe(readDocument(raw).body);
       expect(vault.trashed).toEqual([]);

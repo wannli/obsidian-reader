@@ -109,8 +109,15 @@ export function monthCutoff(now: Date): number {
     now.getUTCMilliseconds(),
   );
 }
-export function articleInfo(path: string, properties: Properties): ArticleInfo | undefined {
-  if (properties.type !== 'article') return;
+export function excludedReaderPath(path: string): boolean {
+  return path.split('/').some((part) => /^(?:templates|\.trash)$/i.test(part));
+}
+export function articleInfo(
+  path: string,
+  properties: Properties,
+  folderQueue?: Queue,
+): ArticleInfo | undefined {
+  if (properties.type !== 'article' || excludedReaderPath(path)) return;
   const name = path.split('/').pop()!.replace(/\.md$/i, '');
   let url = '';
   try {
@@ -124,7 +131,7 @@ export function articleInfo(path: string, properties: Properties): ArticleInfo |
     path,
     title: text(properties.title).trim() || name.replace(/^\d{6} /, ''),
     url,
-    queue: queueAt(properties),
+    queue: folderQueue,
     status: Object.hasOwn(properties, 'status') ? articleStatus(properties.status) : undefined,
     dogEar: properties.dog_ear === true,
     published,
@@ -137,7 +144,7 @@ export function articleInfo(path: string, properties: Properties): ArticleInfo |
   };
 }
 export function subscription(path: string, properties: Properties): Subscription | undefined {
-  if (properties.type !== 'feed') return;
+  if (properties.type !== 'feed' || excludedReaderPath(path)) return;
   const title = text(properties.title).trim() || path.split('/').pop()!.replace(/\.md$/i, '');
   return {
     path,

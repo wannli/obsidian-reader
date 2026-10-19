@@ -24,14 +24,14 @@ export function seedFiles(day = localDay()) {
     '.obsidian/community-plugins.json': json([pluginId]),
     [`.obsidian/plugins/${pluginId}/data.json`]: json({
       captureFolders: {
-        articles: 'Reading/Articles',
+        articles: 'Reading/Articles', // Inert legacy setting; queue folders below own article creation.
         feeds: 'Reading/Feeds',
       },
     }),
     'Welcome.md':
       '# Reader Test Vault\n\nThis vault is exclusively for synthetic Reader development and testing. Never put personal notes here.\n\nUse Reader’s Open reading list command, then choose The quiet library. Highlights use ==ordinary inline Markdown== inside each article, and state stays in YAML frontmatter. Links are ordinary inline links. Reader does not maintain daily copies or require JSON sidecars; existing journal text stays untouched.\n\nThe sample feed is disabled and offline. Setup preserves every existing file. Plugin updates back up and replace only the three plugin distribution files.\n\nNative Obsidian, device behavior, and sync require manual acceptance; unit tests do not prove them.\n',
     ...managedNote(
-      `Reading/Articles/${added} ${seedTitle}.md`,
+      `Reading/Inbox/${added} ${seedTitle}.md`,
       {
         type: 'article',
         status: 'inbox',
@@ -53,7 +53,7 @@ export function seedFiles(day = localDay()) {
     ),
     // No publication date is known for this fictional RSS item: added-day fallback only.
     ...managedNote(
-      `Reading/Articles/${added} Synthetic - A paper lantern — Reader synthetic feed item.md`,
+      `Reading/Stream/${added} Synthetic - A paper lantern — Reader synthetic feed item.md`,
       {
         type: 'article',
         status: 'feed',
@@ -63,7 +63,7 @@ export function seedFiles(day = localDay()) {
       '# A paper lantern\n\nAn offline synthetic feed item makes the Feed list visible without requesting the internet.\n',
     ),
     ...managedNote(
-      `Reading/Articles/${added} Reader synthetic later item.md`,
+      `Reading/Later/${added} Reader synthetic later item.md`,
       {
         type: 'article',
         status: 'later',
@@ -71,7 +71,7 @@ export function seedFiles(day = localDay()) {
       '# A future page\n\nThis synthetic sample waits in Later.\n',
     ),
     ...managedNote(
-      `Reading/Articles/${added} Reader synthetic archive item.md`,
+      `Reading/Treasury/${added} Reader synthetic archive item.md`,
       {
         type: 'article',
         status: 'archive',

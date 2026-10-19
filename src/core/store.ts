@@ -13,7 +13,6 @@ import {
 import { hasAnnotations } from './annotations';
 import {
   deletedUrls,
-  articleStatus,
   linkPath,
   text,
   filename,
@@ -21,7 +20,7 @@ import {
   formatPublished,
   monthCutoff,
   publicationBefore,
-  queueAt,
+  excludedReaderPath,
   queueStatus,
   timestamp,
   webUrl,
@@ -30,7 +29,24 @@ import {
 } from './model';
 import { SerialWrites } from './work';
 import { defaultFolders, type ReaderFolders } from './folders';
-import { validateStatusFolders, type StatusFolders } from './status-folders';
+import {
+  defaultStatusFolders,
+  queueForPath,
+  validateStatusFolders,
+  type StatusFolders,
+  type ResolvedStatusFolders,
+} from './status-folders';
+
+function protectedArticle(body: string, properties: Properties): boolean {
+  const topics = properties.topics;
+  return (
+    hasAnnotations(body, properties) ||
+    (topics !== undefined &&
+      topics !== null &&
+      topics !== '' &&
+      (!Array.isArray(topics) || topics.length > 0))
+  );
+}
 
 export interface NoteFile {
   path: string;
@@ -70,46 +86,14 @@ export class ArticleStore<File extends NoteFile> {
   private captures = new WeakMap<File, { path: string; date: Date }>();
   private active = true;
   readonly folders: ReaderFolders;
-  private statusFolders: StatusFolders = {};
-  private ownRevisions: { file: File; raw: string }[] = [];
-  private ownRevisionSize = 0;
+  private statusFolders: ResolvedStatusFolders = defaultStatusFolders;
   private statusFolderRevision = 0;
-  private statusListeners = new Set<
-    (file: File, status: unknown, raw: string, changed: boolean) => void
-  >();
-  observeStatusWrites(
-    listener: (file: File, status: unknown, raw: string, changed: boolean) => void,
-  ): () => void {
-    this.statusListeners.add(listener);
-    return () => {
-      this.statusListeners.delete(listener);
-    };
-  }
-  hasStatusFolder(status: unknown): boolean {
-    const valid = articleStatus(status);
-    return valid !== undefined && this.statusFolders[valid] !== undefined;
-  }
   get statusFolderGeneration(): number {
     return this.statusFolderRevision;
   }
-  /** Consume delayed metadata acknowledgement, independent of write-lane timing. */
-  acknowledgeStatus(file: File, raw: string): boolean {
-    const index = this.ownRevisions.findIndex((entry) => entry.file === file && entry.raw === raw);
-    if (index < 0) return false;
-    this.ownRevisionSize -= this.ownRevisions[index].raw.length;
-    this.ownRevisions.splice(index, 1);
-    return true;
-  }
-  private rememberRevision(file: File, raw: string): void {
-    this.ownRevisions.push({ file, raw });
-    this.ownRevisionSize += raw.length;
-    // Exact-byte receipts are session-only and globally bounded (UTF-16 units).
-    while (this.ownRevisions.length > 128 || this.ownRevisionSize > 4 * 1024 * 1024) {
-      this.ownRevisionSize -= this.ownRevisions.shift()!.raw.length;
-    }
-  }
   setStatusFolders(folders: StatusFolders): void {
     this.statusFolders = validateStatusFolders(folders);
+    this.catalog.setStatusFolders(this.statusFolders);
     this.statusFolderRevision++;
   }
   constructor(
@@ -121,9 +105,6 @@ export class ArticleStore<File extends NoteFile> {
   }
   dispose(): void {
     this.active = false;
-    this.ownRevisions = [];
-    this.ownRevisionSize = 0;
-    this.statusListeners.clear();
     this.captures = new WeakMap();
   }
   /** Host path changes revoke ownership even if the file later returns to its original path. */
@@ -143,6 +124,8 @@ export class ArticleStore<File extends NoteFile> {
   }
   private assert(file: File, expectedPath = file.path): void {
     if (!this.active) throw new Error('Reader has stopped.');
+    if (excludedReaderPath(expectedPath) || excludedReaderPath(file.path))
+      throw new ChangedNote('Templates and trash are not Reader articles.');
     this.captureReceipt(file); // Observed native/user renames permanently revoke the receipt.
     if (file.path !== expectedPath || this.vault.file(expectedPath) !== file)
       throw new ChangedNote();
@@ -150,6 +133,8 @@ export class ArticleStore<File extends NoteFile> {
   }
   async read(path: string): Promise<Snapshot<File>> {
     if (!this.active) throw new Error('Reader has stopped.');
+    if (excludedReaderPath(path))
+      throw new ChangedNote('Templates and trash are not Reader articles.');
     const file = this.vault.file(path);
     if (!file) throw new ChangedNote('The article no longer exists.');
     this.captureReceipt(file);
@@ -251,6 +236,7 @@ export class ArticleStore<File extends NoteFile> {
     return this.writes.run(file, async () => {
       guard();
       const path = file.path;
+      if (excludedReaderPath(path)) return false;
       this.assert(file, path);
       const raw = await this.vault.read(file);
       guard();
@@ -336,17 +322,9 @@ export class ArticleStore<File extends NoteFile> {
       this.assert(snapshot.file, snapshot.path);
       if (current !== snapshot.raw) throw new ChangedNote();
       const next = transform(current);
-      this.rememberRevision(snapshot.file, next);
       return next;
     });
     const doc = requireArticle(raw);
-    for (const listener of this.statusListeners)
-      listener(
-        snapshot.file,
-        doc.properties.status,
-        raw,
-        snapshot.properties.status !== doc.properties.status,
-      );
     this.catalog.update(snapshot.file.path, doc.properties);
     return {
       file: snapshot.file,
@@ -375,57 +353,15 @@ export class ArticleStore<File extends NoteFile> {
     this.captures.delete(snapshot.file);
     const status = queueStatus(queue),
       folder = this.statusFolders[status],
-      transition = snapshot.properties.status !== status;
+      transition = queueForPath(snapshot.path, this.statusFolders) !== queue;
     const saved = await this.commit(snapshot, (raw) => {
       guard();
       return patchProperties(raw, { status });
     });
     // YAML commits first: a failed relocation never makes a retained article disposable.
-    // Selecting the same status is not a request to organize existing notes.
-    if (!relocate || !transition || folder === undefined) return saved;
+    // The destination folder, not stale YAML, determines whether a move is needed.
+    if (!relocate || !transition) return saved;
     return this.relocate(saved, status, folder, guard);
-  }
-  /** Explicit one-note organization request; never writes YAML or infers status from a folder. */
-  organizeStatusFolder(path: string, generation = this.statusFolderRevision): Promise<boolean> {
-    const file = this.vault.file(path);
-    if (!file) return Promise.reject(new ChangedNote('The article no longer exists.'));
-    return this.writes.run(file, async () => {
-      if (generation !== this.statusFolderRevision) throw new ChangedNote('Mappings changed.');
-      const current = await this.read(path);
-      if (current.file !== file) throw new ChangedNote();
-      const status = articleStatus(current.properties.status);
-      const folder = status && this.statusFolders[status];
-      if (!status || folder === undefined) return false;
-      const targetFolder = current.path.includes('/')
-        ? current.path.slice(0, current.path.lastIndexOf('/'))
-        : '';
-      if (targetFolder === folder) return false;
-      const guard = () => {
-        if (generation !== this.statusFolderRevision) throw new ChangedNote('Mappings changed.');
-      };
-      guard();
-      this.captures.delete(file);
-      await this.relocate(current, status, folder, guard);
-      return true;
-    });
-  }
-  /** Only an observed status transition calls this; never startup or path reconciliation. */
-  observedStatusChange(
-    file: File,
-    raw: string,
-    valid: () => void = () => {},
-    expectedStatus?: string,
-  ): Promise<void> {
-    return this.writes.run(file, async () => {
-      valid();
-      const current = await this.read(file.path);
-      if (current.file !== file || current.raw !== raw) throw new ChangedNote();
-      const status = articleStatus(current.properties.status);
-      if (expectedStatus !== undefined && status !== expectedStatus) throw new ChangedNote();
-      if (!status || this.statusFolders[status] === undefined) return;
-      this.captures.delete(file);
-      await this.relocate(current, status, this.statusFolders[status]!, valid);
-    });
   }
   private relocate(
     saved: Snapshot<File>,
@@ -461,7 +397,6 @@ export class ArticleStore<File extends NoteFile> {
       const current = await this.read(saved.file.path);
       if (current.file !== saved.file || current.properties.status !== status)
         throw new ChangedNote();
-      this.rememberRevision(current.file, current.raw);
       this.catalog.rename(saved.path, current.path, current.properties);
       return current;
     });
@@ -473,7 +408,7 @@ export class ArticleStore<File extends NoteFile> {
       const proposed = transform(snapshot.raw);
       if (proposed === snapshot.raw) return snapshot;
       let current = snapshot;
-      const promote = queueAt(current.properties) === 'Feed';
+      const promote = queueForPath(current.path, this.statusFolders) === 'Feed';
       const folder = this.statusFolders.later;
       if (promote) current = await this.moveNow(current, 'Later', () => {}, false);
       if (current.body !== snapshot.body)
@@ -484,7 +419,7 @@ export class ArticleStore<File extends NoteFile> {
         if (promote && requireArticle(raw).properties.status !== 'later') throw new ChangedNote();
         return transform(raw);
       });
-      if (promote && folder !== undefined) return this.relocate(annotated, 'later', folder);
+      if (promote) return this.relocate(annotated, 'later', folder);
       return annotated;
     });
   }
@@ -611,6 +546,10 @@ export class ArticleStore<File extends NoteFile> {
     );
   }
   trash(snapshot: Snapshot<File>, guard: () => void = () => {}): Promise<void> {
+    // Explicit Delete also retains annotated/topic-bearing articles. A stale snapshot
+    // cannot bypass this: move revalidates the exact bytes before writing or renaming.
+    if (protectedArticle(snapshot.body, snapshot.properties))
+      return this.move(snapshot, 'Archive', guard).then(() => {});
     return this.rss.run('rss', () => this.trashNote(snapshot, guard, true));
   }
   private trashNote(
@@ -644,6 +583,11 @@ export class ArticleStore<File extends NoteFile> {
       await this.vault.trash(snapshot.file, (current) => {
         this.assert(snapshot.file, snapshot.path);
         if (current !== snapshot.raw) throw new ChangedNote();
+        if (remember) {
+          const fresh = requireArticle(current);
+          if (protectedArticle(fresh.body, fresh.properties))
+            throw new ChangedNote('Protected articles can only be archived.');
+        }
         validate(current);
         guard();
       });
@@ -658,7 +602,7 @@ export class ArticleStore<File extends NoteFile> {
       cutoff = monthCutoff(now);
     for (const article of [...this.catalog.values()]) {
       if (!this.active) break;
-      if (article.status !== 'feed') continue;
+      if (article.queue !== 'Feed' || article.status !== 'feed') continue;
       // Cleanup needs bodies only for potentially expired notes. Fresh/undated
       // annotation promotion belongs to native change handling and reader writes.
       if (!publicationBefore(article.published, cutoff, filenameDay(article.path))) continue;
@@ -669,10 +613,13 @@ export class ArticleStore<File extends NoteFile> {
       }
       try {
         const snapshot = await this.read(article.path);
-        if (!Object.hasOwn(snapshot.properties, 'status') || snapshot.properties.status !== 'feed')
+        if (
+          queueForPath(snapshot.path, this.statusFolders) !== 'Feed' ||
+          snapshot.properties.status !== 'feed'
+        )
           continue;
-        if (hasAnnotations(snapshot.body, snapshot.properties)) {
-          await this.move(snapshot, 'Later');
+        if (protectedArticle(snapshot.body, snapshot.properties)) {
+          await this.move(snapshot, 'Archive');
           result.promoted++;
         } else if (
           publicationBefore(snapshot.properties.published, cutoff, filenameDay(snapshot.path))
@@ -688,12 +635,13 @@ export class ArticleStore<File extends NoteFile> {
               if (
                 !Object.hasOwn(fresh.properties, 'status') ||
                 fresh.properties.status !== 'feed' ||
+                queueForPath(snapshot.file.path, this.statusFolders) !== 'Feed' ||
                 !publicationBefore(
                   fresh.properties.published,
                   cutoff,
                   filenameDay(snapshot.path),
                 ) ||
-                hasAnnotations(fresh.body, fresh.properties)
+                protectedArticle(fresh.body, fresh.properties)
               )
                 throw new ChangedNote('Article is no longer eligible for expiry.');
             },

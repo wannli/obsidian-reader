@@ -38,7 +38,7 @@ it('acquires the actual native source-link sample, retaining position and its fi
   expect(saved.properties.reading_position).toBe('iOS and iPadOS 27 -');
   expect(saved.properties.bookmark).toBe('Current bookmark');
   expect(saved.properties).not.toHaveProperty('status');
-  expect(f.store.catalog.article(f.file.path)?.queue).toBe('Feed');
+  expect(f.store.catalog.article(f.file.path)?.queue).toBe('Inbox');
   expect(f.store.catalog.article(f.file.path)?.status).toBeUndefined();
   expect(f.file.path).toBe('Reading/Inbox/Native capture.md');
   expect(extraction).toHaveBeenCalledOnce();
@@ -65,7 +65,9 @@ it.each(['inbox', 'feed', 'later', 'archive', null])(
     expect(saved.properties.status).toBe(status);
     expect(saved.properties.bookmark).toBe('Current bookmark');
     expect(saved.properties.reading_position).toBe('Legacy marker');
+    // Acquiring a native share changes its body, not its explicit YAML or folder.
     expect(f.file.path).toBe(f.snapshot.path);
+    expect(f.store.catalog.article(f.file.path)?.queue).toBe('Inbox');
   },
 );
 

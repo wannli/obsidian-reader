@@ -9,7 +9,7 @@
 - Existing user files and personal installations remain untouched. No publication or personal-vault deployment is authorized.
 - Local synthetic-vault setup, plugin installation and development Hot Reload are explicitly authorized. Reader's disposable-vault Obsidian Sync setup is also authorized; joint testing excludes Hot Reload/instrumentation from Sync and requires the other plugin owner's verified build/clearance.
 - Added functionality requires explicit approval; engineering choices must serve this scope.
-- YAML organization approved on 15 October: this source uses status queues and `bookmark` as detailed below. Earlier native acceptance predates this change; no installed-vault conversion or deployment is authorized.
+- Folder-authoritative queues approved on 19 October: this source retains YAML `status` as a mirror and uses `bookmark` as detailed below. Earlier native acceptance predates this change; no installed-vault conversion or deployment is authorized.
 - Current installed Reader: `f4bf22574068b7605753cced90af11dc018602804b238c6dad71f53b2041224d`, Reader-only reloaded on 2026-10-14T14:46:50.332Z. Recorded checks: 1042 unit + 72 tooling = 1114; test-only 8.258s, full check 12.361s. Earlier build/benchmark metrics are historical, not current.
 - Final bounded Mac acceptance and audit are complete. The native lane is returned to Wannes, **hold true**; he can use the window now. No agent native access without fresh clearance. Actual iPhone/Boox acceptance remains pending; Sync reports synced with restored settings untouched.
 
@@ -45,13 +45,13 @@
 
 ## Approved organization and reading
 
-- Four queues: Inbox, Feed, Later, Archive, controlled by article YAML `status: inbox | feed | later | archive`. Discover exact `type: article` and `type: feed` anywhere in the vault.
-- Missing article status displays in Feed but never expires. Null, empty, malformed and unknown values remain readable but unqueued/protected. Reading never writes a missing status. Only explicit fresh `status: feed` can expire.
-- Two creation destinations (`captureFolders.articles` and `captureFolders.feeds`), default `Reading/Articles` and `Reading/Feeds`. Same/nested/root destinations are allowed. These are not discovery boundaries. Old folder settings remain preserved/inert; applying destinations does not move files, rewrite notes, acquire or promote articles.
+- Four queues: Inbox (`Reading/Inbox`), Feed (`Reading/Stream`), Later (`Reading/Later`), Archive (`Reading/Treasury`), controlled by configurable physical folders. Discover exact `type: article` and `type: feed` outside Templates and .trash.
+- YAML status does not assign a queue: missing, invalid and conflicting values do not override placement. Reading never adds a missing status. Only a Feed-folder note with explicit fresh `status: feed` can expire.
+- Manual/browser captures create in Inbox; RSS imports in Feed. A live native/QuickAdd capture with exact article type and inbox status is placed in Inbox when Reader observes it; external capture tools must target Inbox while Reader is inactive. Subscription creation defaults to `Reading/Feeds`. The old article capture destination remains inert/preserved; applying settings does not move existing files.
 - Newest-first ordering; no manual ordering.
 - Reading-list rows show full titles without URL subtitles or an embedded search field; use native Obsidian search. Preserve source URL metadata and core search capabilities.
 - Previous/next follows the originating browsing queue, even after changing an article's status.
-- Explicit status changes preserve file identity/path, content, bookmark and links. Normal transitions: Inbox → Later/Archive, Feed → Later/Archive, Later → Archive, Archive → Later; manual changes are reversible.
+- Explicit status changes preserve file identity, content, bookmark and links while moving the path to the destination queue folder. Normal transitions: Inbox → Later/Archive, Feed → Later/Archive, Later → Archive, Archive → Later; manual changes are reversible.
 - UI: one aligned title/content area, flat reading-list rows, no “End of article” label or action divider. Compact leaf-owned floating bottom controls use accessible labels and 44px targets: Previous, Next, Read later, Archive, Delete, List. Archive uses an archive icon, not the bookmark icon.
 - Floating controls stay within the Reader pane, with safe-area and final-content clearance. Desktop uses the available pane width, and scrollbars must not overlap text.
 - Right-side indicators show opened-before (existing usable `bookmark`, not completion) and highlights (derived Markdown). Use bounded, cancellable reads; no whole-vault body scan, new YAML fields, timestamps, sidecars or persisted read/annotation history.
@@ -63,7 +63,7 @@
 - Deletion uses recoverable Obsidian trash, never permanent removal.
 - No user-facing batch-delete or "delete newer articles" command in v1.
 - Exact `type: article` notes open in Reader. Open Markdown explicitly retains the native editor; dirty/uncertain editors, stale files and navigation intent are protected.
-- Ordinary notes remain native; article queues are independent of folders. Invalid-status articles remain readable but unqueued. The optional status-folder mapping and explicit manual organization command affect placement only, not queue membership.
+- Ordinary notes remain native; folder wins over YAML status for queue membership. Typed articles outside queue folders remain readable but unqueued. Templates and .trash are never indexed or routed into Reader. Settings Apply never migrates notes.
 - Remember reading position as a text anchor in `bookmark` and restore it across sessions/devices via vault sync. The separate `dog_ear: true` current-article pointer moves on successful article entry and leaves reading-position anchors intact. Legacy `reading_position` remains preserved and inert, without fallback or conversion. List opens and next/previous navigation, including boundary keys, resume each article’s own saved position; do not force next-start/previous-end entry.
 - Desktop j/k navigates articles, except while typing or interacting with menus/dialogs.
 - Use native typography, themes, menus, and pickers; no Reader theme/type settings.
@@ -89,12 +89,12 @@
 
 ## Approved Feed lifecycle
 
-- Only explicit `status: feed` is disposable; missing status displayed in Feed is protected.
-- A saved highlight or user-created link promotes an explicit-feed or missing-status article to Later before annotation commit. Other statuses do not change; removing annotations never demotes.
+- Only Feed-folder notes with explicit `status: feed` are disposable; missing or conflicting YAML protects against expiry.
+- A saved highlight or user-created link promotes a Feed-folder article to Later before annotation commit. Other statuses do not change; removing annotations never demotes.
 - Publisher links in imported content do not count as a user-created link.
 - Promotion must not lose the annotation, selected text, reading position, or browsing context.
 - Cleanup cannot race an unfinished annotation/save/promotion operation.
-- Explicit `status: feed` articles expire after one calendar month into recoverable trash. Fresh persisted status, never displayed queue, determines eligibility at deletion boundaries.
+- Feed-folder articles with explicit `status: feed` expire after one calendar month into recoverable trash unless annotated or topic-bearing; Reader archives protected articles instead. Fresh folder and YAML checks both determine eligibility at deletion boundaries.
 - Opening/reading, reaching the end or saving a bookmark never changes status or preserves an explicit-feed article.
 - No legacy ownership archaeology, historical conversion rules, or generic content-retention heuristics.
 - Exact clock/fallback and recovery semantics follow the approved storage contract.

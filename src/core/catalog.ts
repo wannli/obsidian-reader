@@ -7,6 +7,13 @@ import {
   type Subscription,
 } from './model';
 import { defaultFolders, validateFolders, type ReaderFolders } from './folders';
+import {
+  defaultStatusFolders,
+  queueForPath,
+  validateStatusFolders,
+  type StatusFolders,
+  type ResolvedStatusFolders,
+} from './status-folders';
 
 /** Metadata only. Bodies, rendered HTML, selections and acquisition state do not live here. */
 export class Catalog {
@@ -15,12 +22,19 @@ export class Catalog {
   private urls = new Map<string, Set<string>>();
   private sorted = new Map<Queue | undefined, readonly ArticleInfo[]>();
   readonly folders: ReaderFolders;
+  private statusFolders: ResolvedStatusFolders = defaultStatusFolders;
+  setStatusFolders(input: StatusFolders): void {
+    this.statusFolders = validateStatusFolders(input);
+    for (const article of this.articles.values())
+      article.queue = queueForPath(article.path, this.statusFolders);
+    this.sorted.clear();
+  }
   constructor(folders: ReaderFolders = defaultFolders) {
     this.folders = validateFolders(folders);
   }
 
   update(path: string, properties: Properties): boolean {
-    const next = articleInfo(path, properties),
+    const next = articleInfo(path, properties, queueForPath(path, this.statusFolders)),
       feed = subscription(path, properties);
     const previous = this.articles.get(path),
       oldFeed = this.subscriptions.get(path);
