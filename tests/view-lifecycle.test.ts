@@ -14,7 +14,7 @@ import {
 } from 'obsidian';
 import { ArticleStore, type VaultPort } from '../src/core/store';
 import { defaultFolders, type ReaderFolders } from '../src/core/folders';
-import { createDocument, patchProperties, readDocument } from '../src/core/document';
+import { createDocument, patchProperties, readDocument, replaceBody } from '../src/core/document';
 import { passages } from '../src/core/annotations';
 import { READER_VIEW, ReaderView, nativeLinkPath, openExistingNote } from '../src/reader/view';
 import * as surfaceModule from '../src/reader/surface';
@@ -37,6 +37,7 @@ const mocks = vi.hoisted(() => ({
   input: vi.fn(),
   confirmWebLink: vi.fn(),
   menus: [] as Map<string, () => void>[],
+  menuShown: vi.fn(),
   dom: new Map<string, () => void>(),
   commands: new Map<string, Command>(),
   protocols: new Map<string, (params: Record<string, string>) => unknown>(),
@@ -96,7 +97,9 @@ vi.mock('obsidian', () => {
       this.items.set('---', () => {});
       return this;
     }
-    showAtMouseEvent() {}
+    showAtMouseEvent(event: MouseEvent) {
+      mocks.menuShown(event);
+    }
   }
   class Plugin {
     app: any;
@@ -178,6 +181,8 @@ vi.mock('../src/host/ingestion', () => ({
 }));
 vi.mock('../src/reader/surface', () => ({
   ReadingSurface: class {
+    viewport = document.createElement('div');
+    flow = document.createElement('div');
     body = document.createElement('article');
     title = document.createElement('h1');
     setTitle = (title: string) => {
@@ -220,7 +225,11 @@ vi.mock('../src/reader/surface', () => ({
       private position: (marker: string) => void,
       private renderError?: (error: unknown) => void,
     ) {
-      parent.append(this.title, this.body);
+      this.viewport.className = 'reader-viewport';
+      this.flow.className = 'reader-flow';
+      this.flow.append(this.title, this.body);
+      this.viewport.append(this.flow);
+      parent.append(this.viewport);
     }
     flush() {
       if (this.marker) this.position(this.marker);
@@ -376,12 +385,28 @@ function actionName(button: Element): string {
   if (label === 'Archive and advance') return 'Archive';
   return label.replace(/ (?:page or article|article(?: and advance)?)$/, '');
 }
+function passageButton(view: ReaderView, label: string): HTMLButtonElement {
+  const button = [
+    ...view.contentEl.querySelectorAll<HTMLButtonElement>('.reader-actions button'),
+  ].find((button) => button.getAttribute('aria-label') === label);
+  expect(button, `Passage bar button: ${label}`).toBeDefined();
+  expect(button!.hidden).toBe(false);
+  expect(button!.disabled).toBe(false);
+  return button!;
+}
+function passageLabels(view: ReaderView): string[] {
+  return [...view.contentEl.querySelectorAll<HTMLButtonElement>('.reader-actions button')]
+    .filter((button) => !button.hidden)
+    .map((button) => button.getAttribute('aria-label')!);
+}
+function expectNoPassagePopup() {
+  expect(mocks.menus).toHaveLength(0);
+  expect(mocks.menuShown).not.toHaveBeenCalled();
+}
 function menu(view: ReaderView, title: string) {
   const probe = view as any;
   probe.passageMenu(passages(probe.snapshot.body)[0], new MouseEvent('click'));
-  const action = mocks.menus.at(-1)!.get(title);
-  expect(action).toBeTypeOf('function');
-  action!();
+  passageButton(view, title).click();
   return probe.operations as Promise<void>;
 }
 
@@ -637,7 +662,7 @@ describe('automatic selection event ownership', () => {
     expect((await f.store.read(f.article.path)).body).toBe(f.body);
   });
 
-  it('mounts one aligned article column with exactly seven persistent actions outside the scroller', () => {
+  it('mounts one aligned article column with eight persistent actions outside the scroller', () => {
     const column = f.view.contentEl.querySelector('.reader-article')!;
     const actions = column.querySelector('.reader-actions')!;
     expect([...actions.querySelectorAll('button')].map(actionName)).toEqual([
@@ -648,12 +673,426 @@ describe('automatic selection event ownership', () => {
       'Archive',
       'Delete',
       'List',
+      'Highlight mode',
     ]);
     expect(actions.parentElement).toBe(f.surface.viewport.parentElement);
     expect(f.surface.viewport.contains(actions)).toBe(false);
     expect([...f.surface.flow.children]).toEqual([f.surface.title, f.surface.body]);
     expect(f.view.contentEl.querySelector('.reader-toolbar,.reader-finish')).toBeNull();
     expect(f.view.contentEl.textContent).not.toContain('End of article');
+  });
+
+  function armTapHighlight() {
+    f.view.contentEl.querySelector<HTMLButtonElement>('[aria-label="Highlight mode"]')!.click();
+  }
+  function tapAction(label: string) {
+    return [
+      ...f.view.contentEl.querySelectorAll<HTMLButtonElement>(
+        '.reader-tap-highlight-actions button',
+      ),
+    ].find((button) => button.getAttribute('aria-label') === label)!;
+  }
+  async function tapWord(start = 0, end = 5, paragraph = 0) {
+    const { TapText } = await import('../src/reader/tap-text');
+    const range = document.createRange();
+    const node = f.surface.body.querySelectorAll('p')[paragraph].firstChild!;
+    range.setStart(node, start);
+    range.setEnd(node, end);
+    vi.spyOn(TapText.prototype, 'wordAt').mockReturnValueOnce(range);
+    for (const type of ['pointerdown', 'pointerup']) {
+      const event = new MouseEvent(type, {
+        bubbles: true,
+        cancelable: true,
+        clientX: 20,
+        clientY: 20,
+      });
+      Object.assign(event, { pointerId: 1, pointerType: 'touch', isPrimary: true });
+      f.surface.body.dispatchEvent(event);
+    }
+    f.surface.body.dispatchEvent(
+      new MouseEvent('click', { bubbles: true, clientX: 20, clientY: 20 }),
+    );
+  }
+  async function tapSettled() {
+    await f.probe.operations;
+    await Promise.resolve();
+  }
+
+  it.each(['Sentence', 'Paragraph'])(
+    'saves a tap-%s highlight immediately through the guarded store and supports Undo',
+    async (action) => {
+      const bar = f.view.contentEl.querySelector('.reader-actions');
+      armTapHighlight();
+      expect(tapAction(action).disabled).toBe(true);
+      await tapWord();
+      expect((await f.store.read(f.article.path)).body).toBe(f.body);
+      expect(tapAction(action).disabled).toBe(false);
+      tapAction(action).click();
+      await tapSettled();
+      expect((await f.store.read(f.article.path)).body).toBe('==Alpha phrase.==\n\nBeta phrase.');
+      expect(f.surface.body.querySelector('mark')?.textContent).toBe('Alpha phrase.');
+      expect(document.getSelection()?.isCollapsed).toBe(true);
+      expect(passageLabels(f.view)).toEqual(['Remove highlight', 'Undo', 'Done']);
+      expect(f.view.contentEl.querySelector('.reader-actions')).toBe(bar);
+      expect(f.probe.tapHighlighter.active).toBe(true);
+      expect(f.view.contentEl.querySelector('[aria-label="Sentence"]')).toBeNull();
+      expectNoPassagePopup();
+      expect(tapAction('Undo').hidden).toBe(false);
+      tapAction('Undo').click();
+      await tapSettled();
+      expect((await f.store.read(f.article.path)).body).toBe(f.body);
+      expect(f.surface.body.querySelector('mark')).toBeNull();
+      expect(tapAction('Undo').hidden).toBe(true);
+      expect(passageLabels(f.view)).toEqual(['Sentence', 'Paragraph', 'Done']);
+    },
+  );
+
+  it('Undo synchronously cancels an uncooperative picker before queuing and clears passage actions', async () => {
+    const target = await f.note('Nodes/Undo target.md', '', 'topic');
+    const node: NodeResult = {
+      path: target.path,
+      title: 'Undo target',
+      type: 'topic',
+      classes: ['topic'],
+      aliases: [],
+    };
+    const entered = gate();
+    let requestSignal!: AbortSignal;
+    let callback!: (node: NodeResult) => Promise<void>;
+    const api = {
+      version: 2,
+      listTypes: () => [],
+      searchNodes: () => [node],
+      getNode: () => node,
+      createNode: async () => node,
+      pickNodeForLink: (options: { signal: AbortSignal }, link: typeof callback) => {
+        requestSignal = options.signal;
+        callback = link;
+        entered.resolve();
+        return new Promise(() => {});
+      },
+    };
+    (f.app as any).plugins = { getPlugin: () => ({ api }) };
+    armTapHighlight();
+    await tapWord();
+    tapAction('Sentence').click();
+    await tapSettled();
+    tapAction('Link to note…').click();
+    await entered.promise;
+    expect(requestSignal.aborted).toBe(false);
+    tapAction('Undo').click();
+    expect(requestSignal.aborted).toBe(true);
+    await tapSettled();
+    expect((await f.store.read(f.article.path)).body).toBe(f.body);
+    expect(passageLabels(f.view)).toEqual(['Sentence', 'Paragraph', 'Done']);
+    expect(f.probe.dialog).toBe(false);
+    await expect(callback(node)).rejects.toThrow(/finished|cancelled/);
+    expect((await f.store.read(f.article.path)).body).toBe(f.body);
+    expect(f.vault.file(target.path)).toBe(target);
+  });
+
+  it('saves only on the second word tap and restores article actions with one Done press', async () => {
+    armTapHighlight();
+    await tapWord();
+    expect((await f.store.read(f.article.path)).body).toBe(f.body);
+    await tapWord();
+    await tapSettled();
+    expect((await f.store.read(f.article.path)).body).toBe('==Alpha== phrase.\n\nBeta phrase.');
+    tapAction('Done').click();
+    expect(f.view.contentEl.querySelectorAll('.reader-actions > button')).toHaveLength(8);
+    expect(f.view.contentEl.querySelector('.reader-tap-highlight-actions')).toBeNull();
+    expect(f.probe.tapMode).toBe(false);
+    expect(f.surface.body.classList.contains('reader-tap-highlight-mode')).toBe(false);
+  });
+
+  it('preserves a staged word across metadata changes and Undo never reverses Feed promotion', async () => {
+    await f.probe.move('Feed');
+    armTapHighlight();
+    await tapWord();
+    const raw = patchProperties(await f.vault.read(f.article), {
+      title: 'Changed title',
+    });
+    f.vault.bytes.set(f.article, raw);
+    f.store.catalog.update(f.article.path, readDocument(raw).properties);
+    await f.view.changed({ path: f.article.path });
+    expect(tapAction('Sentence').disabled).toBe(false);
+    tapAction('Sentence').click();
+    await tapSettled();
+    expect((await f.store.read(f.article.path)).properties.status).toBe('later');
+    tapAction('Undo').click();
+    await tapSettled();
+    const saved = await f.store.read(f.article.path);
+    expect(saved.body).toBe(f.body);
+    expect(saved.properties.status).toBe('later');
+    expect(saved.properties.title).toBe('Changed title');
+  });
+
+  it('Undo removes only its highlight and preserves metadata edited after the save', async () => {
+    armTapHighlight();
+    await tapWord();
+    tapAction('Sentence').click();
+    await tapSettled();
+    const raw = patchProperties(await f.vault.read(f.article), {
+      title: 'Edited after highlight',
+      custom_property: 'Keep this value',
+    });
+    f.vault.bytes.set(f.article, raw);
+    f.store.catalog.update(f.article.path, readDocument(raw).properties);
+    await f.view.changed({ path: f.article.path });
+    tapAction('Undo').click();
+    await tapSettled();
+    const saved = await f.store.read(f.article.path);
+    expect(saved.body).toBe(f.body);
+    expect(saved.properties.title).toBe('Edited after highlight');
+    expect(saved.properties.custom_property).toBe('Keep this value');
+  });
+
+  it('refuses Undo against changed source bytes even before their metadata notification arrives', async () => {
+    armTapHighlight();
+    await tapWord();
+    tapAction('Sentence').click();
+    await tapSettled();
+    const saved = await f.store.read(f.article.path);
+    const changedBody = saved.body + '\n\nExternally authored paragraph.';
+    const raw = replaceBody(await f.vault.read(f.article), saved.body, changedBody);
+    f.vault.bytes.set(f.article, raw);
+    tapAction('Undo').click();
+    await expect(tapSettled()).rejects.toThrow('The note changed');
+    expect((await f.store.read(f.article.path)).body).toBe(changedBody);
+    expect(tapAction('Undo').hidden).toBe(true);
+  });
+
+  it('invalidates a staged word on external body replacement without applying it to the new text', async () => {
+    armTapHighlight();
+    await tapWord();
+    const raw = replaceBody(await f.vault.read(f.article), f.body, 'Replacement article.');
+    f.vault.bytes.set(f.article, raw);
+    f.store.catalog.update(f.article.path, readDocument(raw).properties);
+    await f.view.changed({ path: f.article.path });
+    expect(tapAction('Sentence').disabled).toBe(true);
+    expect((await f.store.read(f.article.path)).body).toBe('Replacement article.');
+    expect(f.surface.body.textContent).toContain('Replacement article.');
+  });
+
+  it('clears a staged word on Done or article exit and never flushes it as a native highlight', async () => {
+    armTapHighlight();
+    await tapWord();
+    tapAction('Done').click();
+    vi.advanceTimersByTime(1200);
+    await tapSettled();
+    expect((await f.store.read(f.article.path)).body).toBe(f.body);
+    armTapHighlight();
+    await tapWord();
+    f.view.showList();
+    vi.advanceTimersByTime(7000);
+    await tapSettled();
+    expect((await f.store.read(f.article.path)).body).toBe(f.body);
+    expect(f.view.contentEl.querySelector('.reader-tap-highlight-preview')).toBeNull();
+  });
+
+  it('expires Undo and suppresses article shortcuts while the contextual highlight bar is active', async () => {
+    armTapHighlight();
+    f.view.key(new KeyboardEvent('keydown', { key: 'j' }));
+    await tapSettled();
+    expect(f.view.file).toBe(f.article);
+    await tapWord();
+    tapAction('Paragraph').click();
+    await tapSettled();
+    expect(tapAction('Undo').hidden).toBe(false);
+    vi.advanceTimersByTime(6000);
+    expect(tapAction('Undo').hidden).toBe(true);
+    expect(passageLabels(f.view)).toEqual(['Remove highlight', 'Done']);
+    expectNoPassagePopup();
+    expect((await f.store.read(f.article.path)).body).toBe('==Alpha phrase.==\n\nBeta phrase.');
+  });
+
+  it('keeps passive native-selection saves outside tap mode until the saved mark is tapped', async () => {
+    f.select(0);
+    vi.advanceTimersByTime(900);
+    await tapSettled();
+    expect((await f.store.read(f.article.path)).body).toBe('==Alpha== phrase.\n\nBeta phrase.');
+    expect(f.probe.tapMode).toBe(false);
+    expect(f.view.contentEl.querySelector('[aria-label="Highlight mode"]')).not.toBeNull();
+    expect(f.view.contentEl.querySelector('[aria-label="Done"]')).toBeNull();
+    document.getSelection()!.removeAllRanges();
+    f.surface.refresh();
+    f.surface.body
+      .querySelector('mark')!
+      .dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+    expect(passageLabels(f.view)).toEqual(['Remove highlight', 'Done']);
+    expect(f.probe.tapHighlighter.active).toBe(true);
+    expectNoPassagePopup();
+  });
+
+  it.each([false, true])(
+    'opens an existing mark in the same bar and removes only the tapped occurrence (already active=%s)',
+    async (active) => {
+      const body = '==Alpha phrase.==\n\n==Beta phrase.==';
+      f.vault.bytes.set(f.article, replaceBody(await f.vault.read(f.article), f.body, body));
+      await f.view.changed({ path: f.article.path });
+      const bar = f.view.contentEl.querySelector('.reader-actions');
+      if (active) armTapHighlight();
+      const mark = f.surface.body.querySelectorAll('mark')[1];
+      if (active) {
+        const { TapText } = await import('../src/reader/tap-text');
+        const word = document.createRange();
+        word.setStart(mark.firstChild!, 0);
+        word.setEnd(mark.firstChild!, 4);
+        vi.spyOn(TapText.prototype, 'wordAt').mockReturnValueOnce(word);
+      }
+      mark.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+      expect(passageLabels(f.view)).toEqual(['Remove highlight', 'Done']);
+      expect(f.view.contentEl.querySelector('.reader-actions')).toBe(bar);
+      expect(f.probe.tapHighlighter.active).toBe(true);
+      expectNoPassagePopup();
+      passageButton(f.view, 'Remove highlight').click();
+      await tapSettled();
+      expect((await f.store.read(f.article.path)).body).toBe('==Alpha phrase.==\n\nBeta phrase.');
+      expect(passageLabels(f.view)).toEqual(['Sentence', 'Paragraph', 'Done']);
+      expect(tapAction('Sentence').disabled).toBe(true);
+      expect(f.probe.tapHighlighter.active).toBe(true);
+    },
+  );
+
+  it('starts the next word selection from a saved passage bar and ignores its detached action', async () => {
+    armTapHighlight();
+    await tapWord();
+    tapAction('Sentence').click();
+    await tapSettled();
+    const oldRemove = passageButton(f.view, 'Remove highlight');
+    const annotate = vi.spyOn(f.store, 'annotate');
+    await tapWord(0, 4, 1);
+    expect(f.view.contentEl.querySelector('[data-action="remove-highlight"]')).toBeNull();
+    expect(tapAction('Sentence').disabled).toBe(false);
+    expect((await f.store.read(f.article.path)).body).toBe('==Alpha phrase.==\n\nBeta phrase.');
+    oldRemove.click();
+    await tapSettled();
+    expect(annotate).not.toHaveBeenCalled();
+    tapAction('Sentence').click();
+    await tapSettled();
+    expect((await f.store.read(f.article.path)).body).toBe('==Alpha phrase.==\n\n==Beta phrase.==');
+    expect(passageLabels(f.view)).toEqual(['Remove highlight', 'Undo', 'Done']);
+    expectNoPassagePopup();
+  });
+
+  it('preserves saved passage context for metadata-only changes and clears it on a body change', async () => {
+    armTapHighlight();
+    await tapWord();
+    tapAction('Sentence').click();
+    await tapSettled();
+    const body = (await f.store.read(f.article.path)).body;
+    const raw = patchProperties(await f.vault.read(f.article), {
+      title: 'Metadata only',
+      custom: 'keep',
+    });
+    f.vault.bytes.set(f.article, raw);
+    f.store.catalog.update(f.article.path, readDocument(raw).properties);
+    await f.view.changed({ path: f.article.path, metadataChanged: true });
+    expect(passageLabels(f.view)).toEqual(['Remove highlight', 'Undo', 'Done']);
+    expect((await f.store.read(f.article.path)).body).toBe(body);
+    const staleRemove = passageButton(f.view, 'Remove highlight');
+    const replacement = replaceBody(raw, body, 'Replacement article.');
+    f.vault.bytes.set(f.article, replacement);
+    await f.view.changed({ path: f.article.path });
+    expect(passageLabels(f.view)).toEqual(['Sentence', 'Paragraph', 'Done']);
+    staleRemove.click();
+    await tapSettled();
+    expect(await f.vault.read(f.article)).toBe(replacement);
+    expect(tapAction('Sentence').disabled).toBe(true);
+    expectNoPassagePopup();
+  });
+
+  it('refuses a passage action against changed source bytes before a change notification', async () => {
+    armTapHighlight();
+    await tapWord();
+    tapAction('Sentence').click();
+    await tapSettled();
+    const body = (await f.store.read(f.article.path)).body;
+    const replacement = replaceBody(
+      await f.vault.read(f.article),
+      body,
+      body + '\n\nExternal text.',
+    );
+    f.vault.bytes.set(f.article, replacement);
+    passageButton(f.view, 'Remove highlight').click();
+    await expect(tapSettled()).rejects.toThrow('The note changed');
+    expect(await f.vault.read(f.article)).toBe(replacement);
+    expectNoPassagePopup();
+  });
+
+  it('refreshes Link/Unlink passage actions against the saved body and Remove preserves the words', async () => {
+    const target = await f.note('Nodes/One.md', 'Keep the target', 'topic');
+    const node: NodeResult = {
+      path: target.path,
+      title: 'One',
+      type: 'topic',
+      classes: ['topic'],
+      aliases: [],
+    };
+    const api: NodesApi = {
+      version: 2,
+      listTypes: () => [],
+      searchNodes: () => [node],
+      getNode: () => node,
+      createNode: vi.fn(async () => node),
+      pickNodeForLink: vi.fn(async (_options, link) => {
+        await link(node);
+        return node;
+      }),
+    };
+    (f.app as any).plugins = { getPlugin: () => ({ api }) };
+    const bar = f.view.contentEl.querySelector('.reader-actions');
+    const targetBefore = await f.vault.read(target);
+    armTapHighlight();
+    await tapWord();
+    tapAction('Sentence').click();
+    await tapSettled();
+    expect(passageLabels(f.view)).toEqual([
+      'Link to note…',
+      'Create note…',
+      'Remove highlight',
+      'Undo',
+      'Done',
+    ]);
+    passageButton(f.view, 'Link to note…').click();
+    await tapSettled();
+    expect(api.pickNodeForLink).toHaveBeenCalledWith(
+      {
+        suggestedTitle: 'Alpha phrase.',
+        sourcePath: f.article.path,
+        signal: expect.any(AbortSignal),
+      },
+      expect.any(Function),
+    );
+    expect((await f.store.read(f.article.path)).body).toBe(
+      '==[[Nodes/One.md|Alpha phrase.]]==\n\nBeta phrase.',
+    );
+    expect(passageLabels(f.view).filter((label) => label !== 'Undo')).toEqual([
+      'Open note',
+      'Change link…',
+      'Create note…',
+      'Remove link (keeps highlight)',
+      'Remove highlight',
+      'Done',
+    ]);
+    expect(f.view.contentEl.querySelector('.reader-actions')).toBe(bar);
+    passageButton(f.view, 'Remove link (keeps highlight)').click();
+    await tapSettled();
+    expect((await f.store.read(f.article.path)).body).toBe('==Alpha phrase.==\n\nBeta phrase.');
+    expect(passageLabels(f.view).filter((label) => label !== 'Undo')).toEqual([
+      'Link to note…',
+      'Create note…',
+      'Remove highlight',
+      'Done',
+    ]);
+    passageButton(f.view, 'Remove highlight').click();
+    await tapSettled();
+    expect((await f.store.read(f.article.path)).body).toBe(f.body);
+    expect(passageLabels(f.view)).toEqual(['Sentence', 'Paragraph', 'Done']);
+    expect(f.probe.tapHighlighter.active).toBe(true);
+    expect(await f.vault.read(target)).toBe(targetBefore);
+    expect(f.vault.trashed).toEqual([]);
+    expectNoPassagePopup();
   });
 
   function gesture(
@@ -1884,6 +2323,7 @@ describe('article keyboard boundaries', () => {
       'Archive',
       'Delete',
       'List',
+      'Highlight mode',
     ]);
     expect(column.classList.contains('reader-has-page-actions')).toBe(false);
     expect(actions.classList.contains('reader-paged-actions')).toBe(false);
@@ -1898,7 +2338,7 @@ describe('article keyboard boundaries', () => {
     expect(f.probe.surface).toBe(surface);
     f.host.showPagedArticleButtons = false;
     f.view.refreshArticleControls();
-    expect(names()).toHaveLength(7);
+    expect(names()).toHaveLength(8);
     expect(f.view.file).toBe(a);
     expect(f.probe.surface).toBe(surface);
   });
@@ -2087,15 +2527,22 @@ describe('article keyboard boundaries', () => {
         onWrite: undefined as (() => void) | undefined,
       };
       const writes: { requested: number; before: number; after: number; behavior: string }[] = [];
-      let resize = () => {};
+      const resizeObservers = new Set<() => void>();
+      const resize = () => {
+        for (const notify of [...resizeObservers]) notify();
+      };
       vi.stubGlobal(
         'ResizeObserver',
         class {
+          private readonly notify: () => void;
           constructor(callback: ResizeObserverCallback) {
-            resize = () => callback([], this as unknown as ResizeObserver);
+            this.notify = () => callback([], this as unknown as ResizeObserver);
+            resizeObservers.add(this.notify);
           }
           observe() {}
-          disconnect() {}
+          disconnect() {
+            resizeObservers.delete(this.notify);
+          }
         },
       );
       const fonts = new window.EventTarget();
@@ -2871,7 +3318,7 @@ describe('bounded Reader UI', () => {
     },
   );
 
-  it('shares the library action treatment with seven uniform article icons, without hiding authored hr or modal controls', async () => {
+  it('shares the library action treatment with eight uniform article icons, without hiding authored hr or modal controls', async () => {
     const f = hostFixture();
     const style = document.head.appendChild(document.createElement('style'));
     style.textContent = readFileSync(new URL('../src/reader/styles.css', import.meta.url), 'utf8');
@@ -2895,7 +3342,16 @@ describe('bounded Reader UI', () => {
       ];
       expect(
         buttons.map((button) => button.querySelector('svg')?.getAttribute('data-icon')),
-      ).toEqual(['chevron-left', 'chevron-right', 'tags', 'clock', 'archive', 'trash-2', 'list']);
+      ).toEqual([
+        'chevron-left',
+        'chevron-right',
+        'tags',
+        'clock',
+        'archive',
+        'trash-2',
+        'list',
+        'highlighter',
+      ]);
       expect(buttons.map((button) => button.getAttribute('aria-label'))).toEqual([
         'Previous article',
         'Next article',
@@ -2904,6 +3360,7 @@ describe('bounded Reader UI', () => {
         'Archive and advance',
         'Trash article and advance',
         'List',
+        'Highlight mode',
       ]);
       expect(setTooltip).toHaveBeenCalledWith(buttons[2], 'Article topics');
       expect(setTooltip).toHaveBeenCalledWith(buttons[3], 'Read later');
@@ -3035,7 +3492,7 @@ describe('Reader mobile control styling', () => {
       await f.view.openArticle(article.path, true);
       const actions =
         f.view.contentEl.querySelectorAll<HTMLButtonElement>('.reader-actions button');
-      expect(actions).toHaveLength(7);
+      expect(actions).toHaveLength(8);
       for (const button of actions) checkIcon(button, '100%');
       expect(actions[0].disabled).toBe(true);
       expect(window.getComputedStyle(actions[0]).opacity).toBe('0.45');
@@ -3070,7 +3527,7 @@ describe('leaf-scoped floating Reader layout', () => {
       ),
     ),
   )(
-    'uses full-pane CSS with compact 5/7/9-action overlays (width=$width, paged=$paged, arrows=$showPagedArticleButtons)',
+    'uses full-pane CSS with compact 5/8/10-action overlays (width=$width, paged=$paged, arrows=$showPagedArticleButtons)',
     async ({ width, paged, showPagedArticleButtons }) => {
       const f = hostFixture();
       const file = await f.note('Reading/Inbox/Title.md');
@@ -3104,7 +3561,7 @@ describe('leaf-scoped floating Reader layout', () => {
         const column = f.view.contentEl.querySelector('.reader-article')!;
         const actions = column.querySelector('.reader-bottom-controls')!;
         const expanded = paged && showPagedArticleButtons;
-        expect(actions.querySelectorAll('button')).toHaveLength(expanded ? 9 : 7);
+        expect(actions.querySelectorAll('button')).toHaveLength(expanded ? 10 : 8);
         expect(column.classList.contains('reader-has-page-actions')).toBe(expanded);
         expect(actions.classList.contains('reader-paged-actions')).toBe(expanded);
         expect(actions.parentElement).toBe(column);
@@ -4073,6 +4530,14 @@ describe('Nodes v2 linked creation', () => {
     f.host.edit = vi.fn((view: ReaderView, file: TFile) => plugin.edit(view, file));
     const web = vi.spyOn(window, 'open').mockReturnValue(null);
     async function click(route: string, label: string) {
+      if (route === 'footer' || (route === 'link' && !['heading', 'unsafe'].includes(label))) {
+        const signal = f.probe.nodeCreation?.controller.signal as AbortSignal | undefined;
+        // Normal article navigation is intentionally replaced by the passage bar.
+        // Done must cancel synchronously, before any queued navigation can wait on Nodes.
+        passageButton(f.view, 'Done').click();
+        if (signal) expect(signal.aborted).toBe(true);
+        expect(f.view.contentEl.querySelector('[aria-label="Done"]')).toBeNull();
+      }
       if (route === 'command') {
         const id = { 'Move…': 'move', 'Topics…': 'topics', 'Open Markdown': 'open-markdown' }[
           label
@@ -4081,13 +4546,9 @@ describe('Nodes v2 linked creation', () => {
         expect(command?.checkCallback?.(true)).toBe(true);
         expect(command?.checkCallback?.(false)).toBe(true);
       } else if (route === 'menu') {
-        f.probe.surface.body.innerHTML = '<mark>words</mark>';
-        f.probe.surface.body
-          .querySelector('mark')
-          .dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
-        const action = mocks.menus.at(-1)!.get(label);
-        expect(action).toBeTypeOf('function');
-        action!();
+        // Legacy route name; actions now use the existing passage bar, not a popup.
+        passageButton(f.view, label).click();
+        expectNoPassagePopup();
       } else if (route === 'link') {
         const anchor = document.createElement('a');
         anchor.setAttribute(
@@ -4127,7 +4588,7 @@ describe('Nodes v2 linked creation', () => {
   it.each(
     [true, false].flatMap((linked) => [true, false].map((integrated) => ({ linked, integrated }))),
   )(
-    'shows the approved note-only menu order (linked=$linked, Nodes=$integrated)',
+    'shows the approved icon-only passage bar (linked=$linked, Nodes=$integrated)',
     async ({ linked, integrated }) => {
       const f = await fixture(linked ? linkedBody : '==words==');
       if (!integrated) (f.app as any).plugins = undefined;
@@ -4138,13 +4599,28 @@ describe('Nodes v2 linked creation', () => {
         f.probe.surface.body
           .querySelector('mark')
           .dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
-        expect([...mocks.menus.at(-1)!.keys()]).toEqual([
+        expect(passageLabels(f.view)).toEqual([
           ...(linked ? ['Open note'] : []),
           ...(integrated ? [linked ? 'Change link…' : 'Link to note…', 'Create note…'] : []),
-          '---',
           ...(linked ? ['Remove link (keeps highlight)'] : []),
           'Remove highlight',
+          'Done',
         ]);
+        expect(
+          [...f.view.contentEl.querySelectorAll<HTMLButtonElement>('[data-action]')].map(
+            (button) => button.dataset.action,
+          ),
+        ).toEqual([
+          ...(linked ? ['open-note'] : []),
+          ...(integrated ? ['link-note', 'create-note'] : []),
+          ...(linked ? ['unlink'] : []),
+          'remove-highlight',
+        ]);
+        for (const button of f.view.contentEl.querySelectorAll('.reader-actions button')) {
+          expect(button.textContent).toBe('');
+          expect(button.querySelector('svg')).not.toBeNull();
+        }
+        expectNoPassagePopup();
       } finally {
         f.view.stopForUnload();
       }
@@ -4436,6 +4912,109 @@ describe('Nodes v2 linked creation', () => {
     1500,
   );
 
+  it.each(['before', 'after'])(
+    'Done synchronously cancels a never-settling picker %s commit and restores article controls',
+    async (phase) => {
+      const f = await uiFixture(),
+        entered = gate(),
+        targetBefore = await f.vault.read(f.target);
+      const annotate = vi.spyOn(f.store, 'annotate');
+      let requestSignal!: AbortSignal, late!: (node: NodeResult) => Promise<void>;
+      f.api.pickNodeForLink = vi.fn(async (options, link) => {
+        requestSignal = options.signal!;
+        late = link;
+        if (phase === 'after') await link(f.node);
+        entered.resolve();
+        return new Promise<NodeResult | null>(() => {}); // Never settles, even after abort.
+      });
+      try {
+        const creation = menu(f.view, 'Create note…');
+        await entered.promise;
+        passageButton(f.view, 'Done').click();
+        expect(requestSignal.aborted).toBe(true); // No queue or microtask may precede abort.
+        expect(f.probe.tapMode).toBe(false);
+        expect(f.view.contentEl.querySelector('[aria-label="Done"]')).toBeNull();
+        expect(passageLabels(f.view).map((label) => label.replace(/ article$/, ''))).toContain(
+          'Read later',
+        );
+        await creation;
+        await f.probe.operations;
+        await expect(late(f.node)).rejects.toThrow('request has finished');
+        expect(f.probe.dialog).toBe(false);
+        expect(annotate).toHaveBeenCalledTimes(phase === 'after' ? 1 : 0);
+        expect((await f.store.read(f.article.path)).body).toBe(
+          phase === 'after' ? linkedBody : originalLinkedBody,
+        );
+        expect(await f.vault.read(f.target)).toBe(targetBefore);
+        expect(f.vault.trashed).toEqual([]);
+        expectNoPassagePopup();
+      } finally {
+        f.view.stopForUnload();
+      }
+    },
+    1500,
+  );
+
+  it.each(
+    ['before', 'after'].flatMap((phase) =>
+      ['Change link…', 'Create note…', 'Remove link (keeps highlight)', 'Remove highlight'].map(
+        (label) => ({ phase, label }),
+      ),
+    ),
+  )(
+    'supersedes a never-settling picker through the actual $label passage button $phase commit',
+    async ({ phase, label }) => {
+      const f = await uiFixture(),
+        entered = gate(),
+        targetBefore = await f.vault.read(f.target);
+      const annotate = vi.spyOn(f.store, 'annotate');
+      let requestSignal!: AbortSignal,
+        late!: (node: NodeResult) => Promise<void>,
+        calls = 0;
+      f.api.pickNodeForLink = vi.fn(async (options, link) => {
+        if (++calls > 1) return null;
+        requestSignal = options.signal!;
+        late = link;
+        if (phase === 'after') await link(f.node);
+        entered.resolve();
+        return new Promise<NodeResult | null>(() => {});
+      });
+      try {
+        const creation = menu(f.view, 'Create note…');
+        await entered.promise;
+        const superseding = f.click('menu', label);
+        expect(requestSignal.aborted).toBe(true);
+        await superseding;
+        await creation;
+        await f.probe.operations;
+        await expect(late(f.node)).rejects.toThrow('request has finished');
+        const changesPassage = ['Remove link (keeps highlight)', 'Remove highlight'].includes(
+          label,
+        );
+        expect(annotate).toHaveBeenCalledTimes(
+          (phase === 'after' ? 1 : 0) + (changesPassage ? 1 : 0),
+        );
+        expect(calls).toBe(changesPassage ? 1 : 2);
+        expect((await f.store.read(f.article.path)).body).toBe(
+          label === 'Remove highlight'
+            ? 'words'
+            : label === 'Remove link (keeps highlight)'
+              ? '==words=='
+              : phase === 'after'
+                ? linkedBody
+                : originalLinkedBody,
+        );
+        expect(f.probe.dialog).toBe(false);
+        expect(await f.vault.read(f.target)).toBe(targetBefore);
+        expect(f.vault.trashed).toEqual([]);
+        expectNoPassagePopup();
+      } finally {
+        f.view.stopForUnload();
+      }
+    },
+    1500,
+  );
+
   it.each(
     ['before', 'after'].flatMap((phase) =>
       [
@@ -4708,7 +5287,7 @@ describe('Nodes v2 linked creation', () => {
     1500,
   );
 
-  it('keeps required completion live for paging, heading jumps, invalid links, blocked keyboard shortcuts and background flush', async () => {
+  it('keeps required completion live for scrolling, blocked link/keyboard navigation and background flush', async () => {
     const f = await uiFixture(),
       entered = gate(),
       complete = gate();
@@ -4723,19 +5302,19 @@ describe('Nodes v2 linked creation', () => {
     try {
       const creation = menu(f.view, 'Create note…');
       await entered.promise;
-      // Palette checks and in-article paging do not cancel required completion.
+      // Palette availability checks and in-article scrolling do not cancel completion.
       for (const id of ['move', 'topics', 'open-markdown'])
         expect(mocks.commands.get(id)?.checkCallback?.(true)).toBe(true);
-      await f.click('footer', 'Next page');
-      await f.click('footer', 'Previous page');
+      expect(f.view.contentEl.querySelector('[aria-label="Next page"]')).toBeNull();
+      f.probe.surface.viewport.dispatchEvent(new Event('scroll', { bubbles: true }));
       const heading = document.createElement('h2');
       heading.id = 'section';
       f.probe.surface.body.append(heading);
       await f.click('link', 'heading');
       await f.click('link', 'unsafe');
       f.view.key(new KeyboardEvent('keydown', { key: 'j' }));
-      expect(f.probe.surface.page.mock.calls).toEqual([[1], [-1]]);
-      expect(f.probe.surface.reveal).toHaveBeenCalledWith(heading);
+      expect(f.probe.surface.page).not.toHaveBeenCalled();
+      expect(f.probe.surface.reveal).not.toHaveBeenCalled();
       expect(f.opened.openFile).not.toHaveBeenCalled();
       expect(f.view.file).toBe(f.article);
       const flushing = f.view.flush();
@@ -4974,7 +5553,8 @@ describe('Nodes v2 linked creation', () => {
       f.probe.surface.body
         .querySelector('mark')
         .dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
-      expect([...mocks.menus.at(-1)!.keys()]).toEqual(['---', 'Remove highlight']);
+      expect(passageLabels(f.view)).toEqual(['Remove highlight', 'Done']);
+      expectNoPassagePopup();
       await menu(f.view, 'Remove highlight');
       expect((await f.store.read(f.article.path)).body).toBe('words');
       expect(f.api.createNode).not.toHaveBeenCalled();
@@ -5122,7 +5702,8 @@ describe('Reader web-link capture', () => {
       '<mark><a href="https://publisher.test/story">passage</a></mark>';
     f.probe.clicked({ target: f.probe.surface.body.querySelector('a'), preventDefault: vi.fn() });
     expect(mocks.confirmWebLink).not.toHaveBeenCalled();
-    expect(mocks.menus).toHaveLength(1);
+    expect(passageLabels(f.view)).toEqual(['Remove highlight', 'Done']);
+    expectNoPassagePopup();
   });
   it.each(['modal', 'navigation', 'unload', 'source edit', 'source delete'] as const)(
     'rejects a stale %s confirmation',

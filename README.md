@@ -83,11 +83,20 @@ Run **Add feed** with an RSS or Atom URL. Reader saves the subscription first, g
 
 Highlights live where they belong: alongside the words you were reading, as ordinary `==Markdown highlights==`.
 
+Tap the **highlighter** in the bottom article bar. The same bar switches to icon-only actions: **Sentence** (text selection), **Paragraph** (¶), and **Done** (checkmark), with brief **Undo** (back arrow) after saving. Tooltips and accessibility labels identify each icon; there is no explainer above the bar.
+
+- Tap the **first word**, then the **last word** to save that range. Tap the same word twice for a one-word highlight.
+- Or tap any word, then **Sentence** or **Paragraph** to highlight its containing text.
+- **Done** exits without saving an unfinished selection. **Escape** clears the first word; press it again to exit.
+- After saving, the same bar shows highlight actions: **Link / Create note**, **Remove highlight**, brief **Undo**, and **Done**. Linked highlights also offer **Open note**, **Change link**, and **Remove link**. Tap an unhighlighted word to start the next selection. Undo lasts six seconds and never reverses Feed → Later promotion.
+
+Scrolling and device paging still work in Highlight mode, but article-navigation shortcuts pause until you exit. Tap an existing highlight to show its actions in the same bar when no endpoint is pending; exit to open ordinary links or images. Native drag-to-highlight remains available outside the mode. Reader leaves protected or unmappable Markdown unchanged rather than guessing.
+
 For **Link to note / Change link** and **Create note**, install a compatible Fileclass Inline integration. These actions use its shared note picker and require **Obsidian 1.12.7+** and public **Nodes API v2** (`fileclass-inline.api`) with `pickNodeForLink` support.
 
 Without that integration, you can still highlight, open existing passage links, and remove links. Reader does not provide a separate note-creation fallback. Cancelling a linking or creation flow may leave a newly created note; Reader never deletes it for you.
 
-The **Topics** multiselect can also **Add topic** through optional API v2 `createNodeForLink`. Configure a Fileclass named `topic` with binding property `type`, so it creates ordinary `type: topic` notes. Fileclass Inline owns the name, destination and required fields. Creation immediately links the new topic to the article; Cancel keeps that note/link but discards other unsaved multiselect changes. Without compatible creation support, selecting existing topics still works.
+The compact **Topics** multiselect keeps search, selected topics and one action footer outside the vertically scrolling results, without explanatory paragraphs. It can **Add topic** through optional API v2 `createNodeForLink`. Configure a Fileclass named `topic` with binding property `type`, so it creates ordinary `type: topic` notes. Fileclass Inline owns the name, destination and required fields. Creation immediately links the new topic to the article; Cancel keeps that note/link but discards other unsaved multiselect changes. Without compatible creation support, selecting existing topics still works.
 
 ## Offline reading and capture
 

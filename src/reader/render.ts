@@ -169,12 +169,22 @@ function selectionContext(
 
 export function selectedPassage(
   root: HTMLElement,
+  explicitRange?: Range,
 ): { range: Range; quote: string; before: string; after: string } | undefined {
-  const range = selectionRange(root);
+  const range = explicitRange ?? selectionRange(root);
   if (!range) return;
+  const quote = range.toString();
+  if (
+    explicitRange &&
+    (range.collapsed ||
+      !root.contains(range.startContainer) ||
+      !root.contains(range.endContainer) ||
+      !quote.trim())
+  )
+    return;
   return {
     range: range.cloneRange(),
-    quote: range.toString(),
+    quote,
     before: selectionContext(root, range.startContainer, range.startOffset, true),
     after: selectionContext(root, range.endContainer, range.endOffset, false),
   };

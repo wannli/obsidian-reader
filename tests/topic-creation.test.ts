@@ -23,15 +23,22 @@ vi.mock('obsidian', () => ({
     }
   },
   Modal: class {
+    modalEl = document.createElement('div');
+    titleEl = document.createElement('h2');
     contentEl = document.createElement('div');
-    setTitle() {}
+    constructor() {
+      this.modalEl.append(this.titleEl, this.contentEl);
+    }
+    setTitle(title: string) {
+      this.titleEl.textContent = title;
+    }
     open() {
-      document.body.append(this.contentEl);
+      document.body.append(this.modalEl);
       (this as any).onOpen();
     }
     close() {
       (this as any).onClose();
-      this.contentEl.remove();
+      this.modalEl.remove();
     }
   },
   FuzzySuggestModal: class {},
@@ -45,6 +52,7 @@ vi.mock('obsidian', () => ({
     el: HTMLElement;
     constructor(parent: HTMLElement) {
       this.el = document.createElement('div');
+      this.el.className = 'setting-item';
       parent.append(this.el);
     }
     setName(text: string) {
@@ -107,6 +115,7 @@ beforeEach(() => {
     const el = document.createElement(tag);
     if (options.text) el.textContent = options.text;
     if (options.type) (el as HTMLInputElement).type = options.type;
+    if (options.placeholder) (el as HTMLInputElement).placeholder = options.placeholder;
     for (const [name, value] of Object.entries(options.attr ?? {}))
       el.setAttribute(name, String(value));
     this.append(el);
@@ -224,6 +233,11 @@ describe('topic creation public adapter', () => {
         };
       const { pending } = await f.open();
       expect(button('Add topic').disabled).toBe(true);
+      expect(button('Add topic').title).toContain('Fileclass Inline');
+      expect(button('Add topic').getAttribute('aria-description')).toBe(button('Add topic').title);
+      expect(document.querySelector('.reader-topic-picker')!.textContent).not.toContain(
+        button('Add topic').title,
+      );
       toggle('Other', true);
       button('Save').click();
       await pending;
@@ -236,6 +250,110 @@ describe('topic creation public adapter', () => {
 });
 
 describe('article topics creation and draft', () => {
+  it('uses one compact footer and accessible creation information without an explainer', async () => {
+    const f = await fixture();
+    const { pending } = await f.open();
+    const modal = document.querySelector('.reader-topic-modal')!;
+    const content = modal.querySelector('.reader-topic-picker')!;
+    expect(modal.querySelector('h2')!.textContent).toBe('Article topics');
+    expect(content.querySelectorAll('p, .setting-item')).toHaveLength(0);
+    expect(content.querySelectorAll('.reader-topic-footer')).toHaveLength(1);
+    const footer = content.querySelector('.reader-topic-footer')!;
+    expect([...footer.children].map((el) => el.textContent)).toEqual([
+      'Add topic',
+      'Cancel',
+      'Save',
+    ]);
+    expect(content.querySelectorAll('button:not(.reader-topic-row)')).toHaveLength(3);
+    expect(footer.parentElement).toBe(content);
+    expect(button('Save').classList.contains('mod-cta')).toBe(true);
+    const list = content.querySelector('.reader-topic-list')!;
+    for (const selector of ['input', '.reader-topic-selection', '.reader-topic-footer']) {
+      expect(content.querySelector(selector)).not.toBeNull();
+      expect(list.querySelector(selector)).toBeNull();
+    }
+    for (const selector of ['.reader-topic-status', '.reader-topic-error']) {
+      const message = content.querySelector<HTMLElement>(selector)!;
+      expect(message.textContent).toBe('');
+      expect(message.hidden).toBe(true);
+      expect(message.getAttribute('role')).toBe(selector.endsWith('error') ? 'alert' : 'status');
+      expect(message.getAttribute('aria-atomic')).toBe('true');
+      expect(list.contains(message)).toBe(false);
+    }
+    expect(content.querySelector('.reader-topic-status')!.getAttribute('aria-live')).toBe('polite');
+    expect(button('Add topic').title).toContain('link immediately');
+    expect(button('Add topic').title).toContain('Cancel keeps the new topic and link');
+    expect(button('Add topic').getAttribute('aria-description')).toBe(button('Add topic').title);
+    expect(content.textContent).not.toContain('Create and link immediately');
+    button('Cancel').click();
+    await pending;
+  });
+
+  it('hides an empty selected region and keeps nonempty chips outside zero search results', async () => {
+    const f = await fixture();
+    const { pending } = await f.open();
+    const selection = document.querySelector<HTMLElement>('.reader-topic-selection')!;
+    const chosen = document.querySelector<HTMLElement>('.reader-topic-selected')!;
+    const count = document.querySelector<HTMLElement>('.reader-topic-count')!;
+    expect(selection.hidden).toBe(false);
+    expect(count.textContent).toBe('1 selected');
+    toggle('Old', false);
+    expect(selection.hidden).toBe(true);
+    expect(chosen.hidden).toBe(true);
+    expect(count.hidden).toBe(true);
+    expect(count.textContent).toBe('');
+    toggle('Other', true);
+    expect(selection.hidden).toBe(false);
+    expect(chosen.hidden).toBe(false);
+    expect(count.textContent).toBe('1 selected');
+    const search = document.querySelector<HTMLInputElement>('input[type="search"]')!;
+    search.value = 'Unmatched';
+    search.dispatchEvent(new Event('input'));
+    expect(document.querySelectorAll('.reader-topic-row')).toHaveLength(0);
+    const empty = document.querySelector('.reader-topic-empty')!;
+    expect(empty.textContent).toBe('No matching topics.');
+    expect(empty.getAttribute('role')).toBe('status');
+    expect(chosen.textContent).toBe('Other');
+    expect(chosen.closest('.reader-topic-list')).toBeNull();
+    expect(document.querySelector<HTMLElement>('.reader-topic-status')!.hidden).toBe(true);
+    button('Cancel').click();
+    await pending;
+  });
+
+  it('shows paths only for case-insensitive duplicate basenames while retaining every accessible path', async () => {
+    const f = await fixture();
+    // Ambiguity includes candidates beyond the first rendered page.
+    for (let i = 0; i < 100; i++) await f.note(`Topics/Extra${i}.md`, { type: 'topic' });
+    await f.note('Groups/old.md', { type: 'topic' });
+    const { pending } = await f.open();
+    expect(row('Old').querySelector('.reader-topic-path')!.textContent).toBe('Topics/Old.md');
+    expect(row('Other').querySelector('.reader-topic-path')).toBeNull();
+    expect(row('Other').querySelector('.reader-topic-name')!.textContent).toBe('Other');
+    const search = document.querySelector<HTMLInputElement>('input[type="search"]')!;
+    search.value = 'OLD';
+    search.dispatchEvent(new Event('input'));
+    const matches = [...document.querySelectorAll<HTMLButtonElement>('.reader-topic-row')];
+    expect(matches).toHaveLength(2);
+    expect(matches.map((el) => el.querySelector('.reader-topic-path')!.textContent)).toEqual([
+      'Topics/Old.md',
+      'Groups/old.md',
+    ]);
+    search.value = '';
+    search.dispatchEvent(new Event('input'));
+    for (const candidate of document.querySelectorAll<HTMLButtonElement>('.reader-topic-row')) {
+      const name = candidate.querySelector('.reader-topic-name')!.textContent;
+      expect(candidate.title).toMatch(/\.md$/);
+      expect(candidate.getAttribute('aria-label')).toBe(`${name} — ${candidate.title}`);
+      if (name?.toLocaleLowerCase() !== 'old')
+        expect(candidate.querySelector('.reader-topic-path')).toBeNull();
+    }
+    const chip = document.querySelector<HTMLElement>('.reader-topic-selected span')!;
+    expect(chip.title).toBe('Topics/Old.md');
+    expect(chip.getAttribute('aria-label')).toBe(chip.title);
+    button('Cancel').click();
+    await pending;
+  });
+
   it('toggles the full name row by touch click and keyboard without double toggling', async () => {
     const f = await fixture();
     const { pending } = await f.open();
@@ -300,20 +418,30 @@ describe('article topics creation and draft', () => {
     const f = await fixture();
     const { pending } = await f.open();
     toggle('Other', true);
+    const search = document.querySelector<HTMLInputElement>('input[type="search"]')!;
+    search.value = 'Other';
+    search.dispatchEvent(new Event('input'));
     const process = f.vault.process.bind(f.vault);
     let fail = true;
     vi.spyOn(f.vault, 'process').mockImplementation(async (file, update) => {
       if (fail) throw new Error('Write refused');
       return process(file, update);
     });
+    button('Save').focus();
     button('Save').click();
+    expect(document.querySelector<HTMLElement>('.reader-topic-status')!.hidden).toBe(false);
     await tick();
     expect(document.querySelector('[role="alert"]')!.textContent).toContain('Write refused');
+    expect(document.querySelector<HTMLElement>('[role="alert"]')!.hidden).toBe(false);
+    expect(document.querySelector<HTMLElement>('.reader-topic-status')!.hidden).toBe(true);
+    expect(search.value).toBe('Other');
+    expect(document.activeElement).toBe(search);
     expect(row('Other').getAttribute('aria-pressed')).toBe('true');
     expect(button('Save')).not.toBeNull();
     expect((await f.saved()).properties.topics).toEqual(['[[Topics/Old.md]]']);
     fail = false;
     button('Save').click();
+    expect(document.querySelector<HTMLElement>('[role="alert"]')!.hidden).toBe(true);
     await pending;
     expect((await f.saved()).properties.topics).toEqual([
       '[[Topics/Old.md]]',
@@ -340,6 +468,12 @@ describe('article topics creation and draft', () => {
     button('Save').click();
     await tick();
     expect(button('Save').disabled).toBe(true);
+    expect(button('Add topic').disabled).toBe(true);
+    // Even programmatic events cannot bypass the in-flight Save guard.
+    button('Save').dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    button('Add topic').dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await tick();
+    expect(f.api.createNodeForLink).not.toHaveBeenCalled();
     button('Cancel').click();
     let settled = false;
     void pending.then(() => {
@@ -352,6 +486,41 @@ describe('article topics creation and draft', () => {
     expect(writes).toBe(1);
     expect((await f.saved()).properties.topics).toContain('[[Topics/Other.md]]');
   });
+  it('guards duplicate creation, Save and selection while creation is pending, keeping Cancel available', async () => {
+    const f = await fixture();
+    let complete!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      complete = resolve;
+    });
+    f.api.createNodeForLink = vi.fn(async () => {
+      await gate;
+      return null;
+    });
+    const { pending } = await f.open();
+    button('Add topic').click();
+    await tick();
+    expect(button('Add topic').disabled).toBe(true);
+    expect(button('Save').disabled).toBe(true);
+    expect(button('Cancel').disabled).toBe(false);
+    const status = document.querySelector<HTMLElement>('.reader-topic-status')!;
+    expect(status.hidden).toBe(false);
+    expect(status.textContent).toBe('Creating topic…');
+    button('Add topic').dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    button('Save').dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    row('Other').click();
+    await tick();
+    expect(f.api.createNodeForLink).toHaveBeenCalledOnce();
+    expect(row('Other').getAttribute('aria-pressed')).toBe('false');
+    expect((await f.saved()).properties.topics).toEqual(['[[Topics/Old.md]]']);
+    complete();
+    await tick();
+    expect(button('Add topic').disabled).toBe(false);
+    expect(button('Save').disabled).toBe(false);
+    expect(status.textContent).toBe('No topic was added.');
+    button('Cancel').click();
+    await pending;
+  });
+
   it('does not steal provider focus during required completion, restores search after settlement', async () => {
     const f = await fixture();
     const provider = document.createElement('button');
@@ -448,7 +617,8 @@ describe('article topics creation and draft', () => {
       const { pending } = await f.open();
       toggle('Old', false);
       toggle('Other', true);
-      expect(document.body.textContent).toContain('Cancel keeps them');
+      expect(button('Add topic').title).toContain('Cancel keeps the new topic and link');
+      expect(document.body.textContent).not.toContain('Cancel keeps them');
       button('Add topic').click();
       await tick();
       expect(complete).toBe(true);
@@ -476,9 +646,17 @@ describe('article topics creation and draft', () => {
     const { pending } = await f.open();
     toggle('Old', false);
     toggle('Other', true);
+    const search = document.querySelector<HTMLInputElement>('input[type="search"]')!;
+    search.value = 'New';
+    search.dispatchEvent(new Event('input'));
+    button('Add topic').focus();
     button('Add topic').click();
     await tick();
+    expect(search.value).toBe('New');
+    expect(document.activeElement).toBe(search);
     expect(document.body.textContent).toContain('Required completion failed');
+    expect(document.querySelector<HTMLElement>('[role="alert"]')!.hidden).toBe(false);
+    expect(document.querySelector<HTMLElement>('.reader-topic-status')!.hidden).toBe(true);
     expect((await f.saved()).properties.topics).toEqual(['[[Topics/Old.md]]', '[[Topics/New.md]]']);
     expect(row('New').getAttribute('aria-pressed')).toBe('true');
     button('Save').click();

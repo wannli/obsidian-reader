@@ -235,25 +235,36 @@ export function chooseTopics(
     class Topics extends Modal {
       onOpen(): void {
         this.setTitle('Article topics');
+        this.modalEl.classList.add('reader-topic-modal');
         this.contentEl.classList.add('reader-topic-picker');
         const search = this.contentEl.createEl('input', {
           type: 'search',
           placeholder: 'Search topics',
           attr: { 'aria-label': 'Search topics' },
         });
-        const summary = this.contentEl.createEl('p', { attr: { role: 'status' } });
-        const chosen = this.contentEl.createDiv();
+        const selection = this.contentEl.createDiv();
+        selection.classList.add('reader-topic-selection');
+        const summary = selection.createEl('span', {
+          attr: { role: 'status', 'aria-live': 'polite', 'aria-atomic': 'true' },
+        });
+        summary.classList.add('reader-topic-count');
+        const chosen = selection.createDiv();
         chosen.classList.add('reader-topic-selected');
+        chosen.tabIndex = 0;
+        chosen.setAttribute('role', 'group');
+        chosen.setAttribute('aria-label', 'Selected topics');
         const list = this.contentEl.createDiv();
         list.classList.add('reader-topic-list');
         const updateSelected = () => {
-          summary.textContent = `${draft.size} selected`;
+          selection.hidden = chosen.hidden = summary.hidden = draft.size === 0;
+          summary.textContent = draft.size ? `${draft.size} selected` : '';
           chosen.replaceChildren();
-          // Chips remain visible while searching, without moving candidate rows on selection.
+          // Chips remain visible while searching, outside the scrolling results.
           for (const path of [...draft].slice(0, 100)) {
             const chip = document.createElement('span');
             chip.textContent = files.find((file) => file.path === path)?.basename ?? path;
             chip.title = path;
+            chip.setAttribute('aria-label', path);
             chosen.append(chip);
           }
           if (draft.size > 100) {
@@ -265,23 +276,35 @@ export function chooseTopics(
         const render = () => {
           list.replaceChildren();
           updateSelected();
+          const names = new Map<string, number>();
+          for (const file of files) {
+            const name = file.basename.toLocaleLowerCase();
+            names.set(name, (names.get(name) ?? 0) + 1);
+          }
           const query = search.value.trim().toLocaleLowerCase();
           const matches = files.filter((file) => file.basename.toLocaleLowerCase().includes(query));
           for (const file of matches.slice(0, 100)) {
             const row = document.createElement('button');
             row.type = 'button';
             row.className = 'reader-topic-row';
+            row.title = file.path;
             row.setAttribute('aria-pressed', String(draft.has(file.path)));
             row.setAttribute('aria-label', `${file.basename} — ${file.path}`);
             const name = document.createElement('span');
+            name.className = 'reader-topic-name';
             name.textContent = file.basename;
-            const path = document.createElement('small');
-            path.textContent = file.path;
+            row.append(name);
+            if (names.get(file.basename.toLocaleLowerCase())! > 1) {
+              const path = document.createElement('small');
+              path.className = 'reader-topic-path';
+              path.textContent = file.path;
+              row.append(path);
+            }
             const check = document.createElement('span');
             check.className = 'reader-topic-check';
             check.setAttribute('aria-hidden', 'true');
             check.textContent = draft.has(file.path) ? '✓' : '';
-            row.append(name, path, check);
+            row.append(check);
             row.addEventListener('click', () => {
               if (busy) return;
               if (draft.has(file.path)) draft.delete(file.path);
@@ -292,95 +315,113 @@ export function chooseTopics(
             });
             list.append(row);
           }
-          if (matches.length > 100)
-            list.createEl('p', { text: 'Refine your search to see more topics.' });
+          if (!matches.length) {
+            const empty = list.createEl('div', {
+              text: query ? 'No matching topics.' : 'No topics yet.',
+              attr: { role: 'status', 'aria-live': 'polite' },
+            });
+            empty.classList.add('reader-topic-empty');
+          }
+          list.setAttribute('role', 'group');
+          list.setAttribute(
+            'aria-label',
+            matches.length > 100 ? 'Topics, 100 of ' + matches.length : 'Topics',
+          );
         };
         search.addEventListener('input', render);
         render();
         search.focus();
-        this.contentEl.createEl('p', {
-          text: creation?.create
-            ? 'Add topic saves the new topic and its article link immediately. Cancel keeps them; other selections are saved only with Save.'
-            : (creation?.disabledReason ??
-              'Add topic requires Fileclass Inline topic creation support.'),
+        const status = this.contentEl.createDiv();
+        status.classList.add('reader-topic-status');
+        status.setAttribute('role', 'status');
+        status.setAttribute('aria-live', 'polite');
+        status.setAttribute('aria-atomic', 'true');
+        const error = this.contentEl.createDiv();
+        error.classList.add('reader-topic-error');
+        error.setAttribute('role', 'alert');
+        error.setAttribute('aria-atomic', 'true');
+        const message = (element: HTMLElement, text = '') => {
+          element.textContent = text;
+          element.hidden = !text;
+        };
+        message(status);
+        message(error);
+        const footer = this.contentEl.createDiv();
+        footer.classList.add('reader-topic-footer');
+        const addButton = footer.createEl('button', { text: 'Add topic', type: 'button' });
+        addButton.classList.add('reader-topic-add');
+        const description = creation?.create
+          ? 'Create and link immediately. Cancel keeps the new topic and link; other selections need Save.'
+          : (creation?.disabledReason ?? 'Enable Fileclass Inline topic creation to add a topic.');
+        addButton.title = description;
+        addButton.setAttribute('aria-description', description);
+        const cancelButton = footer.createEl('button', { text: 'Cancel', type: 'button' });
+        cancelButton.classList.add('reader-topic-cancel');
+        cancelButton.addEventListener('click', () => this.close());
+        const saveButton = footer.createEl('button', { text: 'Save', type: 'button' });
+        saveButton.classList.add('reader-topic-save', 'mod-cta');
+        const setBusy = (value: boolean) => {
+          busy = value;
+          addButton.disabled = value || !creation?.create;
+          saveButton.disabled = value;
+        };
+        setBusy(false);
+        addButton.addEventListener('click', async () => {
+          if (busy || !creation?.create || controller.signal.aborted || signal?.aborted) return;
+          setBusy(true);
+          message(error);
+          message(status, 'Creating topic…');
+          let linked = false;
+          try {
+            await creation.create(
+              controller.signal,
+              (file) => {
+                if (controller.signal.aborted) return;
+                linked = true; // Invoked only after the guarded article link has committed.
+                if (!files.some((candidate) => candidate.path === file.path)) files.push(file);
+                draft.add(file.path);
+                // Preserve search and provider focus until required completion settles.
+                render();
+              },
+              search.value.trim() || undefined,
+            );
+            if (!controller.signal.aborted)
+              message(status, linked ? 'Topic created and linked.' : 'No topic was added.');
+          } catch (cause) {
+            if (!controller.signal.aborted) {
+              message(status);
+              message(error, cause instanceof Error ? cause.message : String(cause));
+            }
+          } finally {
+            if (!controller.signal.aborted) {
+              setBusy(false);
+              search.focus();
+            }
+          }
         });
-        const status = this.contentEl.createEl('p', { attr: { role: 'status' } });
-        const error = this.contentEl.createEl('p', { attr: { role: 'alert' } });
-        let saveButton: { setDisabled(value: boolean): unknown };
-        new Setting(this.contentEl).addButton((button) =>
-          button
-            .setButtonText('Add topic')
-            .setDisabled(!creation?.create)
-            .onClick(async () => {
-              if (busy || !creation?.create || controller.signal.aborted) return;
-              busy = true;
-              button.setDisabled(true);
-              saveButton.setDisabled(true);
-              error.textContent = '';
-              status.textContent = 'Creating topic…';
-              let linked = false;
-              try {
-                await creation.create(
-                  controller.signal,
-                  (file) => {
-                    if (controller.signal.aborted) return;
-                    linked = true; // Invoked only after the guarded article link has committed.
-                    if (!files.some((candidate) => candidate.path === file.path)) files.push(file);
-                    draft.add(file.path);
-                    // Preserve the search and the visible selection; the new chip confirms the link.
-                    render();
-                  },
-                  search.value.trim() || undefined,
-                );
-                if (!controller.signal.aborted) {
-                  status.textContent = linked ? 'Topic created and linked.' : 'No topic was added.';
-                  search.focus();
-                }
-              } catch (cause) {
-                if (!controller.signal.aborted) {
-                  status.textContent = '';
-                  error.textContent = cause instanceof Error ? cause.message : String(cause);
-                }
-              } finally {
-                busy = false;
-                if (!controller.signal.aborted) {
-                  button.setDisabled(false);
-                  saveButton.setDisabled(false);
-                }
+        saveButton.addEventListener('click', () => {
+          if (busy || controller.signal.aborted || signal?.aborted) return;
+          setBusy(true);
+          message(error);
+          message(status, 'Saving topics…');
+          pendingSave = (async () => {
+            try {
+              await commit?.([...draft]);
+              if (controller.signal.aborted || signal?.aborted) return;
+              accepted = true;
+              resolve([...draft]);
+              this.close();
+            } catch (cause) {
+              if (!controller.signal.aborted) {
+                message(status);
+                message(error, cause instanceof Error ? cause.message : String(cause));
+                search.focus();
               }
-            }),
-        );
-        new Setting(this.contentEl)
-          .addButton((button) => button.setButtonText('Cancel').onClick(() => this.close()))
-          .addButton((button) =>
-            (saveButton = button)
-              .setButtonText('Save')
-              .setCta()
-              .onClick(() => {
-                if (busy || controller.signal.aborted || signal?.aborted) return;
-                busy = true;
-                saveButton.setDisabled(true);
-                error.textContent = '';
-                status.textContent = 'Saving topics…';
-                pendingSave = (async () => {
-                  try {
-                    await commit?.([...draft]);
-                    if (controller.signal.aborted || signal?.aborted) return;
-                    accepted = true;
-                    resolve([...draft]);
-                    this.close();
-                  } catch (cause) {
-                    if (!controller.signal.aborted) {
-                      status.textContent = '';
-                      error.textContent = cause instanceof Error ? cause.message : String(cause);
-                    }
-                  } finally {
-                    busy = false;
-                    if (!controller.signal.aborted) saveButton.setDisabled(false);
-                  }
-                })();
-              }),
-          );
+            } finally {
+              if (!controller.signal.aborted) setBusy(false);
+            }
+          })();
+        });
       }
       onClose(): void {
         controller.abort();

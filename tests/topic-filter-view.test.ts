@@ -139,6 +139,17 @@ function fixture() {
   return { view, probe, host, add, read, files, cache, rows };
 }
 
+// This suite supplies a minimal Surface double; tap gestures and the full article
+// toolbar are covered with real DOM surfaces in view-lifecycle/tap-highlighter.
+vi.mock('../src/reader/tap-highlighter', () => ({
+  TapHighlighter: class {
+    active = false;
+    reset() {}
+    setUndoAvailable() {}
+    dispose() {}
+  },
+}));
+
 describe('topic-filter view integration', () => {
   it('matches only current queue, resolves aliases and links, and never acquires or writes', async () => {
     const f = fixture();

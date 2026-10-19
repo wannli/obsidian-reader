@@ -63,6 +63,7 @@ Runtime libraries: `yaml`, `marked`, `entities`, `dompurify`, `defuddle`. No UI 
 - `reader/highlight-feedback.ts`: transient save acknowledgement, distinct from the immutable text/revision write snapshot and cleared with its surface lifetime.
 - `reader/surface.ts`: scroll/pagination layout, selection/pointer deferral, position save/restore.
 - `reader/text.ts`: visible-text indexing across inline nodes.
+- `reader/tap-text.ts` / `tap-highlighter.ts`: rect-verified word taps, block-scoped sentence/paragraph ranges, transient first-word paint and contextual article-bar controls. View owns guarded saves and short-lived Undo receipts; no native selection or extra persisted state.
 - `reader/styles.css`: the **only source stylesheet**, with leaf-owned floating controls and scroll clearance. Only Obsidian’s floating mobile navigation bar is hidden while Reader is active; native editing/capture controls remain.
 
 Shared-picker linking/creation must reject an uncertain source write, commit in the v2 callback before required completion, and never prune the target. Preserve single-use callbacks, cancellation races and dispatched-write draining. Creation's chosen class may differ from discovery's last bound class; validate membership, not unique-type equality.

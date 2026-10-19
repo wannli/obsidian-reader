@@ -1,6 +1,5 @@
 import {
   ItemView,
-  Menu,
   Notice,
   parseLinktext,
   setIcon,
@@ -31,7 +30,8 @@ import type { Ingestion } from '../host/ingestion';
 import { nodesApi, type NodesApi, type NodeResult } from '../host/nodes';
 import type { LibraryChange } from '../host/vault';
 import { ReadingSurface } from './surface';
-import { selectionRange } from './render';
+import { selectedPassage, selectionRange } from './render';
+import { TapHighlighter, type TapToolbarAction } from './tap-highlighter';
 
 export const READER_VIEW = 'obsidian-reader';
 type PendingSelection = {
@@ -95,6 +95,13 @@ export class ReaderView extends ItemView {
   private snapshot?: Snapshot<TFile>;
   private fallbackFile?: TFile;
   private surface?: ReadingSurface;
+  private tapHighlighter?: TapHighlighter;
+  private passageActions?: readonly TapToolbarAction[];
+  private passageIntent = 0;
+  private tapMode = false;
+  private tapUndo?: { snapshot: Snapshot<TFile>; before: string; passage: Passage };
+  private tapUndoUntil = 0;
+  private tapUndoTimer?: ReturnType<typeof setTimeout>;
   private actions?: HTMLElement;
   private status?: HTMLElement;
   private statusMessage?: string;
@@ -317,6 +324,11 @@ export class ReaderView extends ItemView {
     if (this.lifetime.signal.aborted) return;
     this.lifetime.abort();
     this.generation++;
+    this.passageActions = undefined;
+    this.tapHighlighter?.dispose();
+    this.tapHighlighter = undefined;
+    this.tapMode = false;
+    this.clearTapUndo();
     this.surface?.dispose();
     this.surface = undefined;
   }
@@ -376,6 +388,8 @@ export class ReaderView extends ItemView {
     if (this.snapshot?.body !== snapshot.body) {
       this.automatic = undefined;
       this.lastSelection = '';
+      this.tapHighlighter?.reset();
+      this.clearTapUndo();
     }
     if (this.ownDeferred?.saved !== snapshot.body) this.ownDeferred = undefined;
     this.snapshot = snapshot;
@@ -431,6 +445,11 @@ export class ReaderView extends ItemView {
     clearTimeout(this.selectionTimer);
     this.articleLifetime.abort();
     this.articleLifetime = new AbortController();
+    this.passageActions = undefined;
+    this.tapHighlighter?.dispose();
+    this.tapHighlighter = undefined;
+    this.tapMode = false;
+    this.clearTapUndo();
     this.surface?.dispose();
     this.surface = undefined;
     this.snapshot = undefined;
@@ -943,6 +962,12 @@ export class ReaderView extends ItemView {
   private controls(): void {
     if (!this.snapshot || !this.actions || !this.surface) return;
     this.syncPresentation();
+    if (this.tapHighlighter?.active) {
+      this.updateStatus();
+      return;
+    }
+    this.tapHighlighter?.dispose();
+    this.tapHighlighter = undefined;
     this.actions.empty();
     if (!this.surface.paged || this.host.showPagedArticleButtons) {
       for (const [label, direction] of [
@@ -989,7 +1014,46 @@ export class ReaderView extends ItemView {
       'Trash article and advance',
     );
     this.button(this.actions, 'List', () => this.readingList(), 'list');
+    this.setupTapHighlighter();
     this.updateStatus();
+  }
+  private setupTapHighlighter(): void {
+    if (!this.surface || !this.actions) return;
+    const surface = this.surface;
+    this.tapHighlighter = new TapHighlighter(surface.viewport, surface.body, this.actions, {
+      active: this.tapMode,
+      canUndo: !!this.tapUndo && Date.now() <= this.tapUndoUntil,
+      modeChanged: (active) => {
+        this.tapMode = active;
+        this.invalidateSelection();
+        this.automatic = undefined;
+        this.lastSelection = '';
+        surface.body.ownerDocument.getSelection()?.removeAllRanges();
+        surface.refresh();
+        if (!active) this.controls();
+      },
+      passageActions: () => this.passageActions,
+      onPassage: (word, event) => {
+        const origin =
+          word.startContainer.nodeType === 1
+            ? (word.startContainer as Element)
+            : word.startContainer.parentElement;
+        const mark = origin?.closest('mark');
+        if (!mark || !surface.body.contains(mark)) return false;
+        this.selectPassageMark(mark, event);
+        return true;
+      },
+      clearPassage: (intent) => {
+        this.passageActions = undefined;
+        if (intent) {
+          this.passageIntent++;
+          this.cancelNodeCreation();
+        }
+      },
+      save: (range) => this.saveTapSelection(surface.body, range),
+      undo: () => this.undoTapHighlight(),
+      notify: (error) => this.error(error),
+    });
   }
   private updateStatus(): void {
     if (!this.snapshot || !this.status) return;
@@ -1018,6 +1082,7 @@ export class ReaderView extends ItemView {
   private selectionChanged(): void {
     if (this.stopping || this.host.signal.aborted) return;
     const revision = this.invalidateSelection();
+    if (this.tapMode) return;
     const range = this.surface && selectionRange(this.surface.body);
     if (!range) {
       this.automatic = undefined;
@@ -1102,7 +1167,7 @@ export class ReaderView extends ItemView {
     valid: () => boolean = () => true,
   ): Promise<void> {
     await this.positionWrite;
-    if (!valid()) return;
+    if (this.tapMode || !valid()) return;
     const selection = pending?.selection ?? this.surface?.selection(),
       snapshot = this.snapshot;
     if (!selection || !snapshot || this.selecting || this.surface?.pointerActive || this.dialog)
@@ -1161,6 +1226,7 @@ export class ReaderView extends ItemView {
       const saved = await promise;
       if (!saved || !this.current(snapshot, generation)) return;
       this.snapshot = saved;
+      this.clearTapUndo();
       this.automatic = passages(next).find((item) => item.from === range.from);
       this.lastSelection = key;
       // Only our own byte-guarded automatic markup may bridge a deferred repaint.
@@ -1179,6 +1245,132 @@ export class ReaderView extends ItemView {
     } finally {
       if (this.writing === promise) this.writing = undefined;
     }
+  }
+  private saveTapSelection(root: HTMLElement, range: Range): Promise<void> {
+    // Capture text and source synchronously, before another operation or repaint can run.
+    const selection = selectedPassage(root, range),
+      snapshot = this.snapshot;
+    const generation = this.generation,
+      signal = this.articleLifetime.signal;
+    const displayed = this.surface?.displayedBody;
+    if (!selection || !snapshot)
+      return Promise.reject(new Error('Tap a word in the current article first.'));
+    return this.operation(async () => {
+      await this.positionWrite;
+      const base = this.snapshot;
+      if (
+        signal.aborted ||
+        this.stopping ||
+        !this.current(snapshot, generation) ||
+        !base ||
+        base.body !== snapshot.body ||
+        displayed !== base.body
+      )
+        throw new Error('The article changed. Tap the first word again.');
+      this.assertDisplayed(base);
+      const mapped = locateSelection(base.body, selection.quote, selection.before, selection.after);
+      const next = addHighlight(base.body, mapped.from, mapped.to);
+      const promise = this.host.store.annotate(base, (raw) => {
+        if (signal.aborted || this.stopping || !this.current(base, generation))
+          throw new Error('The article changed before the highlight could be saved.');
+        this.assertDisplayed(base);
+        return replaceBody(raw, base.body, next);
+      });
+      this.writing = promise;
+      try {
+        const saved = await promise;
+        if (signal.aborted || !this.current(base, generation) || this.stopping) return;
+        this.snapshot = saved;
+        this.automatic = undefined;
+        this.lastSelection = '';
+        this.ownDeferred = undefined;
+        this.clearTapUndo();
+        const passage = passages(next).find((item) => item.from === mapped.from);
+        if (
+          saved.body === next &&
+          passage &&
+          changePassage(next, passage, 'remove') === base.body
+        ) {
+          const receipt = { snapshot: saved, before: base.body, passage };
+          this.tapUndo = receipt;
+          this.tapUndoUntil = Date.now() + 6000;
+          this.tapUndoTimer = setTimeout(() => {
+            if (this.tapUndo === receipt) this.clearTapUndo();
+          }, 6000);
+        }
+        this.surface?.setBody(saved.body, text(saved.properties.url));
+        this.tapHighlighter?.setUndoAvailable(!!this.tapUndo);
+        const selected = this.passageAfterWrite(next, passage, saved.body);
+        if (selected && this.surface?.displayedBody === saved.body) this.passageMenu(selected);
+        this.controls();
+      } finally {
+        if (this.writing === promise) this.writing = undefined;
+      }
+    });
+  }
+  private undoTapHighlight(): Promise<void> {
+    // Undo is a new explicit intent: release an uncooperative picker before queuing.
+    this.cancelNodeCreation();
+    const receipt = this.tapUndo,
+      generation = this.generation;
+    const signal = this.articleLifetime.signal;
+    return this.operation(async () => {
+      await this.positionWrite;
+      const base = this.snapshot;
+      if (
+        !receipt ||
+        receipt !== this.tapUndo ||
+        Date.now() > this.tapUndoUntil ||
+        !base ||
+        base.file !== receipt.snapshot.file ||
+        base.body !== receipt.snapshot.body ||
+        signal.aborted ||
+        this.stopping ||
+        !this.current(base, generation)
+      ) {
+        this.clearTapUndo();
+        throw new Error(
+          'This highlight can no longer be undone safely. Tap it for highlight actions.',
+        );
+      }
+      this.assertDisplayed(base);
+      const next = changePassage(base.body, receipt.passage, 'remove');
+      if (next !== receipt.before)
+        throw new Error('The highlighted passage changed. Nothing was removed.');
+      clearTimeout(this.tapUndoTimer);
+      this.tapUndoTimer = undefined;
+      const promise = this.host.store.annotate(base, (raw) => {
+        if (
+          receipt !== this.tapUndo ||
+          signal.aborted ||
+          this.stopping ||
+          !this.current(base, generation)
+        )
+          throw new Error('The article changed before Undo could be saved.');
+        this.assertDisplayed(base);
+        return replaceBody(raw, base.body, next);
+      });
+      this.writing = promise;
+      try {
+        const saved = await promise;
+        if (signal.aborted || !this.current(base, generation) || this.stopping) return;
+        this.snapshot = saved;
+        this.clearTapUndo();
+        this.tapHighlighter?.reset();
+        this.surface?.setBody(saved.body, text(saved.properties.url));
+        this.controls();
+      } finally {
+        if (this.writing === promise) this.writing = undefined;
+        if (this.tapUndo === receipt) this.clearTapUndo();
+      }
+    });
+  }
+  private clearTapUndo(): void {
+    clearTimeout(this.tapUndoTimer);
+    this.tapUndoTimer = undefined;
+    this.tapUndo = undefined;
+    this.tapUndoUntil = 0;
+    this.tapHighlighter?.setUndoAvailable(false);
   }
   private persistPosition(marker: string): void {
     const snapshot = this.snapshot,
@@ -1616,28 +1808,8 @@ export class ReaderView extends ItemView {
     const element = event.target instanceof Element ? event.target : undefined;
     const mark = element?.closest('mark');
     if (mark && this.surface?.body.contains(mark) && this.snapshot && !this.surface.selection()) {
-      try {
-        this.assertDisplayed(this.snapshot);
-      } catch (error) {
-        event.preventDefault();
-        this.error(error);
-        return;
-      }
-      const marks = [...this.surface.body.querySelectorAll('mark')],
-        source = passages(this.snapshot.body);
-      if (marks.length !== source.length) {
-        event.preventDefault();
-        this.error(
-          new Error(
-            'This highlight contains unsupported formatting. Use Open Markdown to edit it safely.',
-          ),
-        );
-        return;
-      }
-      const passage = source[marks.indexOf(mark as HTMLElement)];
-      if (!passage) return;
       event.preventDefault();
-      this.passageMenu(passage, event);
+      this.selectPassageMark(mark, event);
       return;
     }
     const link = element?.closest<HTMLAnchorElement>('a[href]');
@@ -1702,11 +1874,48 @@ export class ReaderView extends ItemView {
       );
     }
   }
-  private passageMenu(passage: Passage, event: MouseEvent): void {
+  private selectPassageMark(mark: Element, event: MouseEvent): void {
+    if (!this.snapshot || !this.surface?.body.contains(mark) || this.surface.selection()) return;
+    try {
+      this.assertDisplayed(this.snapshot);
+      const marks = [...this.surface.body.querySelectorAll('mark')],
+        source = passages(this.snapshot.body);
+      if (marks.length !== source.length)
+        throw new Error(
+          'This highlight contains unsupported formatting. Use Open Markdown to edit it safely.',
+        );
+      const passage = source[marks.indexOf(mark as HTMLElement)];
+      if (passage) this.passageMenu(passage, event);
+    } catch (error) {
+      this.error(error);
+    }
+  }
+  private passageAfterWrite(
+    expectedBody: string,
+    expected: Passage | undefined,
+    body: string,
+  ): Passage | undefined {
+    if (!expected) return;
+    const matches = passages(body).filter(
+      (item) =>
+        item.text === expected.text &&
+        item.target === expected.target &&
+        (body !== expectedBody || item.from === expected.from),
+    );
+    // Relocation may rewrite links. Bind only to the actual saved body and decline
+    // ambiguous matches rather than carrying pre-move offsets into a new source.
+    return matches.length === 1 ? matches[0] : undefined;
+  }
+  private passageMenu(passage: Passage, event?: MouseEvent): void {
     if (!this.snapshot) return;
     this.assertDisplayed(this.snapshot);
-    const menu = new Menu(),
-      snapshot = this.snapshot!,
+    if (event) {
+      this.passageIntent++;
+      this.cancelNodeCreation();
+    }
+    const intent = this.passageIntent;
+    const actions: TapToolbarAction[] = [];
+    const snapshot = this.snapshot!,
       signal = this.articleLifetime.signal,
       generation = this.generation;
     const apply = async (
@@ -1722,10 +1931,10 @@ export class ReaderView extends ItemView {
       }
       const base = this.snapshot!;
       if (base.body !== snapshot.body)
-        throw new Error('The article text changed; reopen the highlight menu.');
+        throw new Error('The article text changed. Tap the highlight again.');
       const saved = await this.host.store.annotate(base, (raw) => {
         if (signal.aborted || !this.current(snapshot, generation) || this.stopping)
-          throw new Error('The article changed; reopen the highlight menu.');
+          throw new Error('The article changed. Tap the highlight again.');
         this.assertDisplayed(base);
         validate(); // Runs again inside vault.process, not just when the picker closes.
         return replaceBody(
@@ -1740,17 +1949,30 @@ export class ReaderView extends ItemView {
         return;
       }
       this.snapshot = saved;
+      this.clearTapUndo();
+      this.tapHighlighter?.reset();
       this.surface?.setBody(saved.body, text(saved.properties.url));
+      if (action !== 'remove' && this.tapMode && this.passageIntent === intent) {
+        const expected = changePassage(snapshot.body, passage, action, target);
+        const changed = passages(expected).find((item) => item.from === passage.from);
+        const selected = this.passageAfterWrite(expected, changed, saved.body);
+        if (selected && this.surface?.displayedBody === saved.body) this.passageMenu(selected);
+      }
       this.controls();
       return saved;
     };
     const action = (
+      id: string,
       label: string,
+      icon: string,
       run: (epoch: number) => void | Promise<unknown>,
       serialize = true,
     ) =>
-      menu.addItem((item) =>
-        item.setTitle(label).onClick(() => {
+      actions.push({
+        id,
+        label,
+        icon,
+        run: () => {
           // A new passage action supersedes the pending Nodes dialog before queuing.
           // Capture creation's epoch at the click, after cancelling any older request.
           this.cancelNodeCreation();
@@ -1759,10 +1981,17 @@ export class ReaderView extends ItemView {
             if (!signal.aborted && this.current(snapshot, generation)) await run(epoch);
           };
           void (serialize ? this.operation(invoke) : invoke()).catch((error) => this.error(error));
-        }),
-      );
+        },
+      });
     const api = nodesApi(this.app);
-    if (passage.target) action('Open note', () => this.openLinked(passage.target!), false);
+    if (passage.target)
+      action(
+        'open-note',
+        'Open note',
+        'file-symlink',
+        () => this.openLinked(passage.target!),
+        false,
+      );
     if (api?.pickNodeForLink) {
       const pick = async (creationEpoch: number) => {
         if (creationEpoch !== this.nodeCreationEpoch) return;
@@ -1826,7 +2055,7 @@ export class ReaderView extends ItemView {
         };
         try {
           if (nodesApi(this.app) !== api)
-            throw new Error('The Nodes API changed. Reopen the menu.');
+            throw new Error('The Nodes API changed. Tap the highlight again.');
           this.assertDisplayed(snapshot);
           checkCallback();
           const options = {
@@ -1850,13 +2079,16 @@ export class ReaderView extends ItemView {
           await pendingLink;
         }
       };
-      action(passage.target ? 'Change link…' : 'Link to note…', pick);
-      action('Create note…', pick);
+      action('link-note', passage.target ? 'Change link…' : 'Link to note…', 'link', pick);
+      action('create-note', 'Create note…', 'file-plus', pick);
     }
-    menu.addSeparator();
-    if (passage.target) action('Remove link (keeps highlight)', () => apply('unlink'));
-    action('Remove highlight', () => apply('remove'));
-    menu.showAtMouseEvent(event);
+    if (passage.target)
+      action('unlink', 'Remove link (keeps highlight)', 'unlink', () => apply('unlink'));
+    action('remove-highlight', 'Remove highlight', 'eraser', () => apply('remove'));
+    this.tapHighlighter?.setActive(true);
+    this.tapHighlighter?.reset();
+    this.passageActions = actions;
+    this.tapHighlighter?.refreshActions();
   }
   private cancelNodeCreation(): void {
     // Explicit navigation/action intent only, never save/render/position/background flush.
@@ -2006,6 +2238,18 @@ export class ReaderView extends ItemView {
       : ['ArrowUp', 'PageUp'].includes(event.key)
         ? -1
         : undefined;
+    if (this.tapMode) {
+      if (direction && this.host.paged) {
+        event.preventDefault();
+        this.surface.page(direction);
+      } else if (
+        ['j', 'k'].includes(event.key) ||
+        (direction && this.surface.atBoundary(direction))
+      ) {
+        event.preventDefault();
+      }
+      return;
+    }
     if (direction && this.surface.atBoundary(direction)) {
       if (event.repeat || this.boundaryNavigation) return;
       event.preventDefault();

@@ -107,29 +107,71 @@ body.is-mobile.reader-mobile-active .mobile-navbar {
   max-height: 55vh;
   overflow-y: auto;
 }
+.reader-topic-modal {
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  width: min(560px, calc(100vw - 24px));
+  max-height: calc(100dvh - 32px);
+  padding: 16px;
+}
+.reader-topic-modal .reader-topic-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 0;
+  max-height: min(70dvh, 600px);
+  overflow: hidden;
+}
+.reader-topic-picker > input[type='search'] {
+  box-sizing: border-box;
+  flex: 0 0 auto;
+  width: 100%;
+  min-height: 44px;
+  margin: 0;
+}
+.reader-topic-picker .reader-topic-selection {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.reader-topic-picker .reader-topic-count {
+  flex: 0 0 auto;
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+}
 .reader-topic-picker .reader-topic-selected {
   display: flex;
-  flex-wrap: wrap;
   gap: 4px;
-  max-height: 90px;
-  overflow-y: auto;
+  min-width: 0;
+  overflow-x: auto;
+  white-space: nowrap;
 }
 .reader-topic-picker .reader-topic-selected span {
+  flex: 0 0 auto;
   border-radius: 1em;
   background: var(--background-modifier-hover);
-  padding: 3px 9px;
+  padding: 3px 8px;
   font-size: var(--font-smallest);
 }
 .reader-topic-picker .reader-topic-list {
-  max-height: min(45vh, 420px);
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: min(45dvh, 420px);
   overflow-y: auto;
+  overscroll-behavior: contain;
 }
 .reader-topic-picker .reader-topic-row {
+  box-sizing: border-box;
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
   width: 100%;
   min-height: 44px;
-  padding: 8px 12px;
+  margin: 0;
+  padding: 4px 8px;
   text-align: start;
   background: transparent;
   color: var(--text-normal);
@@ -137,15 +179,24 @@ body.is-mobile.reader-mobile-active .mobile-navbar {
   border-bottom: 1px solid var(--background-modifier-border);
   border-radius: 0;
 }
-.reader-topic-picker .reader-topic-row small {
+.reader-topic-picker .reader-topic-name,
+.reader-topic-picker .reader-topic-path {
   grid-column: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.reader-topic-picker .reader-topic-path {
   color: var(--text-muted);
-  overflow-wrap: anywhere;
 }
 .reader-topic-picker .reader-topic-check {
   grid-column: 2;
-  grid-row: 1 / 3;
+  grid-row: 1;
   align-self: center;
+}
+.reader-topic-picker .reader-topic-path + .reader-topic-check {
+  grid-row: 1 / 3;
 }
 .reader-topic-picker .reader-topic-row:hover,
 .reader-topic-picker .reader-topic-row[aria-pressed='true'] {
@@ -154,6 +205,34 @@ body.is-mobile.reader-mobile-active .mobile-navbar {
 .reader-topic-picker .reader-topic-row:focus-visible {
   outline: 2px solid var(--interactive-accent);
   outline-offset: -2px;
+}
+.reader-topic-picker .reader-topic-footer {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 8px;
+}
+.reader-topic-picker .reader-topic-footer button {
+  min-width: 44px;
+  min-height: 44px;
+  margin: 0;
+  padding: 4px 12px;
+}
+.reader-topic-picker .reader-topic-add {
+  margin-inline-end: auto !important;
+}
+.reader-topic-picker .reader-topic-status,
+.reader-topic-picker .reader-topic-error,
+.reader-topic-picker .reader-topic-empty {
+  flex: 0 0 auto;
+  margin: 0;
+  font-size: var(--font-ui-small);
+}
+.reader-topic-picker .reader-topic-error {
+  color: var(--text-error);
+}
+.reader-topic-modal [hidden] {
+  display: none !important;
 }
 .reader-status {
   color: var(--text-muted);
@@ -372,6 +451,57 @@ body.is-mobile.reader-mobile-active .mobile-navbar {
 }
 .reader-view .reader-actions > button.reader-icon-button {
   width: 100% !important;
+}
+.reader-view .reader-actions.reader-tap-highlight-toolbar {
+  display: block;
+}
+.reader-tap-highlight-actions {
+  position: relative;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 4px;
+}
+.reader-view .reader-tap-highlight-actions > .reader-icon-button {
+  flex: 0 0 44px;
+}
+.reader-tap-highlight-status {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+  pointer-events: none;
+}
+.reader-document.reader-tap-highlight-mode,
+.reader-document.reader-tap-highlight-mode * {
+  user-select: none !important;
+  -webkit-user-select: none !important;
+  -webkit-touch-callout: none;
+  touch-action: manipulation;
+  cursor: crosshair;
+}
+.reader-tap-highlight-preview {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  user-select: none;
+  overflow: hidden;
+}
+.reader-tap-highlight-preview > span {
+  position: absolute;
+  box-sizing: border-box;
+  background: var(--text-highlight-bg, rgb(255 208 0 / 35%));
+  border: 2px solid var(--text-accent, Highlight);
+}
+.reader-tap-highlight-status[hidden],
+.reader-tap-highlight-actions > button[hidden] {
+  display: none;
 }
 .reader-paged {
   overflow: hidden;
