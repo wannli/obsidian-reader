@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.13.0](https://github.com/wannli/obsidian-reader/compare/0.12.0...0.13.0) (2026-10-19)
+
+
+### Added
+
+* **reader:** add tap highlights and contextual bottom-bar actions ([18f35e0](https://github.com/wannli/obsidian-reader/commit/18f35e058f7db5827e3f7842d33296d8101421ef))
+
 ## [0.12.0](https://github.com/wannli/obsidian-reader/compare/0.11.0...0.12.0) (2026-10-19)
 
 
