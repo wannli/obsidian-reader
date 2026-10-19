@@ -20,7 +20,7 @@
     "check": "npm run format:check && npm run validate:metadata && npm run typecheck && npm test && npm run test:tooling && npm run build"
   },
   "dependencies": {
-    "defuddle": "0.19.4",
+    "defuddle": "0.19.5",
     "dompurify": "3.4.17",
     "entities": "8.1.0",
     "marked": "^18.1.1",
