@@ -30,7 +30,10 @@ vi.mock('obsidian', () => ({
     addRibbonIcon() {}
     addCommand() {}
     registerObsidianProtocolHandler() {}
-    addSettingTab() {}
+    settings: any;
+    addSettingTab(settings: any) {
+      this.settings = settings;
+    }
     registerEvent() {}
     registerDomEvent() {}
     registerInterval() {}
@@ -54,6 +57,7 @@ vi.mock('../../src/reader/view', () => ({
     }
     readingList = vi.fn(async () => {});
     changed = vi.fn(async () => {});
+    refreshArticleControls = vi.fn();
     protects = () => false;
   },
 }));
@@ -62,7 +66,15 @@ vi.mock('../../src/host/network', () => ({
     stop = vi.fn();
   },
 }));
-vi.mock('../../src/host/settings', () => ({ ReaderSettings: class {}, showFeeds: vi.fn() }));
+vi.mock('../../src/host/settings', () => ({
+  ReaderSettings: class {
+    args: any[];
+    constructor(...args: any[]) {
+      this.args = args;
+    }
+  },
+  showFeeds: vi.fn(),
+}));
 vi.mock('../../src/host/dialogs', () => ({ input: vi.fn(), confirmArticleReplacement: vi.fn() }));
 vi.mock('../../src/host/ingestion', () => ({
   Ingestion: class {

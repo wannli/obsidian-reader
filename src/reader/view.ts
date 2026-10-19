@@ -83,6 +83,7 @@ interface ReaderHost {
   ingestion: Ingestion;
   signal: AbortSignal;
   paged: boolean;
+  showPagedArticleButtons: boolean;
   capture(): void;
   feeds(): void;
   edit(view: ReaderView, file: TFile): Promise<void>;
@@ -861,7 +862,12 @@ export class ReaderView extends ItemView {
         this.readingQueue.rename(path, snapshot.path);
         this.readingQueue.select(snapshot.path);
       }
-      const column = this.contentEl.createDiv({ cls: 'reader-article' });
+      const column = this.contentEl.createDiv({
+        cls:
+          this.host.paged && this.host.showPagedArticleButtons
+            ? 'reader-article reader-has-page-actions'
+            : 'reader-article',
+      });
       const surface = new ReadingSurface(
         column,
         this.host.paged,
@@ -887,7 +893,10 @@ export class ReaderView extends ItemView {
       this.status = column.createDiv({ cls: 'reader-status', attr: { role: 'status' } });
       column.prepend(this.status); // Feedback stays clear of the floating controls.
       this.actions = column.createEl('nav', {
-        cls: 'reader-actions reader-bottom-controls',
+        cls:
+          this.host.paged && this.host.showPagedArticleButtons
+            ? 'reader-actions reader-paged-actions reader-bottom-controls'
+            : 'reader-actions reader-bottom-controls',
         attr: { 'aria-label': 'Article actions' },
       });
       this.controls();
@@ -924,35 +933,50 @@ export class ReaderView extends ItemView {
       if (request === this.opening) this.loadingPath = undefined;
     }
   }
+  refreshArticleControls(): void {
+    if (!this.actions || !this.surface) return;
+    const expanded = this.surface.paged && this.host.showPagedArticleButtons;
+    this.actions.classList.toggle('reader-paged-actions', expanded);
+    this.actions.parentElement?.classList.toggle('reader-has-page-actions', expanded);
+    this.controls();
+  }
   private controls(): void {
     if (!this.snapshot || !this.actions || !this.surface) return;
     this.syncPresentation();
     this.actions.empty();
-    for (const [label, direction] of [
-      ['Previous', -1],
-      ['Next', 1],
-    ] as const) {
-      const button = this.button(
-        this.actions,
-        label,
-        () => {
-          if (this.surface?.canPage(direction)) {
-            this.surface.page(direction); // Paging is not article-navigation intent.
+    if (!this.surface.paged || this.host.showPagedArticleButtons) {
+      for (const [label, direction] of [
+        ['Previous', -1],
+        ['Next', 1],
+      ] as const) {
+        const button = this.button(
+          this.actions,
+          label,
+          () => (direction === 1 ? this.finish('next') : this.navigate(-1)),
+          `${this.surface.paged ? 'chevrons' : 'chevron'}-${direction === -1 ? 'left' : 'right'}`,
+        );
+        button.disabled =
+          direction === -1 &&
+          !this.readingQueue.neighbour(-1, (path) => !!this.host.store.catalog.article(path));
+        button.setAttribute('aria-label', `${label} article`);
+      }
+    }
+    if (this.surface.paged) {
+      for (const [label, direction] of [
+        ['Previous page', -1],
+        ['Next page', 1],
+      ] as const) {
+        const button = this.button(
+          this.actions,
+          label,
+          () => {
+            this.surface?.page(direction);
             this.controls();
-            return;
-          }
-          return direction === 1 ? this.finish('next') : this.navigate(-1);
-        },
-        direction === -1 ? 'chevron-left' : 'chevron-right',
-      );
-      button.disabled =
-        direction === -1 &&
-        !this.surface.canPage(-1) &&
-        !this.readingQueue.neighbour(-1, (path) => !!this.host.store.catalog.article(path));
-      button.setAttribute(
-        'aria-label',
-        this.host.paged ? `${label} page or article` : `${label} article`,
-      );
+          },
+          direction === -1 ? 'chevron-left' : 'chevron-right',
+        );
+        button.disabled = this.surface.atBoundary(direction);
+      }
     }
     this.button(this.actions, 'Article topics', () => this.topics(), 'tags');
     this.button(this.actions, 'Read later', () => this.move('Later'), 'clock');

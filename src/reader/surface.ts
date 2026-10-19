@@ -32,7 +32,7 @@ export class ReadingSurface {
   private restoreFrame?: number;
   private saveTimer?: ReturnType<typeof setTimeout>;
   private boundaryRevision = 0;
-  private reachableEnd?: { position: number; geometry: string };
+  private reachableEnd?: { position: number; geometry: string; visual: boolean };
 
   constructor(
     parent: HTMLElement,
@@ -309,7 +309,8 @@ export class ReadingSurface {
       return !!(
         this.reachableEnd &&
         this.boundaryGeometry()?.key === this.reachableEnd.geometry &&
-        this.viewport.scrollLeft >= this.reachableEnd.position - 1
+        this.viewport.scrollLeft >= this.reachableEnd.position - 1 &&
+        (!this.reachableEnd.visual || this.finalContentVisible())
       );
     }
     if (this.viewport.scrollHeight <= 0) return false;
@@ -395,6 +396,37 @@ export class ReadingSurface {
     };
   }
 
+  private finalContentVisible(): boolean {
+    // A device may clamp before the nominal last column even when its measured
+    // scroll extent says otherwise. Only the rendered tail can justify probing
+    // a larger discrepancy; rounded column numbers alone cannot.
+    const range = this.viewport.ownerDocument.createRange();
+    if (typeof range.getClientRects !== 'function') return false;
+    // Marked may leave whitespace text nodes after the final block. Walk back
+    // only over trailing non-rendered nodes, never measure the whole article.
+    let node: ChildNode | null = this.body.lastChild ?? this.title;
+    for (let checked = 0; node && checked < 32; checked++, node = node.previousSibling) {
+      range.selectNodeContents(node);
+      let tail: DOMRect | DOMRectReadOnly | undefined;
+      for (const rect of range.getClientRects()) if (rect.width > 0 && rect.height > 0) tail = rect;
+      if (!tail && node.nodeType === Node.ELEMENT_NODE) {
+        // Empty rendered elements such as a final horizontal rule have no contents.
+        range.selectNode(node);
+        for (const rect of range.getClientRects())
+          if (rect.width > 0 && rect.height > 0) tail = rect;
+      }
+      if (!tail) continue;
+      const frame = this.viewport.getBoundingClientRect();
+      return (
+        tail.left >= frame.left - 1 &&
+        tail.right <= frame.right + 1 &&
+        tail.top >= frame.top - 1 &&
+        tail.bottom <= frame.bottom + 1
+      );
+    }
+    return false;
+  }
+
   page(direction: -1 | 1): void {
     if (this.dead || !this.paged || this.nativeSelection()) return;
     // A page may cancel restoration, but that unsettled request cannot prove EOF.
@@ -422,14 +454,22 @@ export class ReadingSurface {
         Math.max(0, this.viewport.scrollWidth - this.viewport.clientWidth),
       );
       const quantum = geometry ? Math.max(1, Math.ceil(1 / geometry.scale)) : 0;
+      const nominalClamp = Math.round(landed / stride) === lastIndex && end - landed <= quantum;
+      const visualClamp =
+        !nominalClamp &&
+        !!geometry &&
+        instant &&
+        target === last &&
+        end - landed > 1 &&
+        quantum < stride / 2 &&
+        this.finalContentVisible();
       if (
         geometry &&
         instant &&
         target === last &&
-        Math.round(landed / stride) === lastIndex &&
         end - landed > 1 &&
-        end - landed <= quantum &&
         quantum < stride / 2 &&
+        (nominalClamp || visualClamp) &&
         this.boundaryGeometry()?.key === geometry.key
       ) {
         // Request beyond one quantization step, but no more than one extra stride.
@@ -443,7 +483,7 @@ export class ReadingSurface {
           this.window.getComputedStyle(this.viewport).scrollBehavior === 'auto' &&
           this.boundaryGeometry()?.key === geometry.key
         )
-          this.reachableEnd = { position: landed, geometry: geometry.key };
+          this.reachableEnd = { position: landed, geometry: geometry.key, visual: visualClamp };
       }
     } finally {
       if (behavior) style.setProperty('scroll-behavior', behavior, priority);

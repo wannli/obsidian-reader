@@ -69,7 +69,7 @@
 - Use native typography, themes, menus, and pickers; no Reader theme/type settings.
 - Hide the floating mobile navigation bar only while Reader is active; restore it on normal notes/exit/unload, without hiding capture/keyboard controls.
 - Boox pagination supports previous/next device buttons and touch buttons, without animations. Up/PageUp at the article start opens the previous article; Down/PageDown at its end opens the next. Preserve ordinary scrolling/paging, guard editing/modal/selection input, and prevent held-key skipping.
-- Pagination preferences are device-local, not shared through vault sync.
+- Pagination itself is device-local, not shared through vault sync. A separate Reader plugin setting, default off, reveals double-chevron article navigation only while pagination is enabled; single-chevron touch page buttons remain available. Non-paged article arrows are unchanged.
 
 ## Approved annotations and Nodes integration
 

@@ -216,7 +216,7 @@ vi.mock('../src/reader/surface', () => ({
     dispose = vi.fn();
     constructor(
       parent: HTMLElement,
-      _paged: boolean,
+      readonly paged: boolean,
       private position: (marker: string) => void,
       private renderError?: (error: unknown) => void,
     ) {
@@ -319,6 +319,7 @@ function hostFixture(folders: ReaderFolders = defaultFolders) {
     store,
     signal: signal.signal,
     paged: false,
+    showPagedArticleButtons: false,
     ingestion: { acquire: vi.fn(async () => {}) },
     capture() {},
     feeds() {},
@@ -1785,6 +1786,7 @@ describe('article keyboard boundaries', () => {
       const previous = route === 'Previous' || route === 'PageUp',
         target = previous ? a : b;
       f.host.paged = true;
+      f.host.showPagedArticleButtons = true;
       await f.view.openArticle((previous ? b : a).path, true);
       if (route === 'list') {
         await f.view.readingList();
@@ -1806,6 +1808,115 @@ describe('article keyboard boundaries', () => {
       );
     },
   );
+  it.each(['Next', 'Previous'])(
+    'uses %s for articles, never pages, in paged mode',
+    async (label) => {
+      const f = hostFixture();
+      f.host.paged = true;
+      f.host.showPagedArticleButtons = true;
+      const a = await f.note('Reading/Inbox/A.md'),
+        b = await f.note('Reading/Inbox/B.md'),
+        c = await f.note('Reading/Inbox/C.md');
+      await f.view.openArticle(b.path, true);
+      f.probe.surface.atBoundary.mockReturnValue(false);
+      f.probe.surface.canPage.mockReturnValue(true);
+      const button = [
+        ...f.view.contentEl.querySelectorAll<HTMLButtonElement>('.reader-actions button'),
+      ].find((item) => actionName(item) === label)!;
+      expect(button.disabled).toBe(false);
+      expect(button.getAttribute('aria-label')).toBe(`${label} article`);
+      button.click();
+      await f.probe.operations;
+      expect(f.view.file).toBe(label === 'Next' ? c : a);
+      expect(f.probe.surface.page).not.toHaveBeenCalled();
+    },
+  );
+
+  it('offers separate touch page controls that never navigate articles', async () => {
+    const f = hostFixture();
+    f.host.paged = true;
+    f.host.showPagedArticleButtons = true;
+    const a = await f.note('Reading/Inbox/A.md');
+    await f.note('Reading/Inbox/B.md');
+    await f.view.openArticle(a.path, true);
+    const controls = () => [
+      ...f.view.contentEl.querySelectorAll<HTMLButtonElement>('.reader-actions button'),
+    ];
+    expect(controls().map(actionName).slice(0, 4)).toEqual([
+      'Previous',
+      'Next',
+      'Previous page',
+      'Next page',
+    ]);
+    expect(
+      controls()
+        .slice(0, 4)
+        .map((button) => button.querySelector('svg')?.dataset.icon),
+    ).toEqual(['chevrons-left', 'chevrons-right', 'chevron-left', 'chevron-right']);
+    for (const [label, direction] of [
+      ['Next page', 1],
+      ['Previous page', -1],
+    ] as const) {
+      controls()
+        .find((button) => actionName(button) === label)!
+        .click();
+      await f.probe.operations;
+      expect(f.view.file).toBe(a);
+      expect(f.probe.surface.page).toHaveBeenLastCalledWith(direction);
+    }
+  });
+
+  it('hides only paged-mode article arrows by default and refreshes controls without reopening', async () => {
+    const f = hostFixture();
+    f.host.paged = true;
+    const a = await f.note('Reading/Inbox/A.md');
+    await f.note('Reading/Inbox/B.md');
+    await f.view.openArticle(a.path, true);
+    const surface = f.probe.surface;
+    const column = f.view.contentEl.querySelector('.reader-article')!;
+    const actions = column.querySelector('.reader-actions')!;
+    const names = () => [...actions.querySelectorAll('button')].map(actionName);
+    expect(names()).toEqual([
+      'Previous page',
+      'Next page',
+      'Article topics',
+      'Read later',
+      'Archive',
+      'Delete',
+      'List',
+    ]);
+    expect(column.classList.contains('reader-has-page-actions')).toBe(false);
+    expect(actions.classList.contains('reader-paged-actions')).toBe(false);
+    actions.querySelector<HTMLButtonElement>('[aria-label="Next page"]')!.click();
+    expect(f.probe.surface.page).toHaveBeenCalledWith(1);
+    expect(f.view.file).toBe(a);
+    f.host.showPagedArticleButtons = true;
+    f.view.refreshArticleControls();
+    expect(names().slice(0, 4)).toEqual(['Previous', 'Next', 'Previous page', 'Next page']);
+    expect(column.classList.contains('reader-has-page-actions')).toBe(true);
+    expect(actions.classList.contains('reader-paged-actions')).toBe(true);
+    expect(f.probe.surface).toBe(surface);
+    f.host.showPagedArticleButtons = false;
+    f.view.refreshArticleControls();
+    expect(names()).toHaveLength(7);
+    expect(f.view.file).toBe(a);
+    expect(f.probe.surface).toBe(surface);
+  });
+
+  it('disables Previous on the first article even when there are earlier pages', async () => {
+    const f = hostFixture();
+    f.host.paged = true;
+    f.host.showPagedArticleButtons = true;
+    const a = await f.note('Reading/Inbox/A.md');
+    await f.note('Reading/Inbox/B.md');
+    await f.view.openArticle(a.path, true);
+    f.probe.surface.canPage.mockReturnValue(true);
+    const button = [
+      ...f.view.contentEl.querySelectorAll<HTMLButtonElement>('.reader-actions button'),
+    ].find((item) => actionName(item) === 'Previous')!;
+    expect(button.disabled).toBe(true);
+  });
+
   async function fixture() {
     const f = hostFixture();
     const a = await f.note('Reading/Inbox/A.md'),
@@ -1879,7 +1990,7 @@ describe('article keyboard boundaries', () => {
         const end = direction === 1 ? maxLeft : 0;
         surface.viewport.scrollLeft = direction === 1 ? maxLeft - 4 : 4;
         expect(surface.atBoundary(direction)).toBe(false);
-        expect(surface.canPage(direction)).toBe(false); // Buttons can already navigate here.
+        expect(surface.canPage(direction)).toBe(false); // Keys must still finish the page.
         const step = new KeyboardEvent('keydown', { key, cancelable: true });
         f.view.key(step);
         await f.probe.operations;
@@ -2096,6 +2207,70 @@ describe('article keyboard boundaries', () => {
         expect(open).toHaveBeenCalledOnce();
       },
     );
+    it('hands off PageDown after a fresh press at a visually confirmed device clamp beyond zoom tolerance', async () => {
+      f = await measuredFixture({ zoom: 0.6, width: 276, extent: 2124, end: 1814 });
+      const { surface, geometry, view, probe, writes } = f;
+      const frame = surface.viewport.getBoundingClientRect();
+      surface.body.append('\n'); // Rendered Markdown commonly has trailing whitespace.
+      let visible = true;
+      const rects = Object.getOwnPropertyDescriptor(Range.prototype, 'getClientRects');
+      Object.defineProperty(Range.prototype, 'getClientRects', {
+        configurable: true,
+        value: function (this: Range) {
+          if (this.startContainer.nodeType === Node.TEXT_NODE) return [];
+          return [
+            new DOMRect(visible ? frame.right - 40 : frame.right + 10, frame.bottom - 40, 20, 20),
+          ];
+        },
+      });
+      try {
+        surface.viewport.scrollLeft = geometry.end - 4;
+        expect(surface.atBoundary(1)).toBe(false);
+        view.key(new KeyboardEvent('keydown', { key: 'PageDown' }));
+        await probe.operations;
+        expect(view.file).toBe(f.b); // The press that reaches the clamp never leaves.
+        expect(surface.viewport.scrollLeft).toBe(geometry.end);
+        expect(writes.at(-1)?.after).toBe(writes.at(-1)?.before);
+        expect(surface.atBoundary(1)).toBe(true);
+        visible = false;
+        expect(surface.atBoundary(1)).toBe(false); // A changed tail invalidates visual proof.
+        visible = true;
+        view.key(new KeyboardEvent('keydown', { key: 'PageDown', repeat: true }));
+        await probe.operations;
+        expect(view.file).toBe(f.b);
+        view.key(new KeyboardEvent('keydown', { key: 'PageDown' }));
+        await probe.operations;
+        expect(view.file).toBe(f.c);
+        expect(f.vault.trashed).toEqual([]);
+      } finally {
+        if (rects) Object.defineProperty(Range.prototype, 'getClientRects', rects);
+        else delete (Range.prototype as any).getClientRects;
+      }
+    });
+
+    it('does not hand off when a clamped last-column request still leaves content offscreen', async () => {
+      f = await measuredFixture({ zoom: 0.6, width: 276, extent: 2124, end: 1814 });
+      const { surface, geometry, view, probe } = f;
+      const frame = surface.viewport.getBoundingClientRect();
+      const rects = Object.getOwnPropertyDescriptor(Range.prototype, 'getClientRects');
+      Object.defineProperty(Range.prototype, 'getClientRects', {
+        configurable: true,
+        value: () => [new DOMRect(frame.right + 10, frame.bottom - 40, 20, 20)],
+      });
+      try {
+        surface.viewport.scrollLeft = geometry.end;
+        view.key(new KeyboardEvent('keydown', { key: 'PageDown' }));
+        await probe.operations;
+        expect(surface.atBoundary(1)).toBe(false);
+        view.key(new KeyboardEvent('keydown', { key: 'PageDown' }));
+        await probe.operations;
+        expect(view.file).toBe(f.b);
+      } finally {
+        if (rects) Object.defineProperty(Range.prototype, 'getClientRects', rects);
+        else delete (Range.prototype as any).getClientRects;
+      }
+    });
+
     it('retains the confirmed endpoint through actual position writes and delayed scroll capture', async () => {
       f = await measuredFixture();
       const render = await import('../src/reader/render');
@@ -2713,6 +2888,7 @@ describe('bounded Reader UI', () => {
         libraryStyle.border,
       ];
       const article = await f.note('Reading/Inbox/Article.md');
+      f.host.showPagedArticleButtons = true; // The plugin-wide setting never removes nonpaged arrows.
       await f.view.openArticle(article.path, true);
       const buttons = [
         ...f.view.contentEl.querySelectorAll<HTMLButtonElement>('.reader-actions button'),
@@ -2887,9 +3063,15 @@ describe('Reader mobile control styling', () => {
 });
 
 describe('leaf-scoped floating Reader layout', () => {
-  it.each([390, 1280].flatMap((width) => [false, true].map((paged) => ({ width, paged }))))(
-    'uses full-pane CSS with compact 5/7-action overlays (width=$width, paged=$paged)',
-    async ({ width, paged }) => {
+  it.each(
+    [390, 1280].flatMap((width) =>
+      [false, true].flatMap((paged) =>
+        [false, true].map((showPagedArticleButtons) => ({ width, paged, showPagedArticleButtons })),
+      ),
+    ),
+  )(
+    'uses full-pane CSS with compact 5/7/9-action overlays (width=$width, paged=$paged, arrows=$showPagedArticleButtons)',
+    async ({ width, paged, showPagedArticleButtons }) => {
       const f = hostFixture();
       const file = await f.note('Reading/Inbox/Title.md');
       const raw = patchProperties(await f.vault.read(file), {
@@ -2905,6 +3087,7 @@ describe('leaf-scoped floating Reader layout', () => {
       );
       f.view.contentEl.style.width = `${width}px`;
       f.host.paged = paged;
+      f.host.showPagedArticleButtons = showPagedArticleButtons;
       try {
         f.view.showList();
         const list = f.view.contentEl.querySelector('.reader-list')!;
@@ -2920,7 +3103,10 @@ describe('leaf-scoped floating Reader layout', () => {
         await f.view.openArticle(file.path, true);
         const column = f.view.contentEl.querySelector('.reader-article')!;
         const actions = column.querySelector('.reader-bottom-controls')!;
-        expect(actions.querySelectorAll('button')).toHaveLength(7);
+        const expanded = paged && showPagedArticleButtons;
+        expect(actions.querySelectorAll('button')).toHaveLength(expanded ? 9 : 7);
+        expect(column.classList.contains('reader-has-page-actions')).toBe(expanded);
+        expect(actions.classList.contains('reader-paged-actions')).toBe(expanded);
         expect(actions.parentElement).toBe(column);
         expect(column.firstElementChild).toBe(f.probe.status);
         expect(window.getComputedStyle(column).position).toBe('relative');
@@ -2960,6 +3146,14 @@ describe('leaf-scoped floating Reader layout', () => {
           'var(--reader-controls-clearance)',
         );
         expect(rule('.reader-paged .reader-flow').getPropertyValue('height')).toBe('');
+        expect(
+          rule('.reader-article.reader-has-page-actions').getPropertyValue(
+            '--reader-controls-clearance',
+          ),
+        ).toContain('108px');
+        expect(
+          rule('.reader-actions.reader-paged-actions').getPropertyValue('grid-template-columns'),
+        ).toBe('repeat(5, 44px)');
         expect(rule('.reader-viewport').getPropertyValue('padding-inline-end')).toBe('');
         expect(rule('.reader-viewport').getPropertyValue('scrollbar-gutter')).toBe('stable');
         expect(
@@ -3868,6 +4062,7 @@ describe('Nodes v2 linked creation', () => {
     await f.note('Reading/Inbox/B.md');
     await f.note('Notes/Existing.md', 'Keep existing note', 'topic');
     f.host.paged = true;
+    f.host.showPagedArticleButtons = true;
     await f.view.onOpen(); // Install Reader's actual DOM handlers, not calls to private navigation.
     await f.view.openArticle(f.article.path, true);
     const plugin = new ReaderPlugin(f.app, {} as any);
@@ -4531,9 +4726,8 @@ describe('Nodes v2 linked creation', () => {
       // Palette checks and in-article paging do not cancel required completion.
       for (const id of ['move', 'topics', 'open-markdown'])
         expect(mocks.commands.get(id)?.checkCallback?.(true)).toBe(true);
-      f.probe.surface.canPage.mockReturnValue(true);
-      await f.click('footer', 'Next');
-      await f.click('footer', 'Previous');
+      await f.click('footer', 'Next page');
+      await f.click('footer', 'Previous page');
       const heading = document.createElement('h2');
       heading.id = 'section';
       f.probe.surface.body.append(heading);

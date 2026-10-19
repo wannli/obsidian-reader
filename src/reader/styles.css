@@ -340,12 +340,34 @@ body.is-mobile.reader-mobile-active .mobile-navbar {
 .reader-actions {
   grid-template-columns: repeat(7, 44px);
 }
+.reader-actions.reader-paged-actions {
+  grid-template-columns: repeat(5, 44px);
+}
+.reader-article.reader-has-page-actions {
+  --reader-controls-clearance: calc(108px + var(--reader-controls-bottom));
+}
+@container reader-pane (min-width: 460px) {
+  .reader-actions.reader-paged-actions {
+    grid-template-columns: repeat(9, 44px);
+  }
+  .reader-article.reader-has-page-actions {
+    --reader-controls-clearance: calc(60px + var(--reader-controls-bottom));
+  }
+}
 @container reader-pane (max-width: 350px) {
   .reader-actions {
     grid-template-columns: repeat(4, 44px);
   }
   .reader-article {
     --reader-controls-clearance: calc(108px + var(--reader-controls-bottom));
+  }
+}
+@container reader-pane (max-width: 260px) {
+  .reader-actions.reader-paged-actions {
+    grid-template-columns: repeat(4, 44px);
+  }
+  .reader-article.reader-has-page-actions {
+    --reader-controls-clearance: calc(156px + var(--reader-controls-bottom));
   }
 }
 .reader-view .reader-actions > button.reader-icon-button {

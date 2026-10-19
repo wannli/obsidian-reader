@@ -22,6 +22,18 @@ vi.mock('obsidian', () => {
       return this;
     }
   }
+  class Toggle {
+    value = false;
+    change: (value: boolean) => unknown = () => {};
+    setValue(value: boolean) {
+      this.value = value;
+      return this;
+    }
+    onChange(change: (value: boolean) => unknown) {
+      this.change = change;
+      return this;
+    }
+  }
   class Button {
     text = '';
     disabled = false;
@@ -68,7 +80,9 @@ vi.mock('obsidian', () => {
     },
     Setting: class {
       name = '';
+      settingEl = { style: { display: '' } };
       input?: Text;
+      toggle?: Toggle;
       buttons: Button[] = [];
       constructor() {
         ui.settings.push(this);
@@ -91,8 +105,9 @@ vi.mock('obsidian', () => {
         add(button);
         return this;
       }
-      addToggle(add: (control: Text) => void) {
-        add(new Text());
+      addToggle(add: (control: Toggle) => void) {
+        this.toggle = new Toggle();
+        add(this.toggle);
         return this;
       }
     },
@@ -106,6 +121,71 @@ beforeEach(() => {
   ui.picker = undefined;
 });
 const row = (name: string) => ui.settings.find((setting) => setting.name === name);
+
+it('shows the plugin-wide article switch only on paginated devices, without losing staged folder edits', async () => {
+  const savePaged = vi.fn();
+  const saveFolders = vi.fn(async () => {});
+  const saveArticleButtons = vi.fn(async () => {});
+  const settings = new ReaderSettings(
+    {} as App,
+    {} as Plugin,
+    defaultFolders,
+    false,
+    saveFolders,
+    savePaged,
+    defaultStatusFolders,
+    vi.fn(),
+    false,
+    saveArticleButtons,
+  );
+  settings.display();
+  const articles = row('Show article navigation in paged mode');
+  expect(articles.settingEl.style.display).toBe('none');
+  expect(articles.toggle.value).toBe(false);
+  row('Feed subscriptions').input.change('Staged/Subscriptions');
+  row('Boox / e-ink pagination (this device)').toggle.change(true);
+  expect(articles.settingEl.style.display).toBe('');
+  await articles.toggle.change(true);
+  expect(saveArticleButtons).toHaveBeenCalledExactlyOnceWith(true);
+  expect(savePaged).toHaveBeenCalledExactlyOnceWith(true);
+  await row('Apply folder locations').buttons[0].click();
+  expect(saveFolders).toHaveBeenCalledExactlyOnceWith({
+    ...defaultFolders,
+    feeds: 'Staged/Subscriptions',
+  });
+  await articles.toggle.change(false);
+  expect(saveArticleButtons).toHaveBeenLastCalledWith(false);
+  row('Boox / e-ink pagination (this device)').toggle.change(false);
+  expect(articles.settingEl.style.display).toBe('none');
+  settings.display();
+  expect(row('Show article navigation in paged mode').toggle.value).toBe(false);
+});
+
+it('rolls back the article switch when plugin-wide persistence fails', async () => {
+  const save = vi.fn(async () => {
+    throw new Error('Disk full');
+  });
+  const settings = new ReaderSettings(
+    {} as App,
+    {} as Plugin,
+    defaultFolders,
+    true,
+    vi.fn(),
+    vi.fn(),
+    defaultStatusFolders,
+    vi.fn(),
+    false,
+    save,
+  );
+  settings.display();
+  const control = row('Show article navigation in paged mode').toggle;
+  control.setValue(true);
+  await control.change(true);
+  expect(control.value).toBe(false);
+  expect(ui.notices.at(-1)).toBe('Disk full');
+  settings.display();
+  expect(row('Show article navigation in paged mode').toggle.value).toBe(false);
+});
 
 it('shows only the feed subscription creation destination and preserves the legacy article setting', async () => {
   const save = vi.fn(async () => {});

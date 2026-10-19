@@ -86,6 +86,71 @@ it('ignores legacy settings, applies the whole group, and recreates only Reader 
   expect(f.reader.view.host.paged).toBe(true);
 });
 
+it.each([undefined, false, 'true', 1])(
+  'defaults plugin-wide article arrows off for missing or invalid stored value %j',
+  async (value) => {
+    const f = await runtimeFixture(value === undefined ? {} : { showPagedArticleButtons: value });
+    expect(f.plugin.showPagedArticleButtons).toBe(false);
+    expect(f.reader.view.host.showPagedArticleButtons).toBe(false);
+    expect(f.plugin.settings.args[8]).toBe(false);
+    expect(f.plugin.saveData).not.toHaveBeenCalled();
+  },
+);
+
+it('loads plugin-wide article arrows independently of local pagination and updates open controls on save', async () => {
+  const f = await runtimeFixture({ extra: { keep: true }, showPagedArticleButtons: true });
+  expect(f.reader.view.host.showPagedArticleButtons).toBe(true);
+  expect(f.reader.view.host.paged).toBe(false);
+  expect(f.plugin.settings.args[8]).toBe(true);
+  const save = f.plugin.settings.args[9] as (value: boolean) => Promise<void>;
+  await save(false);
+  expect(f.plugin.data).toEqual({ extra: { keep: true }, showPagedArticleButtons: false });
+  expect(f.reader.view.host.showPagedArticleButtons).toBe(false);
+  expect(f.reader.view.refreshArticleControls).toHaveBeenCalledOnce();
+  expect(f.reader.view.host.paged).toBe(false);
+  expect(f.app.notes.size).toBe(0);
+  expect(f.plugin.saveData).toHaveBeenCalledOnce();
+});
+
+it('serializes article preference changes with folder saves and retains unknown settings', async () => {
+  const f = await runtimeFixture({ extra: true });
+  const entered = gate(),
+    release = gate();
+  f.plugin.saveData.mockImplementationOnce(async (data: unknown) => {
+    entered.resolve();
+    await release.promise;
+    f.plugin.data = data;
+  });
+  const folderSave = f.plugin.applyFolders(folders);
+  await entered.promise;
+  const preferenceSave = f.plugin.settings.args[9](true);
+  expect(f.plugin.saveData).toHaveBeenCalledTimes(1);
+  release.resolve();
+  await Promise.all([folderSave, preferenceSave]);
+  expect(f.plugin.saveData).toHaveBeenCalledTimes(2);
+  expect(f.plugin.data).toEqual({
+    extra: true,
+    captureFolders: folders,
+    showPagedArticleButtons: true,
+  });
+  expect(f.reader.view.host.showPagedArticleButtons).toBe(true);
+  expect(f.reader.view.refreshArticleControls).toHaveBeenCalledOnce();
+  const restarted = await runtimeFixture(f.plugin.data);
+  expect(restarted.plugin.settings.args[8]).toBe(true);
+  expect(restarted.reader.view.host.showPagedArticleButtons).toBe(true);
+  expect(restarted.reader.view.host.paged).toBe(false);
+  expect(restarted.plugin.saveData).not.toHaveBeenCalled();
+});
+
+it('does not apply or broadcast an article preference when saving fails', async () => {
+  const f = await runtimeFixture();
+  f.plugin.saveData.mockRejectedValueOnce(new Error('Disk full'));
+  await expect(f.plugin.settings.args[9](true)).rejects.toThrow('Disk full');
+  expect(f.plugin.showPagedArticleButtons).toBe(false);
+  expect(f.reader.view.refreshArticleControls).not.toHaveBeenCalled();
+  expect(f.plugin.data).toEqual({});
+});
+
 it('rejects invalid groups or failed persistence before retiring the current generation', async () => {
   const f = await runtimeFixture();
   const signal = f.plugin.signal,

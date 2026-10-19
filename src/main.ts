@@ -37,6 +37,7 @@ export default class ReaderPlugin extends Plugin {
   private vault!: ObsidianVault;
   private network = new Network();
   private folderSaves = new SerialWrites<string>();
+  private pagedArticleButtonsEnabled = false;
   private viewWrites = new Set<Promise<unknown>>();
   private presentations = new Map<WorkspaceLeaf, Promise<void>>();
   private routingEpoch = 0;
@@ -62,6 +63,9 @@ export default class ReaderPlugin extends Plugin {
       return false;
     }
   }
+  get showPagedArticleButtons(): boolean {
+    return this.pagedArticleButtonsEnabled;
+  }
   private views(): ReaderView[] {
     return this.app.workspace
       .getLeavesOfType(READER_VIEW)
@@ -74,6 +78,7 @@ export default class ReaderPlugin extends Plugin {
   async onload(): Promise<void> {
     const data = await this.loadData();
     if (this.unloaded) return;
+    this.pagedArticleButtonsEnabled = data?.showPagedArticleButtons === true;
     let folders = defaultFolders;
     let statusFolders: ResolvedStatusFolders = defaultStatusFolders;
     try {
@@ -196,6 +201,19 @@ export default class ReaderPlugin extends Plugin {
               );
             }
           }),
+        this.showPagedArticleButtons,
+        (value) =>
+          this.folderSaves.run('folders', async () => {
+            if (this.unloaded) throw new Error('Reader has stopped.');
+            const data = await this.loadData();
+            if (this.unloaded) throw new Error('Reader has stopped.');
+            if (data != null && (typeof data !== 'object' || Array.isArray(data)))
+              throw new Error('Invalid Reader settings; article buttons were not saved.');
+            await this.saveData({ ...(data ?? {}), showPagedArticleButtons: value });
+            if (this.unloaded) return;
+            this.pagedArticleButtonsEnabled = value;
+            for (const view of this.views()) view.refreshArticleControls();
+          }),
       ),
     );
     this.registerEvent(
@@ -296,6 +314,9 @@ export default class ReaderPlugin extends Plugin {
       signal,
       get paged() {
         return plugin.paged;
+      },
+      get showPagedArticleButtons() {
+        return plugin.showPagedArticleButtons;
       },
       capture: () => {
         if (!signal.aborted) plugin.capture();
