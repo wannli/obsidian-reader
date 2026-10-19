@@ -329,11 +329,11 @@ function hostFixture(folders: ReaderFolders = defaultFolders) {
   const view = new ReaderView(leaf as WorkspaceLeaf, host);
   leaf.view = view;
   async function note(path: string, body = 'before words after', type = 'article') {
-    const status = /(?:^|\/)Feed\//.test(path)
+    const status = /(?:^|\/)Stream\//.test(path)
       ? 'feed'
       : /(?:^|\/)Later\//.test(path)
         ? 'later'
-        : /(?:^|\/)Archive\//.test(path)
+        : /(?:^|\/)Treasury\//.test(path)
           ? 'archive'
           : 'inbox';
     const properties = type === 'article' ? { type, status } : { type };
@@ -1134,7 +1134,9 @@ describe('automatic selection event ownership', () => {
             ...(label === 'Archive' ? { status: 'archive' } : {}),
           }),
         );
-        expect(f.article.path).toBe(originalPath);
+        expect(f.article.path).toBe(
+          label === 'Next' ? originalPath : 'Reading/Treasury/Selection.md',
+        );
       }
       click('Next');
       await f.probe.operations;
@@ -1343,7 +1345,8 @@ describe('automatic selection event ownership', () => {
     document.dispatchEvent(new Event('selectionchange'));
     vi.advanceTimersByTime(900);
     await f.probe.operations;
-    expect(f.article.path).toBe('Reading/Inbox/Selection.md');
+    expect(f.article.path).toBe('Reading/Later/Selection.md');
+    expect((await f.store.read(f.article.path)).properties.status).toBe('later');
     expect((await f.store.read(f.article.path)).body).toBe('==Alpha== phrase.\n\nBeta phrase.');
     expect(mocks.notice).not.toHaveBeenCalled();
   });
@@ -1517,7 +1520,7 @@ describe('public article commands', () => {
     mocks.choose.mockResolvedValue('Later');
     command('move', false);
     await f.probe.operations;
-    expect(article.path).toBe('Reading/Inbox/Commands.md');
+    expect(article.path).toBe('Reading/Later/Commands.md');
     expect((await f.store.read(article.path)).properties.status).toBe('later');
     expect(await f.vault.read(article)).toBe(patchProperties(before, { status: 'later' }));
     command('topics', false);
@@ -2630,7 +2633,7 @@ describe('bounded Reader UI', () => {
 
   it('opens Archive through the palette, resets old search, and preserves Archive/feed bytes and feeds access', async () => {
     const f = await pluginFixture();
-    const saved = await f.note('Reading/Archive/Saved title.md', 'Authored Archive body');
+    const saved = await f.note('Reading/Treasury/Saved title.md', 'Authored Archive body');
     const feed = await f.note('Reading/Wires/Feed.md', 'Authored subscription notes', 'feed');
     const before = [await f.vault.read(saved), await f.vault.read(feed)];
     vi.mocked(f.app.workspace.getActiveViewOfType).mockReturnValue(f.view);
@@ -3022,7 +3025,7 @@ describe('visible-row evidence indicators', () => {
       files: TFile[] = [];
     views.push(f.view);
     for (let i = 0; i < count; i++) {
-      const file = await f.note(`Reading/Feed/${i} Visible.md`, body);
+      const file = await f.note(`Reading/Stream/${i} Visible.md`, body);
       (file as any).stat = { mtime: 1, size: f.vault.bytes.get(file)!.length };
       files.push(file);
     }
@@ -3063,7 +3066,7 @@ describe('visible-row evidence indicators', () => {
       expect(writes).not.toHaveBeenCalled();
       expect(moves).not.toHaveBeenCalled();
       expect(f.host.ingestion.acquire).not.toHaveBeenCalled();
-      expect(f.files[0].path).toBe('Reading/Feed/0 Visible.md');
+      expect(f.files[0].path).toBe('Reading/Stream/0 Visible.md');
       expect(f.vault.bytes.get(f.files[0])).toBe(raw);
       expect(f.vault.trashed).toEqual([]);
     },
@@ -3114,7 +3117,7 @@ describe('visible-row evidence indicators', () => {
       expect(positions).not.toHaveBeenCalled();
       expect(moves).not.toHaveBeenCalled();
       expect(f.vault.bytes.get(file)).toBe(raw);
-      expect(file.path).toBe('Reading/Feed/0 Visible.md');
+      expect(file.path).toBe('Reading/Stream/0 Visible.md');
       expect(row.textContent).toBe('0 Visible');
     },
   );
@@ -3174,7 +3177,7 @@ describe('visible-row evidence indicators', () => {
       const row = f.view.contentEl.querySelector('.reader-list-item')!;
       observers[0].intersect([row]);
       if (change === 'offscreen') observers[0].intersect([row], false);
-      if (change === 'rename') f.files[0].path = 'Reading/Feed/Renamed.md';
+      if (change === 'rename') f.files[0].path = 'Reading/Stream/Renamed.md';
       if (change === 'replacement') f.vault.files.set(f.files[0].path, {} as any);
       if (change === 'revision') f.files[0].stat.mtime++;
       if (change === 'queue') f.view.showList('Inbox');
@@ -3263,20 +3266,49 @@ describe('native title-only presentation', () => {
   });
 });
 
-describe('YAML queue presentation', () => {
+describe('folder-authoritative queue presentation', () => {
   it.each([
-    [{}, 'Feed', 'later'],
-    [{ status: 'feed' }, 'Feed', 'later'],
-    [{ status: 'inbox' }, 'Inbox', 'inbox'],
-    [{ status: 'later' }, 'Later', 'later'],
-    [{ status: 'archive' }, 'Archive', 'archive'],
-    [{ status: 'unknown' }, undefined, 'unknown'],
-    [{ status: null }, undefined, null],
+    ['Reading/Stream/Misleading.md', {}, 'Feed', 'later', 'Reading/Later/Misleading.md'],
+    [
+      'Reading/Stream/Misleading.md',
+      { status: 'inbox' },
+      'Feed',
+      'later',
+      'Reading/Later/Misleading.md',
+    ],
+    [
+      'Reading/Inbox/Misleading.md',
+      { status: 'feed' },
+      'Inbox',
+      'feed',
+      'Reading/Inbox/Misleading.md',
+    ],
+    [
+      'Reading/Later/Misleading.md',
+      { status: 'archive' },
+      'Later',
+      'archive',
+      'Reading/Later/Misleading.md',
+    ],
+    [
+      'Reading/Treasury/Misleading.md',
+      { status: 'later' },
+      'Archive',
+      'later',
+      'Reading/Treasury/Misleading.md',
+    ],
+    [
+      'Unrelated/Inbox/Misleading.md',
+      { status: 'inbox' },
+      undefined,
+      'inbox',
+      'Unrelated/Inbox/Misleading.md',
+    ],
   ] as const)(
-    'uses status independently of placement and retains before annotation: %j',
-    async (properties, queue, savedStatus) => {
+    'folder wins over YAML and Feed annotation retains before saving: %s %j',
+    async (path, properties, queue, savedStatus, finalPath) => {
       const f = hostFixture(),
-        article = await f.note('Unrelated/Inbox/Misleading.md');
+        article = await f.note(path);
       const raw = createDocument({ type: 'article', ...properties }, 'before words after');
       f.vault.bytes.set(article, raw);
       f.store.catalog.update(article.path, readDocument(raw).properties);
@@ -3288,7 +3320,8 @@ describe('YAML queue presentation', () => {
       const saved = await f.store.read(article.path);
       expect(saved.properties.status).toBe(savedStatus);
       expect(saved.body).toBe('before ==words== after');
-      expect(article.path).toBe('Unrelated/Inbox/Misleading.md');
+      expect(article.path).toBe(finalPath);
+      expect(f.store.catalog.article(article.path)?.queue).toBe(queue === 'Feed' ? 'Later' : queue);
     },
   );
 
@@ -3344,9 +3377,9 @@ describe('browsing context and presentation', () => {
   });
   it('returns a promoted article to the filtered list before clearing via the filter toggle', async () => {
     const f = hostFixture();
-    const before = await f.note('Reading/Feed/A.md', 'sea level');
-    const current = await f.note('Reading/Feed/B.md', 'sea level');
-    const after = await f.note('Reading/Feed/C.md', 'sea level');
+    const before = await f.note('Reading/Stream/A.md', 'sea level');
+    const current = await f.note('Reading/Stream/B.md', 'sea level');
+    const after = await f.note('Reading/Stream/C.md', 'sea level');
     const topic = await f.note('Topics/Sea.md', '', 'topic');
     for (const file of f.vault.files.values())
       Object.assign(file, { stat: { mtime: 1, size: f.vault.bytes.get(file)!.length } });
@@ -3408,7 +3441,7 @@ describe('browsing context and presentation', () => {
     async (queue) => {
       const folders = { ...defaultFolders, articles: 'Queues/Articles' };
       const f = hostFixture(folders);
-      const folder = `Reading/${queue}`;
+      const folder = `Reading/${{ Inbox: 'Inbox', Feed: 'Stream', Later: 'Later', Archive: 'Treasury' }[queue]}`;
       const article = await f.note(`${folder}/A.md`, 'Article A'),
         next = await f.note(`${folder}/B.md`, 'Article B');
       f.view.showList(queue);
@@ -3423,7 +3456,7 @@ describe('browsing context and presentation', () => {
       await f.probe.operations;
       expect(mocks.choose).not.toHaveBeenCalled();
       expect(move).toHaveBeenCalledWith(expect.anything(), 'Later');
-      expect(article.path).toBe(`${folder}/A.md`);
+      expect(article.path).toBe('Reading/Later/A.md');
       expect((await f.store.read(article.path)).properties.status).toBe('later');
       expect(f.view.file).toBe(article);
       expect(f.probe.surface).toBe(surface);
@@ -3434,7 +3467,7 @@ describe('browsing context and presentation', () => {
       expect(f.host.ingestion.acquire).toHaveBeenCalledWith(article.path);
       clickLater();
       await f.probe.operations;
-      expect(article.path).toBe(`${folder}/A.md`);
+      expect(article.path).toBe('Reading/Later/A.md');
       expect((await f.store.read(article.path)).properties.status).toBe('later');
       await f.view.navigate(1);
       expect(f.view.file).toBe(next);
@@ -3462,20 +3495,23 @@ describe('browsing context and presentation', () => {
       feeds: 'Subscriptions',
     };
     const f = hostFixture(folders);
-    const a = await f.note(`${folders.articles}/A.md`, '==Preserve this=='),
-      b = await f.note(`${folders.articles}/B.md`, 'Next article');
+    const a = await f.note('Reading/Stream/A.md', '==Preserve this=='),
+      b = await f.note('Reading/Stream/B.md', 'Next article');
     const rawA = f.vault.bytes.get(a),
       rawB = f.vault.bytes.get(b);
+    const captured = await f.store.capture({ url: 'https://example.test/from-capture' });
+    expect(captured.path).toMatch(/^Reading\/Inbox\//);
+    expect((await f.store.read(captured.path)).properties.status).toBe('inbox');
     f.view.showList('Feed');
     expect(f.view.contentEl.querySelectorAll('.reader-list-item')).toHaveLength(2);
-    expect(a.path).toBe('Cache/Feed/A.md');
+    expect(a.path).toBe('Reading/Stream/A.md');
     await f.view.openArticle(a.path, true);
-    expect(a.path).toBe('Cache/Feed/A.md');
+    expect(a.path).toBe('Reading/Stream/A.md');
     expect(f.view.getDisplayText()).toBe('Reader: A');
     await f.probe.finish('next');
     expect(f.view.file).toBe(b);
     await f.probe.finish('keep');
-    expect(b.path).toBe('Cache/Feed/B.md');
+    expect(b.path).toBe('Reading/Treasury/B.md');
     expect(f.vault.bytes.get(a)).toBe(rawA);
     expect(f.vault.bytes.get(b)).toBe(patchProperties(rawB!, { status: 'archive', dog_ear: true }));
   });
@@ -3533,15 +3569,15 @@ describe('browsing context and presentation', () => {
     '- ==first\r\n  second==',
   ])('opens a Feed article with native annotations without status writes: %s', async (body) => {
     const f = hostFixture(),
-      a = await f.note('Reading/Feed/A.md', body),
-      b = await f.note('Reading/Feed/B.md');
+      a = await f.note('Reading/Stream/A.md', body),
+      b = await f.note('Reading/Stream/B.md');
     f.view.showList('Feed');
     const move = vi.spyOn(f.store, 'move'),
       enumerate = vi.spyOn(f.app.vault, 'getMarkdownFiles');
     await f.view.openArticle(a.path, true);
     expect(move).not.toHaveBeenCalled();
     expect(enumerate).not.toHaveBeenCalled();
-    expect(a.path).toBe('Reading/Feed/A.md');
+    expect(a.path).toBe('Reading/Stream/A.md');
     expect((await f.store.read(a.path)).properties.status).toBe('feed');
     expect((await f.store.read(a.path)).body).toBe(body);
     expect(f.view.getState().queue).toBe('Feed');
@@ -3560,10 +3596,10 @@ describe('browsing context and presentation', () => {
     'checks authored YAML links, not feed/position values, when opening Feed: %j',
     async ({ properties }) => {
       const f = hostFixture(),
-        file = await f.note('Reading/Feed/Article.md');
+        file = await f.note('Reading/Stream/Article.md');
       const raw = await f.vault.process(file, (current) => patchProperties(current, properties));
       await f.view.openArticle(file.path);
-      expect(file.path).toBe('Reading/Feed/Article.md');
+      expect(file.path).toBe('Reading/Stream/Article.md');
       expect(await f.vault.read(file)).toBe(patchProperties(raw, { dog_ear: true }));
       expect((await f.store.read(file.path)).properties.status).toBe('feed');
     },
@@ -3571,8 +3607,8 @@ describe('browsing context and presentation', () => {
 
   it('retains the Feed source and origin queue when annotation promotion fails', async () => {
     const f = hostFixture(),
-      a = await f.note('Reading/Feed/A.md', 'before words after'),
-      b = await f.note('Reading/Feed/B.md');
+      a = await f.note('Reading/Stream/A.md', 'before words after'),
+      b = await f.note('Reading/Stream/B.md');
     f.view.showList('Feed');
     await f.view.openArticle(a.path, true);
     const raw = await f.vault.read(a);
@@ -3580,7 +3616,7 @@ describe('browsing context and presentation', () => {
     f.probe.surface.selectionValue = { quote: 'words', before: 'before ', after: ' after' };
     await expect(f.probe.saveSelection()).rejects.toThrow('Queue change failed');
     expect(f.view.file).toBe(a);
-    expect(a.path).toBe('Reading/Feed/A.md');
+    expect(a.path).toBe('Reading/Stream/A.md');
     expect(await f.vault.read(a)).toBe(raw);
     expect(f.probe.surface.displayedBody).toBe('before words after');
     expect(f.vault.trashed).toEqual([]);
@@ -3730,7 +3766,7 @@ describe('commit-time annotation targets', () => {
 
   it('retains an article promoted before a link target disappears, without saving the stale link', async () => {
     const f = hostFixture(),
-      article = await f.note('Reading/Feed/A.md', '==words=='),
+      article = await f.note('Reading/Stream/A.md', '==words=='),
       target = await f.note('Notes/Target.md', '', 'topic');
     await f.view.openArticle(article.path);
     sharedPicker(f, target);
@@ -3742,7 +3778,7 @@ describe('commit-time annotation targets', () => {
       return process(file, update);
     });
     await expect(menu(f.view, 'Link to note…')).rejects.toThrow('selected note changed');
-    expect(article.path).toBe('Reading/Feed/A.md');
+    expect(article.path).toBe('Reading/Stream/A.md');
     expect((await f.store.read(article.path)).properties.status).toBe('later');
     expect((await f.store.read(article.path)).body).toBe('==words==');
   });
@@ -4260,7 +4296,7 @@ describe('Nodes v2 linked creation', () => {
         if (['Next', 'Previous', 'Archive', 'Delete'].includes(label))
           expect(f.view.file?.path).toBe(neighbour);
         if (label === 'Read later') {
-          expect(f.article.path).toBe('Reading/Inbox/A.md');
+          expect(f.article.path).toBe('Reading/Later/A.md');
           expect((await f.store.read(f.article.path)).properties.status).toBe('later');
           expect(f.view.file).toBe(f.article);
           expect(mocks.choose).not.toHaveBeenCalled();
@@ -4273,7 +4309,7 @@ describe('Nodes v2 linked creation', () => {
         if (label === 'Change link…') expect(f.api.pickNodeForLink).toHaveBeenCalledTimes(2);
         if (label === 'Create note…') expect(calls).toBe(2);
         if (label === 'Archive') {
-          expect(f.article.path).toBe('Reading/Inbox/A.md');
+          expect(f.article.path).toBe('Reading/Treasury/A.md');
           expect((await f.store.read(f.article.path)).properties.status).toBe('archive');
         }
         if (label === 'Open Markdown')
@@ -4313,17 +4349,20 @@ describe('Nodes v2 linked creation', () => {
         expect(annotate).toHaveBeenCalledTimes(
           (phase === 'after' ? 1 : 0) + (changesPassage ? 1 : 0),
         );
-        if (label !== 'Delete')
-          expect((await f.store.read(f.article.path)).body).toBe(
-            label === 'Remove highlight'
-              ? 'words'
-              : label === 'Remove link (keeps highlight)'
-                ? '==words=='
-                : phase === 'after'
-                  ? linkedBody
-                  : originalLinkedBody,
-          );
-        expect(f.vault.trashed).toEqual(label === 'Delete' ? [sourcePath] : []);
+        expect((await f.store.read(f.article.path)).body).toBe(
+          label === 'Remove highlight'
+            ? 'words'
+            : label === 'Remove link (keeps highlight)'
+              ? '==words=='
+              : phase === 'after'
+                ? linkedBody
+                : originalLinkedBody,
+        );
+        expect(f.vault.trashed).toEqual([]);
+        if (label === 'Delete') {
+          expect(f.article.path).toBe('Reading/Treasury/A.md');
+          expect((await f.store.read(f.article.path)).properties.status).toBe('archive');
+        }
         expect(f.vault.file(f.target.path)).toBe(f.target);
         expect(await f.vault.read(f.target)).toBe(targetBytes);
         expect(f.api.createNode).not.toHaveBeenCalled();
@@ -4835,7 +4874,7 @@ describe('Reader web-link capture', () => {
     const surface = f.probe.surface;
     await f.save(new AbortController().signal);
     const captured = f.store.catalog.findUrl('https://publisher.test/story')!;
-    expect(captured.path).toMatch(/^Reading\/Articles\//);
+    expect(captured.path).toMatch(/^Reading\/Inbox\//);
     expect(captured.status).toBe('inbox');
     expect(f.host.ingestion.acquire).toHaveBeenLastCalledWith(captured.path, true);
     expect(f.view.file).toBe(f.article);
@@ -5120,7 +5159,7 @@ describe('native Markdown escape hatch', () => {
 describe('plugin routing and conservative expiry', () => {
   it('fails closed while any per-file cache is missing, even if resolved fires', async () => {
     const f = await pluginFixture(),
-      file = await f.note('Reading/Feed/000101 Old.md');
+      file = await f.note('Reading/Stream/000101 Old.md');
     const cached = f.cache.get(file);
     f.cache.delete(file);
     const expire = vi
@@ -5146,8 +5185,8 @@ describe('plugin routing and conservative expiry', () => {
   it('enables late-plugin-load expiry from complete public link metadata without resolvedLinks or body scans', async () => {
     const f = hostFixture(),
       source = await f.note('Notes/Source.md', '', 'topic');
-    const bodyTarget = await f.note('Reading/Feed/000101 Body target.md'),
-      frontmatterTarget = await f.note('Reading/Feed/000101 Frontmatter target.md');
+    const bodyTarget = await f.note('Reading/Stream/000101 Body target.md'),
+      frontmatterTarget = await f.note('Reading/Stream/000101 Frontmatter target.md');
     f.cache.get(source).links = [
       { link: encodeURI(bodyTarget.path), original: `[keep](/${encodeURI(bodyTarget.path)})` },
     ];
@@ -5201,7 +5240,7 @@ describe('plugin routing and conservative expiry', () => {
       { feed: '[[Reading/Wires/Feed.md]]', bookmark: 'quote:[[Topics/X.md]]' },
       {},
     ].entries()) {
-      const file = await f.note(`Reading/Feed/261013 Article ${index}.md`);
+      const file = await f.note(`Reading/Stream/261013 Article ${index}.md`);
       const raw = await f.vault.process(file, (current) => patchProperties(current, properties));
       f.cache.get(file).frontmatter = readDocument(raw).properties;
       (index < 3 ? candidates : ordinary).push(file);
@@ -5223,10 +5262,10 @@ describe('plugin routing and conservative expiry', () => {
     promote.mockRestore();
     for (const file of candidates) await f.pluginProbe.promote(file);
     for (const file of candidates) {
-      expect(file.path).toContain('/Feed/');
+      expect(file.path).toContain('/Later/');
       expect((await f.store.read(file.path)).properties.status).toBe('later');
     }
-    for (const file of ordinary) expect(file.path).toContain('/Feed/');
+    for (const file of ordinary) expect(file.path).toContain('/Stream/');
     expect(reads.mock.calls.every(([file]) => candidates.includes(file as TFile))).toBe(true);
     expect(f.vault.trashed).toEqual([]);
   });
@@ -5253,7 +5292,7 @@ describe('plugin routing and conservative expiry', () => {
         'published',
         ...(type === 'article' ? [] : ['prefix', 'enabled']),
       ]) {
-        const target = await f.note(`Reading/Feed/000101 ${key}.md`);
+        const target = await f.note(`Reading/Stream/000101 ${key}.md`);
         targets.push(target);
         properties[key] = `literal [[${target.path}]]`;
         links.push({ key, link: target.path, original: `[[${target.path}]]` });
@@ -5282,7 +5321,7 @@ describe('plugin routing and conservative expiry', () => {
     'revalidates a live unknown-field annotation against current bytes (stale cache: %s)',
     async (stale) => {
       const f = await pluginFixture(),
-        file = await f.note('Reading/Feed/Article.md');
+        file = await f.note('Reading/Stream/Article.md');
       const properties = { type: 'article', related: { nested: ['[[Topics/X.md]]'] } };
       f.cache.get(file).frontmatter = properties;
       if (!stale) await f.vault.process(file, (raw) => patchProperties(raw, properties));
@@ -5290,7 +5329,7 @@ describe('plugin routing and conservative expiry', () => {
         promote = vi.spyOn(f.pluginProbe, 'promote');
       f.pluginProbe.changed({ path: file.path, metadataChanged: false });
       await Promise.all(promote.mock.results.map((result) => result.value));
-      expect(file.path).toBe('Reading/Feed/Article.md');
+      expect(file.path).toBe(stale ? 'Reading/Stream/Article.md' : 'Reading/Later/Article.md');
       expect(await f.vault.read(file)).toBe(
         stale ? before : patchProperties(before, { status: 'later' }),
       );
@@ -5300,7 +5339,7 @@ describe('plugin routing and conservative expiry', () => {
 
   it('blocks expiry again if a public cache disappears after startup recovery', async () => {
     const f = await pluginFixture(),
-      file = await f.note('Reading/Feed/000101 Article.md');
+      file = await f.note('Reading/Stream/000101 Article.md');
     expect(f.pluginProbe.recoverReferences()).toBe(true);
     f.pluginProbe.referencesReady = true;
     const cache = f.cache.get(file);
@@ -5322,7 +5361,7 @@ describe('plugin routing and conservative expiry', () => {
   it('never treats publisher fragments, authorities or schemes as native-link promotion', async () => {
     const f = await pluginFixture(),
       source = await f.note('Notes/Source.md', '', 'topic'),
-      target = await f.note('Reading/Feed/000101 Old.md');
+      target = await f.note('Reading/Stream/000101 Old.md');
     vi.spyOn(f.pluginProbe, 'promote').mockResolvedValue(undefined);
     f.cache.get(source).links = [
       '#toc',
@@ -5343,13 +5382,13 @@ describe('plugin routing and conservative expiry', () => {
 
   it('protects all open FileViews and Reader articles even without a saveable selection', async () => {
     const f = await pluginFixture(),
-      native = await f.note('Reading/Feed/000101 Native.md'),
-      reader = await f.note('Reading/Feed/000101 Reader.md');
+      native = await f.note('Reading/Stream/000101 Native.md'),
+      reader = await f.note('Reading/Stream/000101 Reader.md');
     await f.view.openArticle(reader.path);
     const preview = new MarkdownView(f.leaf);
     (preview as any).file = native;
     f.leaves.push({ view: preview });
-    const other = await f.note('Reading/Feed/000101 Other.md'),
+    const other = await f.note('Reading/Stream/000101 Other.md'),
       otherView = new (FileView as unknown as new () => FileView)();
     (otherView as any).file = other;
     f.leaves.push({ view: otherView });

@@ -23,26 +23,39 @@ async function fixture(status: string | undefined = 'feed') {
   return { vault, store, file, snapshot };
 }
 
-it('distinguishes absent mappings from vault root and preserves unknown settings inert', () => {
-  expect(loadStatusFolders({ folders: { later: 'Legacy' } })).toEqual({});
-  expect(validateStatusFolders({ later: '', feed: 'Shared/Nested', archive: 'Shared' })).toEqual({
-    later: '',
-    feed: 'Shared/Nested',
-    archive: 'Shared',
+it('loads complete nonoverlapping defaults and preserves unrelated settings', () => {
+  const defaults = {
+    inbox: 'Reading/Inbox',
+    feed: 'Reading/Stream',
+    later: 'Reading/Later',
+    archive: 'Reading/Treasury',
+  };
+  expect(loadStatusFolders({ folders: { later: 'Legacy' } })).toEqual(defaults);
+  expect(validateStatusFolders({ later: 'Saved/Later' })).toEqual({
+    ...defaults,
+    later: 'Saved/Later',
   });
   expect(
     saveStatusFolderSettings(
       { other: 1, statusFolders: { later: 'Old', future: 'Keep' } },
       { inbox: 'New' },
     ),
-  ).toEqual({ other: 1, statusFolders: { future: 'Keep', inbox: 'New' } });
+  ).toEqual({ other: 1, statusFolders: { future: 'Keep', ...defaults, inbox: 'New' } });
 });
-it.each(['../x', '/absolute', 'A//B', '.obsidian', 'Bad\\Path', null])(
-  'rejects unsafe mapping %j',
-  (path) => {
-    expect(() => validateStatusFolders({ later: path })).toThrow();
-  },
-);
+it.each([
+  '../x',
+  '/absolute',
+  'A//B',
+  '.obsidian',
+  'Bad\\Path',
+  null,
+  '',
+  'Templates/Queue',
+  '.trash/Queue',
+  'Reading/Stream/Sub',
+])('rejects unsafe mapping %j', (path) => {
+  expect(() => validateStatusFolders({ later: path })).toThrow();
+});
 it.each(['Inbox', 'Feed', 'Later', 'Archive'] as const)(
   'maps Reader transition to %s without rewriting content',
   async (queue) => {
@@ -56,55 +69,62 @@ it.each(['Inbox', 'Feed', 'Later', 'Archive'] as const)(
     expect(f.store.catalog.article(saved.path)?.status).toBe(queue.toLowerCase());
   },
 );
-it('leaves unmapped and unchanged statuses in place; settings do not write', async () => {
+it('settings do not write, but moving to a queue repairs the YAML mirror and path', async () => {
   const f = await fixture('later');
   const process = vi.spyOn(f.vault, 'process'),
     move = vi.spyOn(f.vault, 'move');
   f.store.setStatusFolders({ later: 'Mapped' });
   expect(process).not.toHaveBeenCalled();
   expect(move).not.toHaveBeenCalled();
-  expect((await f.store.move(f.snapshot, 'Later')).path).toBe(f.snapshot.path);
-  expect((await f.store.move(await f.store.read(f.file.path), 'Archive')).path).toBe(
-    f.snapshot.path,
-  );
-  expect(move).not.toHaveBeenCalled();
+  const later = await f.store.move(f.snapshot, 'Later');
+  expect(later.path).toBe('Mapped/Article.md');
+  expect((await f.store.move(later, 'Archive')).path).toBe('Reading/Treasury/Article.md');
+  expect(move).toHaveBeenCalledTimes(2);
 });
-it('supports root, shared folder and collision suffix without overwriting', async () => {
+it('uses a collision suffix without overwriting a queue sibling', async () => {
   const f = await fixture();
-  f.store.setStatusFolders({ later: '', archive: '' });
-  const existing = await f.vault.create('Article.md', 'Keep me');
+  const existing = await f.vault.create('Reading/Later/Article.md', 'Keep me');
   const saved = await f.store.move(f.snapshot, 'Later');
-  expect(saved.path).toBe('Article 2.md');
+  expect(saved.path).toBe('Reading/Later/Article 2.md');
   expect(await f.vault.read(existing)).toBe('Keep me');
-  expect((await f.store.move(saved, 'Archive')).path).toBe(saved.path);
+  expect((await f.store.move(saved, 'Archive')).path).toBe('Reading/Treasury/Article 2.md');
 });
-it('creates mapped captures directly; unmapped creation retains capture destination', async () => {
+it('creates all captures directly in their configured queue folders', async () => {
   const f = await fixture();
-  f.store.setStatusFolders({ inbox: 'Mapped', feed: '' });
+  f.store.setStatusFolders({ inbox: 'Mapped' });
   expect((await f.store.capture({ url: 'https://example.com/manual' })).path).toMatch(/^Mapped\//);
-  expect(
-    (await f.store.capture({ url: 'https://example.com/feed', queue: 'Feed' })).path,
-  ).not.toContain('/');
+  expect((await f.store.capture({ url: 'https://example.com/feed', queue: 'Feed' })).path).toMatch(
+    /^Reading\/Stream\//,
+  );
   expect(
     (await f.store.capture({ url: 'https://example.com/later', queue: 'Later' })).path,
-  ).toMatch(/^Reading\/Articles\//);
+  ).toMatch(/^Reading\/Later\//);
 });
-it.each(['feed', undefined])('promotes %s and relocates before annotating', async (status) => {
-  const f = await fixture(status ?? '');
-  f.store.setStatusFolders({ later: 'Retained' });
-  const saved = await f.store.annotate(f.snapshot, (raw) =>
-    raw.replace('Words and', '==Words== and'),
-  );
-  expect(saved.path).toBe('Retained/Article.md');
-  expect(saved.body).toContain('==Words==');
-  expect(saved.properties.status).toBe('later');
-});
+it.each(['feed', undefined])(
+  'retains %s annotations by mirroring Later and relocating',
+  async (status) => {
+    const f = await fixture(status ?? '');
+    await f.vault.move(f.file, 'Reading/Stream/Article.md');
+    f.store.catalog.rename('Source/Article.md', f.file.path, f.snapshot.properties);
+    f.store.setStatusFolders({ later: 'Retained' });
+    const saved = await f.store.annotate(await f.store.read(f.file.path), (raw) =>
+      raw.replace('Words and', '==Words== and'),
+    );
+    expect(saved.path).toBe('Retained/Article.md');
+    expect(saved.body).toContain('==Words==');
+    expect(saved.properties.status).toBe('later');
+  },
+);
 it('move failure retains status and already-saved annotation', async () => {
   const f = await fixture();
+  await f.vault.move(f.file, 'Reading/Stream/Article.md');
+  f.store.catalog.rename('Source/Article.md', f.file.path, f.snapshot.properties);
   f.store.setStatusFolders({ later: 'Retained' });
   f.vault.failMove = true;
   await expect(
-    f.store.annotate(f.snapshot, (raw) => raw.replace('Words and', '==Words== and')),
+    f.store.annotate(await f.store.read(f.file.path), (raw) =>
+      raw.replace('Words and', '==Words== and'),
+    ),
   ).rejects.toThrow(/Status saved as later/);
   const saved = await f.store.read(f.file.path);
   expect(saved.properties.status).toBe('later');
@@ -112,6 +132,8 @@ it('move failure retains status and already-saved annotation', async () => {
 });
 it('native relative-link rewriting follows the annotation commit, preserving both', async () => {
   const f = await fixture();
+  await f.vault.move(f.file, 'Reading/Stream/Article.md');
+  f.store.catalog.rename('Source/Article.md', f.file.path, f.snapshot.properties);
   f.store.setStatusFolders({ later: 'Retained' });
   const move = f.vault.move.bind(f.vault);
   f.vault.move = async (...args) => {
@@ -121,7 +143,9 @@ it('native relative-link rewriting follows the annotation commit, preserving bot
       (await f.vault.read(f.file)).replace('./other.md', '../Source/other.md'),
     );
   };
-  await f.store.annotate(f.snapshot, (raw) => raw.replace('Words and', '==Words== and'));
+  await f.store.annotate(await f.store.read(f.file.path), (raw) =>
+    raw.replace('Words and', '==Words== and'),
+  );
   const saved = await f.store.read(f.file.path);
   expect(saved.properties.status).toBe('later');
   expect(saved.body).toContain('../Source/other.md');
@@ -129,6 +153,8 @@ it('native relative-link rewriting follows the annotation commit, preserving bot
 });
 it('rejects a postrename status race without a stale annotation commit', async () => {
   const f = await fixture();
+  await f.vault.move(f.file, 'Reading/Stream/Article.md');
+  f.store.catalog.rename('Source/Article.md', f.file.path, f.snapshot.properties);
   f.store.setStatusFolders({ later: 'Retained' });
   const move = f.vault.move.bind(f.vault);
   const process = vi.spyOn(f.vault, 'process');
@@ -137,7 +163,9 @@ it('rejects a postrename status race without a stale annotation commit', async (
     f.vault.bytes.set(f.file, patchProperties(await f.vault.read(f.file), { status: 'feed' }));
   };
   await expect(
-    f.store.annotate(f.snapshot, (raw) => raw.replace('Words and', '==Words== and')),
+    f.store.annotate(await f.store.read(f.file.path), (raw) =>
+      raw.replace('Words and', '==Words== and'),
+    ),
   ).rejects.toThrow();
   // The annotation was committed only before the native rename and external edit.
   expect(process).toHaveBeenCalledTimes(2);

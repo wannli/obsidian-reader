@@ -146,7 +146,7 @@ export async function toMarkdown(html: string, base: string): Promise<string> {
       'alt',
       entities(image.getAttribute('alt') ?? '')
         .replace(/\s+/gu, ' ')
-        .replace(/[\\[\]`*_!]/g, '\\$&'),
+        .replace(/[\\`*_!]/g, '\\$&'),
     );
   }
   const { createMarkdownContent } = await import('defuddle/full');

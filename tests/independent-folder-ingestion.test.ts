@@ -26,7 +26,7 @@ afterEach(() => {
   external.items = [];
 });
 
-it('adds locally, then explicitly syncs latest-20 Feed captures in separate folders, deduplicating retained URLs', async () => {
+it('syncs latest-20 Feed captures into Stream, deduplicating URLs retained in Treasury', async () => {
   const vault = new MemoryVault(),
     store = storeFor(vault);
   external.items = Array.from({ length: 25 }, (_, i) => ({
@@ -52,7 +52,7 @@ it('adds locally, then explicitly syncs latest-20 Feed captures in separate fold
   expect(store.catalog.findUrl('https://example.com/0')?.path).toBe(keep.path);
   expect(store.catalog.findUrl('https://example.com/20')).toBeUndefined();
   for (const article of store.catalog.list('Feed', '', 0, 100)) {
-    expect(article.path.startsWith('Capture/')).toBe(true);
+    expect(article.path.startsWith('Reading/Stream/')).toBe(true);
     const doc = readDocument(await vault.read(vault.file(article.path)!));
     expect(doc.properties.feed).toBe('[[Subscriptions/example.com.md]]');
     expect(doc.properties.status).toBe('feed');

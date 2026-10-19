@@ -18,7 +18,7 @@ async function setup(input: Parameters<ArticleStore<NoteFile>['capture']>[0] = {
 describe('session-only manual capture filenames', () => {
   it('saves first, then uses native link-aware move and returns/indexes the actual saved snapshot', async () => {
     const { vault, store, file, snapshot } = await setup();
-    expect(snapshot.path).toBe('Reading/Articles/261013 example.com.md');
+    expect(snapshot.path).toBe('Reading/Inbox/261013 example.com.md');
     expect(snapshot.properties).toEqual({
       type: 'article',
       status: 'inbox',
@@ -36,7 +36,7 @@ describe('session-only manual capture filenames', () => {
     const saved = await store.acquire(snapshot, article, '  Publisher title  ');
     expect(move).toHaveBeenCalledExactlyOnceWith(
       file,
-      'Reading/Articles/261013 Publisher title.md',
+      'Reading/Inbox/261013 Publisher title.md',
       expect.any(Function),
     );
     expect(saved).toEqual(await store.read(file.path));
@@ -63,7 +63,7 @@ describe('session-only manual capture filenames', () => {
     const file = await store.capture({ url }, date);
     date.setFullYear(2030); // Caller-owned Date must not mutate the receipt.
     const title = 'An / unsafe: [title] #^?';
-    const target = `Reading/Articles/${filename(title, day())}`;
+    const target = `Reading/Inbox/${filename(title, day())}`;
     const existing = await vault.create(target, 'User note');
     const existing2 = await vault.create(target.replace('.md', ' 2.md'), 'Another note');
     const saved = await store.acquire(await store.read(file.path), article, title);
@@ -92,31 +92,31 @@ describe('session-only manual capture filenames', () => {
   it('also preserves an own numbered filename when earlier collision candidates remain occupied', async () => {
     const { vault, store } = await setup();
     const file = await store.capture({ url: 'https://example.com/second' }, day());
-    expect(file.path).toBe('Reading/Articles/261013 example.com 2.md');
+    expect(file.path).toBe('Reading/Inbox/261013 example.com 2.md');
     Object.assign(vault, {
       exists: (path: string) =>
         [...vault.files.keys()].some((key) => key.toLowerCase() === path.toLowerCase()),
     });
     const move = vi.spyOn(vault, 'move');
     const saved = await store.acquire(await store.read(file.path), article, 'Example.COM');
-    expect(saved.path).toBe('Reading/Articles/261013 example.com 2.md');
+    expect(saved.path).toBe('Reading/Inbox/261013 example.com 2.md');
     expect(move).not.toHaveBeenCalled();
   });
 
   it('uses optional host existence checks for case aliases and folders without overwriting either', async () => {
     const { vault, store, snapshot } = await setup();
-    const folders = new Set(['Reading/Articles/261013 TITLE 2.md']);
-    const other = await vault.create('Reading/Articles/261013 TITLE.md', 'User-owned bytes');
+    const folders = new Set(['Reading/Inbox/261013 TITLE 2.md']);
+    const other = await vault.create('Reading/Inbox/261013 TITLE.md', 'User-owned bytes');
     Object.assign(vault, {
       exists: (path: string) =>
         [...vault.files.keys(), ...folders].some((key) => key.toLowerCase() === path.toLowerCase()),
     });
     const saved = await store.acquire(snapshot, article, 'Title');
-    expect(saved.path).toBe('Reading/Articles/261013 Title 3.md');
+    expect(saved.path).toBe('Reading/Inbox/261013 Title 3.md');
     expect(await vault.read(other)).toBe('User-owned bytes');
     expect(folders.size).toBe(1);
     const next = await store.capture({ url: 'https://example.com/next', title: 'title' }, day());
-    expect(next.path).toBe('Reading/Articles/261013 title 4.md');
+    expect(next.path).toBe('Reading/Inbox/261013 title 4.md');
   });
 
   it('never infers filename ownership after restart', async () => {
@@ -187,7 +187,7 @@ describe('session-only manual capture filenames', () => {
       published: '2026-10-13T12:00',
     });
     const saved = await store.acquire(failed, article, 'Title');
-    expect(saved.path).toBe('Reading/Articles/261013 Title.md');
+    expect(saved.path).toBe('Reading/Inbox/261013 Title.md');
     expect(saved.properties).toEqual({
       type: 'article',
       status: 'inbox',
@@ -221,7 +221,7 @@ describe('session-only manual capture filenames', () => {
 
   it('preserves native user renames, including a rename back after the change was observed', async () => {
     const { vault, store, file, snapshot } = await setup();
-    await vault.move(file, 'Reading/Articles/My filename.md');
+    await vault.move(file, 'Reading/Inbox/My filename.md');
     await expect(store.acquire(snapshot, article, 'Title')).rejects.toThrow(ChangedNote);
     await vault.move(file, snapshot.path);
     expect((await store.acquire(await store.read(file.path), article, 'Title')).path).toBe(
@@ -231,7 +231,7 @@ describe('session-only manual capture filenames', () => {
 
   it('revokes the receipt on host rename events even after an unobserved rename back', async () => {
     const { vault, store, file, snapshot } = await setup();
-    await vault.move(file, 'Reading/Articles/User filename.md');
+    await vault.move(file, 'Reading/Inbox/User filename.md');
     store.noteRenamed(file);
     await vault.move(file, snapshot.path);
     store.noteRenamed(file);
@@ -298,7 +298,7 @@ describe('session-only manual capture filenames', () => {
         throw new Error('Native rename failed');
       });
       const saved = await store.acquire(snapshot, article, 'Title');
-      expect(saved.path).toBe(afterMove ? 'Reading/Articles/261013 Title.md' : snapshot.path);
+      expect(saved.path).toBe(afterMove ? 'Reading/Inbox/261013 Title.md' : snapshot.path);
       expect(saved.raw).toBe(await vault.read(file));
       expect(saved.body).toContain(article);
       expect(store.catalog.findUrl(url)?.path).toBe(saved.path);
@@ -314,7 +314,7 @@ describe('session-only manual capture filenames', () => {
 
   it('safely retains the hostname filename when a folder collision is invisible to VaultPort.file', async () => {
     const { vault, store, snapshot } = await setup();
-    const folders = new Set(['Reading/Articles/261013 Title.md']);
+    const folders = new Set(['Reading/Inbox/261013 Title.md']);
     const nativeMove = vault.move.bind(vault);
     vi.spyOn(vault, 'move').mockImplementation(async (file, path) => {
       if (folders.has(path)) throw new Error('Folder exists');
@@ -348,8 +348,8 @@ describe('capture naming concurrency', () => {
       store.acquire(await store.read(second.path), 'Second body', 'Same title'),
     ]);
     expect(saved.map((note) => note.path).sort()).toEqual([
-      'Reading/Articles/261013 Same title 2.md',
-      'Reading/Articles/261013 Same title.md',
+      'Reading/Inbox/261013 Same title 2.md',
+      'Reading/Inbox/261013 Same title.md',
     ]);
     expect(vault.files.size).toBe(2);
     expect(saved.map((note) => note.body)).toEqual([`\n${article}\n`, '\nSecond body\n']);
@@ -368,8 +368,8 @@ describe('capture naming concurrency', () => {
     const capture = store.capture({ url: 'https://other.example/two', title: 'Same title' }, day());
     release.resolve();
     const [saved, created] = await Promise.all([acquisition, capture]);
-    expect(saved.path).toBe('Reading/Articles/261013 Same title.md');
-    expect(created.path).toBe('Reading/Articles/261013 Same title 2.md');
+    expect(saved.path).toBe('Reading/Inbox/261013 Same title.md');
+    expect(created.path).toBe('Reading/Inbox/261013 Same title 2.md');
   });
 
   it('invalidates immediately when an explicit move is requested during acquisition', async () => {
@@ -427,15 +427,15 @@ describe('expiry metadata prefilter', () => {
     const vault = new MemoryVault(),
       store = new ArticleStore(vault);
     for (let i = 0; i < 10_000; i++) {
-      const path = `Reading/Articles/260101 Fresh ${i}.md`;
+      const path = `Reading/Stream/260101 Fresh ${i}.md`;
       const properties = { type: 'article', status: 'feed', published: '2026-10-01' };
       await vault.create(path, createDocument(properties, 'Fresh ==annotation==.'));
       store.catalog.update(path, properties);
     }
     for (const path of [
-      'Reading/Articles/Unknown age.md',
-      'Reading/Articles/260913 Cutoff.md',
-      'Reading/Articles/261001 Fresh filename.md',
+      'Reading/Stream/Unknown age.md',
+      'Reading/Stream/260913 Cutoff.md',
+      'Reading/Stream/261001 Fresh filename.md',
     ]) {
       const properties = { type: 'article', status: 'feed' };
       await vault.create(path, createDocument(properties));
@@ -450,7 +450,7 @@ describe('expiry metadata prefilter', () => {
     expect(read).not.toHaveBeenCalled();
   });
 
-  it('still rereads old candidates, promotes annotations, and checks current publication before trash', async () => {
+  it('still rereads old candidates, archives annotations, and checks current publication before trash', async () => {
     const vault = new MemoryVault(),
       store = new ArticleStore(vault);
     const annotated = await store.capture({
@@ -480,7 +480,9 @@ describe('expiry metadata prefilter', () => {
       promoted: 1,
       retained: 0,
     });
-    expect((await store.read(annotated.path)).properties.status).toBe('later');
+    expect(annotated.path).toMatch(/^Reading\/Treasury\//);
+    expect((await store.read(annotated.path)).properties.status).toBe('archive');
+    expect((await store.read(annotated.path)).body).toContain('==highlight==');
     expect(vault.file(changed.path)).toBe(changed);
     expect(vault.trashed).toEqual([old.path]);
   });

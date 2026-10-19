@@ -9,14 +9,16 @@ import {
   type WorkspaceLeaf,
 } from 'obsidian';
 import { hasAnnotations, hasPropertyAnnotations, isAnnotationProperty } from './core/annotations';
-import { queueAt, type Queue } from './core/model';
+import { excludedReaderPath, type Queue } from './core/model';
 import { defaultFolders, validateFolders, type ReaderFolders } from './core/folders';
 import { SerialWrites } from './core/work';
 import { loadFolders, saveFolderSettings } from './host/folder-settings';
 import {
+  defaultStatusFolders,
   loadStatusFolders,
   saveStatusFolderSettings,
-  type StatusFolders,
+  validateStatusFolders,
+  type ResolvedStatusFolders,
 } from './core/status-folders';
 import { Network } from './host/network';
 import { readDocument } from './core/document';
@@ -43,7 +45,7 @@ export default class ReaderPlugin extends Plugin {
   private promotions = new Map<TFile, boolean>();
   private promoting = new Set<TFile>();
   private lastMaintenance = 0;
-  private statusFolders: StatusFolders = {};
+  private statusFolders: ResolvedStatusFolders = defaultStatusFolders;
   private refreshing = false;
   private referencesReady = false;
   private referencesRecovered = false;
@@ -73,11 +75,11 @@ export default class ReaderPlugin extends Plugin {
     const data = await this.loadData();
     if (this.unloaded) return;
     let folders = defaultFolders;
-    let statusFolders: StatusFolders = {};
+    let statusFolders: ResolvedStatusFolders = defaultStatusFolders;
     try {
       statusFolders = loadStatusFolders(data);
     } catch (error) {
-      this.notice(`Status folder mappings disabled: ${String(error)}`);
+      this.notice(`Invalid queue folder settings; using default queue folders: ${String(error)}`);
     }
     let invalid = false;
     try {
@@ -187,8 +189,11 @@ export default class ReaderPlugin extends Plugin {
             if (this.unloaded) throw new Error('Reader has stopped.');
             await this.saveData(saveStatusFolderSettings(data, next));
             if (!this.unloaded) {
-              this.statusFolders = next;
-              this.store.setStatusFolders(next);
+              this.statusFolders = validateStatusFolders(next);
+              this.store.setStatusFolders(this.statusFolders);
+              await Promise.allSettled(
+                this.views().map((view) => view.changed({ path: '', metadataChanged: true })),
+              );
             }
           }),
       ),
@@ -446,6 +451,7 @@ export default class ReaderPlugin extends Plugin {
       !(file instanceof TFile) ||
       (opened !== undefined && opened !== file) ||
       file.extension !== 'md' ||
+      excludedReaderPath(file.path) ||
       this.sourceLeaves.get(leaf)?.file === file
     )
       return;
@@ -525,7 +531,7 @@ export default class ReaderPlugin extends Plugin {
   }
   private changed(change: LibraryChange): void {
     const signal = this.signal;
-    if (signal.aborted) return;
+    if (signal.aborted || excludedReaderPath(change.path)) return;
     for (const view of this.views())
       void view.changed(change).catch((error) => {
         if (!signal.aborted) this.notice(error);
@@ -540,6 +546,7 @@ export default class ReaderPlugin extends Plugin {
     this.keepReferences(file);
   }
   private keepReferences(file: TFile, cache = this.app.metadataCache.getFileCache(file)): void {
+    if (excludedReaderPath(file.path)) return;
     if (!cache) {
       // A missing public cache must not be mistaken for a complete, link-free note.
       this.referencesReady = this.referencesRecovered = false;
@@ -588,10 +595,10 @@ export default class ReaderPlugin extends Plugin {
     try {
       const snapshot = await store.read(file.path);
       if (signal.aborted) return;
-      // Metadata can lag native/synced edits. Only current feed/missing status
-      // permits promotion; invalid and retained statuses are never rewritten.
+      // Folder membership is authoritative; external annotations in Feed promote
+      // without trusting a stale or missing YAML status.
       if (
-        queueAt(snapshot.properties) === 'Feed' &&
+        store.catalog.article(snapshot.path)?.queue === 'Feed' &&
         (promotions.get(file) || hasAnnotations(snapshot.body, snapshot.properties))
       )
         await store.move(snapshot, 'Later');
@@ -607,6 +614,7 @@ export default class ReaderPlugin extends Plugin {
     // file cache keeps expiry disabled until a later resolved event can complete it.
     const entries = this.app.vault
       .getMarkdownFiles()
+      .filter((file) => !excludedReaderPath(file.path))
       .map((file) => ({ file, cache: this.app.metadataCache.getFileCache(file) }));
     if (entries.some((entry) => !entry.cache)) {
       this.referencesReady = this.referencesRecovered = false;
@@ -673,7 +681,12 @@ export default class ReaderPlugin extends Plugin {
     });
   }
   private indexCapture(file: TFile): void {
-    if (this.signal.aborted || file.extension !== 'md' || this.store.vault.file(file.path) !== file)
+    if (
+      this.signal.aborted ||
+      file.extension !== 'md' ||
+      excludedReaderPath(file.path) ||
+      this.store.vault.file(file.path) !== file
+    )
       return;
     const cache = this.app.metadataCache.getFileCache(file);
     if (cache?.frontmatter) this.store.catalog.update(file.path, cache.frontmatter);

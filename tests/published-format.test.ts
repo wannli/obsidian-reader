@@ -74,9 +74,7 @@ it.each([[new Date(2026, 9, 3, 4, 29, 59, 999).toISOString(), minute]])(
     const raw = await vault.read(file);
     expect(raw).toContain(`\npublished: ${expected}\n`);
     expect(readDocument(raw).properties.published).toBe(expected);
-    expect(file.path).toBe(
-      `Reading/Articles/${filename('Example', new Date(published), '', true)}`,
-    );
+    expect(file.path).toBe(`Reading/Inbox/${filename('Example', new Date(published), '', true)}`);
     expect(readDocument(raw).body).toBe('\nAuthored text.\n');
     expect(input.published).toBe(published);
   },
@@ -95,7 +93,7 @@ it.each([undefined, '', 'invalid', '2026-02-30T04:29:00Z'])(
     const raw = await vault.read(file);
     expect(readDocument(raw).properties.published).toBe(formatPublished(now.toISOString()));
     expect(raw).toContain(`\npublished: ${formatPublished(now.toISOString())}\n`);
-    expect(file.path).toBe(`Reading/Articles/${filename('Example', now)}`);
+    expect(file.path).toBe(`Reading/Inbox/${filename('Example', now)}`);
   },
 );
 
@@ -115,7 +113,7 @@ it('does not backfill a legacy missing publication on duplicate capture', async 
   const vault = new MemoryVault(),
     store = new ArticleStore(vault);
   const raw = createDocument({ type: 'article', url: 'https://example.com/legacy' }, 'Authored.');
-  const file = await vault.create('Reading/Articles/Legacy.md', raw);
+  const file = await vault.create('Reading/Inbox/Legacy.md', raw);
   store.catalog.update(file.path, readDocument(raw).properties);
   expect(await store.capture({ url: 'https://example.com/legacy' })).toBe(file);
   expect(await vault.read(file)).toBe(raw);
@@ -180,8 +178,7 @@ it.each([
   const expected = Date.parse(instant);
   expect(timestamp(published)).toBe(expected);
   expect(
-    articleInfo('Reading/Articles/Example.md', { type: 'article', status: 'feed', published })
-      ?.date,
+    articleInfo('Reading/Inbox/Example.md', { type: 'article', status: 'feed', published })?.date,
   ).toBe(expected);
 });
 

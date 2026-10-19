@@ -1,6 +1,7 @@
 import { beforeEach, expect, it, vi } from 'vitest';
 import type { App, Plugin } from 'obsidian';
 import { defaultFolders } from '../src/core/folders';
+import { defaultStatusFolders } from '../src/core/status-folders';
 
 const ui = vi.hoisted(() => ({
   settings: [] as any[],
@@ -106,30 +107,25 @@ beforeEach(() => {
 });
 const row = (name: string) => ui.settings.find((setting) => setting.name === name);
 
-it('stages two creation destination picker values and applies one whole group', async () => {
+it('shows only the feed subscription creation destination and preserves the legacy article setting', async () => {
   const save = vi.fn(async () => {});
-  const settings = new ReaderSettings(
-    {} as App,
-    {} as Plugin,
-    defaultFolders,
-    false,
-    save,
-    vi.fn(),
-  );
+  const legacyFolders = { articles: 'Legacy/Articles', feeds: defaultFolders.feeds };
+  const settings = new ReaderSettings({} as App, {} as Plugin, legacyFolders, false, save, vi.fn());
   settings.display();
-  expect(ui.settings.filter((setting) => setting.input)).toHaveLength(6);
-  row('Articles').input.change('Capture');
+  expect(ui.settings.filter((setting) => setting.input)).toHaveLength(5);
+  expect(row('Articles')).toBeUndefined();
   row('Feed subscriptions').buttons[0].click();
   ui.picker.onChooseItem({ path: 'Subscriptions' });
   expect(row('Feed subscriptions').input.value).toBe('Subscriptions');
   expect(save).not.toHaveBeenCalled();
   await row('Apply folder locations').buttons[0].click();
   expect(save).toHaveBeenCalledExactlyOnceWith({
-    articles: 'Capture',
+    articles: legacyFolders.articles,
     feeds: 'Subscriptions',
   });
   settings.display();
-  expect(row('Articles').input.value).toBe('Capture');
+  expect(row('Feed subscriptions').input.value).toBe('Subscriptions');
+  expect(row('Articles')).toBeUndefined();
 });
 
 it('rejects an unsafe path before persistence and does not update committed settings', async () => {
@@ -143,13 +139,12 @@ it('rejects an unsafe path before persistence and does not update committed sett
     vi.fn(),
   );
   settings.display();
-  row('Articles').input.change('Capture');
   row('Feed subscriptions').input.change('../Unsafe');
   await row('Apply folder locations').buttons[0].click();
   expect(save).not.toHaveBeenCalled();
   expect(ui.notices.at(-1)).toMatch(/vault-relative/);
   settings.display();
-  expect(row('Articles').input.value).toBe(defaultFolders.articles);
+  expect(row('Feed subscriptions').input.value).toBe(defaultFolders.feeds);
 });
 
 it('retains prior settings on persistence failure and disables duplicate apply while saving', async () => {
@@ -169,7 +164,7 @@ it('retains prior settings on persistence failure and disables duplicate apply w
     vi.fn(),
   );
   settings.display();
-  row('Articles').input.change('Capture');
+  row('Feed subscriptions').input.change('Subscriptions');
   const button = row('Apply folder locations').buttons[0];
   const pending = button.click();
   expect(button.disabled).toBe(true);
@@ -178,54 +173,29 @@ it('retains prior settings on persistence failure and disables duplicate apply w
   expect(button.disabled).toBe(false);
   expect(ui.notices.at(-1)).toBe('Disk full');
   settings.display();
-  expect(row('Articles').input.value).toBe(defaultFolders.articles);
+  expect(row('Feed subscriptions').input.value).toBe(defaultFolders.feeds);
 });
 
-it.each([
-  { articles: 'Shared', feeds: 'Shared' },
-  { articles: 'Shared', feeds: 'Shared/Feeds' },
-  { articles: '', feeds: '' },
-])('allows shared, nested and root creation destinations: %j', async (candidate) => {
-  const save = vi.fn(async () => {});
-  const settings = new ReaderSettings(
-    {} as App,
-    {} as Plugin,
-    defaultFolders,
-    false,
-    save,
-    vi.fn(),
-  );
-  settings.display();
-  row('Articles').input.change(candidate.articles);
-  row('Feed subscriptions').input.change(candidate.feeds);
-  await row('Apply folder locations').buttons[0].click();
-  expect(save).toHaveBeenCalledExactlyOnceWith(candidate);
-});
+it.each(['Reading/Articles', 'Reading/Articles/Feeds', ''])(
+  'allows shared, nested and root feed subscription destinations: %j',
+  async (feeds) => {
+    const save = vi.fn(async () => {});
+    const settings = new ReaderSettings(
+      {} as App,
+      {} as Plugin,
+      defaultFolders,
+      false,
+      save,
+      vi.fn(),
+    );
+    settings.display();
+    row('Feed subscriptions').input.change(feeds);
+    await row('Apply folder locations').buttons[0].click();
+    expect(save).toHaveBeenCalledExactlyOnceWith({ articles: defaultFolders.articles, feeds });
+  },
+);
 
-it('stages four status mappings, with blank disabled and picker root explicit', async () => {
-  const save = vi.fn(async () => {});
-  const settings = new ReaderSettings(
-    {} as App,
-    {} as Plugin,
-    defaultFolders,
-    false,
-    vi.fn(),
-    vi.fn(),
-    { later: 'Old', feed: '' },
-    save,
-  );
-  settings.display();
-  expect(row('feed folder').input.value).toBe('/');
-  row('later folder').input.change('');
-  row('inbox folder').buttons[0].click();
-  ui.picker.onChooseItem({ path: '' });
-  row('archive folder').input.change('Shared/Archive');
-  expect(save).not.toHaveBeenCalled();
-  await row('Apply status folders').buttons[0].click();
-  expect(save).toHaveBeenCalledExactlyOnceWith({ inbox: '', feed: '', archive: 'Shared/Archive' });
-});
-
-it('rejects unsafe status mappings before saving', async () => {
+it('shows the four default queue destinations and applies a staged mapping as one group', async () => {
   const save = vi.fn(async () => {});
   const settings = new ReaderSettings(
     {} as App,
@@ -238,8 +208,41 @@ it('rejects unsafe status mappings before saving', async () => {
     save,
   );
   settings.display();
-  row('later folder').input.change('../Outside');
+  for (const [status, folder] of Object.entries(defaultStatusFolders))
+    expect(row(`${status} folder`).input.value).toBe(folder);
+  row('later folder').input.change('Library/Later');
+  row('archive folder').buttons[0].click();
+  ui.picker.onChooseItem({ path: 'Library/Treasury' });
+  expect(save).not.toHaveBeenCalled();
+  await row('Apply status folders').buttons[0].click();
+  expect(save).toHaveBeenCalledExactlyOnceWith({
+    ...defaultStatusFolders,
+    later: 'Library/Later',
+    archive: 'Library/Treasury',
+  });
+});
+
+it.each([
+  ['../Outside', /vault-relative/],
+  ['', /vault root/],
+  ['Templates/Articles', /Templates/],
+  ['Reading/Inbox/Child', /overlap/],
+  ['Reading/Stream', /overlap/],
+])('rejects invalid queue folder %j before saving', async (path, error) => {
+  const save = vi.fn(async () => {});
+  const settings = new ReaderSettings(
+    {} as App,
+    {} as Plugin,
+    defaultFolders,
+    false,
+    vi.fn(),
+    vi.fn(),
+    {},
+    save,
+  );
+  settings.display();
+  row('later folder').input.change(path);
   await row('Apply status folders').buttons[0].click();
   expect(save).not.toHaveBeenCalled();
-  expect(ui.notices.at(-1)).toMatch(/vault-relative/);
+  expect(ui.notices.at(-1)).toMatch(error);
 });

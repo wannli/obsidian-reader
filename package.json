@@ -20,19 +20,19 @@
     "check": "npm run format:check && npm run validate:metadata && npm run typecheck && npm test && npm run test:tooling && npm run build"
   },
   "dependencies": {
-    "defuddle": "0.19.4",
-    "dompurify": "3.4.16",
+    "defuddle": "0.19.5",
+    "dompurify": "3.4.17",
     "entities": "8.1.0",
-    "marked": "^18.1.0",
+    "marked": "^18.1.1",
     "yaml": "^2.8.1"
   },
   "devDependencies": {
-    "@types/node": "26.6.4",
+    "@types/node": "26.6.5",
     "esbuild": "0.28.2",
     "jsdom": "26.1.0",
     "obsidian": "1.14.4",
     "prettier": "3.9.10",
     "typescript": "5.9.3",
-    "vitest": "5.0.3"
+    "vitest": "5.0.4"
   }
 }

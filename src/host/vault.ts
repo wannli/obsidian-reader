@@ -1,6 +1,5 @@
 import {
   MarkdownView,
-  Notice,
   TFile,
   TFolder,
   type App,
@@ -11,8 +10,7 @@ import {
 } from 'obsidian';
 import { ChangedNote } from '../core/document';
 import { hasPropertyAnnotations } from '../core/annotations';
-import { formatPublished } from '../core/model';
-import { StatusObserver } from './status-observer';
+import { excludedReaderPath, formatPublished } from '../core/model';
 import type { ArticleStore, VaultPort } from '../core/store';
 
 export class ObsidianVault implements VaultPort<TFile> {
@@ -213,7 +211,7 @@ export function watchLibrary(
   const retryPublication = new WeakSet<TFile>();
   const publish = (file: TFile) => {
     const created = creations.get(file);
-    if (!active || created === undefined) return;
+    if (!active || created === undefined || excludedReaderPath(file.path)) return;
     if (publishing.has(file)) {
       retryPublication.add(file);
       return;
@@ -223,8 +221,27 @@ export function watchLibrary(
       .publishNew(file, created, () => {
         if (!active || creations.get(file) !== created) throw new Error('Reader has stopped.');
       })
-      .then((done) => {
-        if (done) creations.delete(file);
+      .then(async (done) => {
+        if (!done || !active || creations.get(file) !== created) return;
+        // A live native/QuickAdd capture can be assembled in several metadata
+        // events. Only a fully identified new Inbox article is placed here;
+        // startup files and later path-only changes are never swept.
+        const snapshot = await store.read(file.path);
+        if (
+          snapshot.properties.status === 'inbox' &&
+          store.catalog.article(snapshot.path)?.queue !== 'Inbox'
+        ) {
+          const generation = store.statusFolderGeneration;
+          await store.move(snapshot, 'Inbox', () => {
+            if (
+              !active ||
+              creations.get(file) !== created ||
+              generation !== store.statusFolderGeneration
+            )
+              throw new Error('Reader folder settings changed.');
+          });
+        }
+        creations.delete(file);
       })
       // Dirty editors, incomplete YAML and racing revisions stay untouched.
       .catch(() => {})
@@ -241,26 +258,12 @@ export function watchLibrary(
     for (const file of creations.keys()) {
       if (app.metadataCache.getFileCache(file)?.frontmatter?.type === 'article') publish(file);
     }
-    statusObserver.retry();
   };
   observe(app.workspace, app.workspace.on('active-leaf-change', retryPublications));
   observe(app.workspace, app.workspace.on('layout-change', retryPublications));
-  const statusObserver = new StatusObserver(store, (error) => {
-    if (active)
-      new Notice(
-        `Status folder move deferred or failed: ${error instanceof Error ? error.message : String(error)}`,
-      );
-  });
-  const retryStatusMoves = () => statusObserver.retry();
-  observe(app.workspace, app.workspace.on('file-open', retryStatusMoves));
   const index = (file: TFile) => {
     if (!active || file.extension !== 'md') return;
     const cache = app.metadataCache.getFileCache(file);
-    statusObserver.seed(
-      file,
-      cache?.frontmatter?.type === 'article' ? cache.frontmatter.status : undefined,
-      cache !== undefined && cache !== null,
-    );
     if (cache?.frontmatter) store.catalog.update(file.path, cache.frontmatter);
     else store.catalog.remove(file.path);
   };
@@ -282,8 +285,6 @@ export function watchLibrary(
     app.metadataCache,
     app.metadataCache.on('changed', (file, raw, cache) => {
       if (!active) return;
-      const status = cache.frontmatter?.type === 'article' ? cache.frontmatter.status : undefined;
-      statusObserver.changed(file, raw, status, readyAt !== undefined);
       const wasKnown = !!store.catalog.article(file.path) || !!store.catalog.feed(file.path);
       const metadataChanged = cache.frontmatter
         ? store.catalog.update(file.path, cache.frontmatter)
@@ -363,7 +364,6 @@ export function watchLibrary(
         file instanceof TFolder ? descendants(file) : file instanceof TFile ? [file] : [];
       for (const child of files) {
         creations.delete(child);
-        statusObserver.forget(child);
         store.noteRenamed(child);
         paths.add(child.path);
       }
@@ -384,7 +384,6 @@ export function watchLibrary(
   return () => {
     if (!active) return;
     active = false;
-    statusObserver.stop();
     creations.clear();
     for (const dispose of disposers.splice(0)) dispose();
   };

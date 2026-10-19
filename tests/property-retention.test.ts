@@ -113,8 +113,24 @@ describe('authored YAML link annotations', () => {
 });
 
 describe('core YAML-link retention boundaries', () => {
+  it.each([
+    { topics: ['Research'], body: 'Plain text.' },
+    { body: 'An ==authored highlight==.' },
+    { related: '[[Topics/X.md]]', body: 'Plain text.' },
+  ])(
+    'archives protected explicit deletes rather than trashing: %j',
+    async ({ body, ...properties }) => {
+      const f = await article(properties, body);
+      await f.store.trash(f.snapshot);
+      expect(f.file.path).toBe('Reading/Treasury/260801 Article.md');
+      expect(f.vault.trashed).toEqual([]);
+      expect(readDocument(await f.vault.read(f.file)).properties.status).toBe('archive');
+      expect(readDocument(await f.vault.read(f.file)).body).toBe(body);
+    },
+  );
+
   it.each(authored)(
-    'promotes an aged Stream article with authored properties: %j',
+    'archives an aged Stream article with authored properties: %j',
     async (properties) => {
       const f = await article(properties),
         before = f.snapshot.raw;
@@ -123,10 +139,10 @@ describe('core YAML-link retention boundaries', () => {
         promoted: 1,
         retained: 0,
       });
-      expect(f.file.path).toBe(f.snapshot.path);
+      expect(f.file.path).toBe('Reading/Treasury/260801 Article.md');
       expect(readDocument(await f.vault.read(f.file)).properties).toEqual({
         ...readDocument(before).properties,
-        status: 'later',
+        status: 'archive',
       });
       expect(readDocument(await f.vault.read(f.file)).body).toBe(readDocument(before).body);
       expect(f.vault.trashed).toEqual([]);
@@ -174,7 +190,7 @@ describe('core YAML-link retention boundaries', () => {
     expect(saved.properties.bookmark).toBe(f.snapshot.properties.bookmark);
   });
 
-  it('preserves an unknown-field link arriving at the final trash boundary and promotes on retry', async () => {
+  it('preserves an unknown-field link arriving at the final trash boundary and archives on retry', async () => {
     const f = await article();
     f.vault.beforeTrash = async () => {
       f.vault.bytes.set(
@@ -196,7 +212,8 @@ describe('core YAML-link retention boundaries', () => {
     });
     expect(readDocument(await f.vault.read(f.file)).properties).toEqual({
       ...readDocument(edited).properties,
-      status: 'later',
+      status: 'archive',
     });
+    expect(f.file.path).toBe('Reading/Treasury/260801 Article.md');
   });
 });

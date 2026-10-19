@@ -129,19 +129,21 @@ it('leaves malformed fresh saved configuration paused, but allows explicit repai
 });
 
 it.each([
-  [undefined, 'Later'],
-  ['feed', 'Later'],
-  ['inbox', undefined],
-  ['later', undefined],
-  ['archive', undefined],
-  ['', undefined],
-  [null, undefined],
-  ['Feed', undefined],
+  [undefined, 'Reading/Stream/Story.md', 'Later'],
+  ['feed', 'Reading/Stream/Story.md', 'Later'],
+  ['inbox', 'Reading/Stream/Story.md', 'Later'],
+  ['later', 'Reading/Stream/Story.md', 'Later'],
+  ['archive', 'Reading/Stream/Story.md', 'Later'],
+  ['', 'Reading/Stream/Story.md', 'Later'],
+  [null, 'Reading/Stream/Story.md', 'Later'],
+  ['Feed', 'Reading/Stream/Story.md', 'Later'],
+  ['feed', 'Elsewhere/Story.md', undefined],
+  ['feed', 'Reading/Later/Story.md', undefined],
 ])(
-  'rechecks fresh status %j before native annotation/backlink promotion',
-  async (status, destination) => {
+  'rechecks folder membership despite fresh YAML status %j at %s before native promotion',
+  async (status, path, destination) => {
     const f = await runtimeFixture();
-    const file = { path: 'Elsewhere/Story.md' },
+    const file = { path },
       store = f.plugin.store;
     f.app.notes.set(file.path, { file });
     // The index is stale: the source bytes below are authoritative.

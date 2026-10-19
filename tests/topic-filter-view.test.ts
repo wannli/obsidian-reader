@@ -143,15 +143,18 @@ describe('topic-filter view integration', () => {
   it('matches only current queue, resolves aliases and links, and never acquires or writes', async () => {
     const f = fixture();
     f.add('Topics/Climate.md', '', { type: 'topic', aliases: ['global warming'] });
-    f.add('Linked.md', 'unrelated', { topics: ['[[Topics/Climate]]'] });
-    f.add('Body.md', 'About GLOBAL **WARMING** today.');
-    f.add('No.md', 'warmingness');
-    f.add('Other queue.md', 'global warming', { status: 'later' });
+    f.add('Reading/Inbox/Linked.md', 'unrelated', { topics: ['[[Topics/Climate]]'] });
+    f.add('Reading/Inbox/Body.md', 'About GLOBAL **WARMING** today.');
+    f.add('Reading/Inbox/No.md', 'warmingness');
+    f.add('Reading/Later/Other queue.md', 'global warming', { status: 'later' });
     f.probe.topicFilter = { label: 'Climate', path: 'Topics/Climate.md', terms: ['obsolete'] };
     f.view.showList();
     await tick();
     expect(f.rows()).toEqual(['Body', 'Linked']);
-    expect(f.read.mock.calls.map(([file]) => file.path).sort()).toEqual(['Body.md', 'No.md']);
+    expect(f.read.mock.calls.map(([file]) => file.path).sort()).toEqual([
+      'Reading/Inbox/Body.md',
+      'Reading/Inbox/No.md',
+    ]);
     expect(f.host.ingestion.acquire).not.toHaveBeenCalled();
     const filter = f.view.contentEl.querySelector('[aria-label="Filter by topic"]')!;
     expect(filter.getAttribute('aria-pressed')).toBe('true');
@@ -164,8 +167,9 @@ describe('topic-filter view integration', () => {
 
   it('supports free text, all-result navigation, pagination, clearing and retained queue filters', async () => {
     const f = fixture();
-    for (let i = 0; i < 55; i++) f.add(`Article ${String(i).padStart(2, '0')}.md`, 'sea level');
-    f.add('Later.md', 'sea level', { status: 'later' });
+    for (let i = 0; i < 55; i++)
+      f.add(`Reading/Inbox/Article ${String(i).padStart(2, '0')}.md`, 'sea level');
+    f.add('Reading/Later/Later.md', 'sea level', { status: 'later' });
     mocks.filter.mockResolvedValue({ label: 'sea level', terms: ['sea level'] });
     f.view.showList();
     f.view.contentEl.querySelector<HTMLButtonElement>('[aria-label="Filter by topic"]')!.click();
@@ -181,7 +185,7 @@ describe('topic-filter view integration', () => {
     expect(f.view.contentEl.querySelectorAll('.reader-list-heading')).toHaveLength(1);
     f.probe.operation = (fn: () => unknown) => fn();
     const open = vi.spyOn(f.probe, 'openArticleNow').mockResolvedValue(undefined);
-    await f.view.openArticle('Article 00.md', true);
+    await f.view.openArticle('Reading/Inbox/Article 00.md', true);
     expect((open.mock.calls[0][1] as { paths: string[] }).paths).toHaveLength(55);
     f.view.showList('Later');
     await tick();
@@ -204,8 +208,8 @@ describe('topic-filter view integration', () => {
 
   it('shows one compact context with filtered row entry and next/previous after path changes', async () => {
     const f = fixture();
-    f.add('A.md', 'alpha');
-    const second = f.add('B.md', 'alpha');
+    f.add('Reading/Inbox/A.md', 'alpha');
+    const second = f.add('Reading/Inbox/B.md', 'alpha');
     f.probe.topicFilter = { label: 'alpha <script>', terms: ['alpha'] };
     f.view.showList();
     await tick();
@@ -222,18 +226,18 @@ describe('topic-filter view integration', () => {
     expect(f.view.contentEl.querySelector('script')).toBeNull();
     // Simulate a status-folder relocation after promotion; browsing paths follow identity.
     f.files.delete(second.path);
-    second.path = 'Later/B.md';
+    second.path = 'Reading/Later/B.md';
     f.files.set(second.path, second);
-    f.host.store.catalog.rename('B.md', second.path, {
+    f.host.store.catalog.rename('Reading/Inbox/B.md', second.path, {
       type: 'article',
       status: 'later',
     });
-    f.probe.readingQueue.rename('B.md', second.path);
+    f.probe.readingQueue.rename('Reading/Inbox/B.md', second.path);
     await f.view.navigate(1);
     expect(f.probe.snapshot.path).toBe(second.path);
     expect(context()?.textContent).toBe('Reading list: alpha <script>');
     await f.view.navigate(-1);
-    expect(f.probe.snapshot.path).toBe('A.md');
+    expect(f.probe.snapshot.path).toBe('Reading/Inbox/A.md');
     expect(context()?.textContent).toBe('Reading list: alpha <script>');
     await f.view.readingList();
     await tick();
@@ -245,8 +249,8 @@ describe('topic-filter view integration', () => {
 
   it('retains filtered article origin and List route when direct entry cannot leave', async () => {
     const f = fixture();
-    f.add('A.md', 'alpha');
-    f.add('Outside.md', 'other');
+    f.add('Reading/Inbox/A.md', 'alpha');
+    f.add('Reading/Inbox/Outside.md', 'other');
     f.probe.topicFilter = { label: 'alpha', terms: ['alpha'] };
     f.view.showList();
     await tick();
@@ -254,8 +258,10 @@ describe('topic-filter view integration', () => {
     await tick();
     const before = f.probe.readingQueue;
     f.probe.prepareToLeave = vi.fn().mockRejectedValueOnce(new Error('Cannot save selection'));
-    await expect(f.view.openArticle('Outside.md')).rejects.toThrow('Cannot save selection');
-    expect(f.probe.snapshot.path).toBe('A.md');
+    await expect(f.view.openArticle('Reading/Inbox/Outside.md')).rejects.toThrow(
+      'Cannot save selection',
+    );
+    expect(f.probe.snapshot.path).toBe('Reading/Inbox/A.md');
     expect(f.probe.topicFilter.label).toBe('alpha');
     expect(f.probe.filteredOrigin).toBe(true);
     expect(f.probe.readingQueue).toBe(before);
@@ -272,7 +278,8 @@ describe('topic-filter view integration', () => {
 
   it('keeps the heading and final paged row reachable until filter clearance', async () => {
     const f = fixture();
-    for (let i = 0; i < 101; i++) f.add(`Article ${String(i).padStart(3, '0')}.md`, 'river');
+    for (let i = 0; i < 101; i++)
+      f.add(`Reading/Inbox/Article ${String(i).padStart(3, '0')}.md`, 'river');
     f.host.paged = true;
     f.probe.topicFilter = { label: 'river', terms: ['river'] };
     f.view.showList();
@@ -298,12 +305,12 @@ describe('topic-filter view integration', () => {
 
   it('does not assign filtered origin to direct article entry, including with a live filter', async () => {
     const f = fixture();
-    f.add('A.md', 'alpha');
-    f.add('Outside.md', 'other');
+    f.add('Reading/Inbox/A.md', 'alpha');
+    f.add('Reading/Inbox/Outside.md', 'other');
     f.probe.topicFilter = { label: 'alpha', terms: ['alpha'] };
     f.view.showList();
     await tick();
-    await f.view.openArticle('Outside.md');
+    await f.view.openArticle('Reading/Inbox/Outside.md');
     expect(f.view.contentEl.querySelector('.reader-article-context')).toBeNull();
     expect(f.probe.topicFilter).toBeUndefined();
     expect(f.view.contentEl.querySelectorAll('.reader-article-title')).toHaveLength(1);
@@ -313,7 +320,7 @@ describe('topic-filter view integration', () => {
 
   it('keeps a heading during zero-result scans and scan failures', async () => {
     const f = fixture();
-    f.add('A.md', 'nothing');
+    f.add('Reading/Inbox/A.md', 'nothing');
     f.probe.topicFilter = { label: 'missing', terms: ['missing'] };
     f.view.showList();
     expect(f.view.contentEl.querySelector('.reader-list-heading')?.textContent).toBe(
@@ -335,7 +342,7 @@ describe('topic-filter view integration', () => {
 
   it('clears immediately during an unfinished scan without reopening the picker', async () => {
     const f = fixture();
-    const file = f.add('A.md', 'alpha');
+    const file = f.add('Reading/Inbox/A.md', 'alpha');
     let release!: (raw: string) => void;
     f.read.mockImplementationOnce(
       () =>
@@ -363,7 +370,7 @@ describe('topic-filter view integration', () => {
 
   it('does not retain old aliases when selected topic disappears; direct entry clears filtered context', async () => {
     const f = fixture();
-    f.add('Match.md', 'old alias');
+    f.add('Reading/Inbox/Match.md', 'old alias');
     f.probe.topicFilter = { label: 'Gone', path: 'Topics/Gone.md', terms: ['old alias'] };
     f.view.showList();
     await tick();
@@ -372,15 +379,15 @@ describe('topic-filter view integration', () => {
     expect(f.view.contentEl.querySelector('.reader-list-heading')?.textContent).toBe(
       'Reading list: Gone (unavailable)',
     );
-    await f.view.openArticle('Match.md');
+    await f.view.openArticle('Reading/Inbox/Match.md');
     expect(f.probe.topicFilter).toBeUndefined();
-    expect(f.probe.readingQueue.current).toBe('Match.md');
+    expect(f.probe.readingQueue.current).toBe('Reading/Inbox/Match.md');
     expect(f.view.contentEl.querySelector('.reader-article-context')).toBeNull();
   });
 
   it('aborts superseded scans and never publishes old results', async () => {
     const f = fixture();
-    f.add('A.md', 'alpha');
+    f.add('Reading/Inbox/A.md', 'alpha');
     let release!: (value: string) => void;
     f.read.mockImplementationOnce(
       () =>
@@ -405,7 +412,7 @@ describe('topic-filter view integration', () => {
   it('refreshes body-only edits and current aliases; follows selected topic renames', async () => {
     const f = fixture();
     const topic = f.add('Topics/Old.md', '', { type: 'topic', aliases: ['before'] });
-    const article = f.add('A.md', 'after');
+    const article = f.add('Reading/Inbox/A.md', 'after');
     f.probe.topicFilter = { label: 'Old', path: topic.path, terms: ['before'] };
     f.view.showList();
     await tick();
@@ -435,7 +442,7 @@ describe('topic-filter view integration', () => {
 
   it('refreshes active filtered results behind a focused picker and remains fresh after Cancel', async () => {
     const f = fixture();
-    const article = f.add('A.md', 'before');
+    const article = f.add('Reading/Inbox/A.md', 'before');
     f.probe.topicFilter = { label: 'after', terms: ['after'] };
     f.view.showList();
     await tick();
@@ -463,7 +470,7 @@ describe('topic-filter view integration', () => {
 
   it('preserves the existing assignment action without a separate article filter banner', () => {
     const f = fixture();
-    const file = f.add('A.md', 'body');
+    const file = f.add('Reading/Inbox/A.md', 'body');
     f.probe.snapshot = { file, path: file.path, body: 'body', properties: { type: 'article' } };
     f.probe.surface = { canPage: () => false };
     f.probe.actions = document.createElement('nav');

@@ -19,6 +19,7 @@ it('ignores legacy settings, applies the whole group, and recreates only Reader 
     feedsFolder: 'Old feeds',
     pollMinutes: 1,
     maxFeedItems: 999,
+    captureFolders: { articles: 'Legacy/Articles', feeds: 'Legacy/Feeds' },
     custom: { untouched: true },
   };
   const f = await runtimeFixture(legacy);
@@ -28,6 +29,7 @@ it('ignores legacy settings, applies the whole group, and recreates only Reader 
     vault = f.runtime.vaults[0];
   const oldStore = f.plugin.store,
     oldIngestion = f.plugin.ingestion;
+  const move = vi.spyOn(oldStore, 'move');
   const exemption = { file: {}, transitioning: false };
   f.plugin.sourceLeaves.set(f.native, exemption);
   f.app.notes.set('Reading/Articles/Old.md', {
@@ -38,16 +40,18 @@ it('ignores legacy settings, applies the whole group, and recreates only Reader 
   f.app.notes.set('Subscriptions/Feed.md', {
     properties: { type: 'feed', url: 'https://example.com/feed' },
   });
-  expect(oldStore.folders).toEqual(defaultFolders);
+  expect(oldStore.folders).toEqual(legacy.captureFolders);
   await f.plugin.applyFolders(folders);
   expect(f.plugin.data).toEqual({ ...legacy, captureFolders: folders });
   expect(f.plugin.store.folders).toEqual(folders);
-  expect(f.plugin.store.catalog.article('Reading/Articles/Old.md')?.queue).toBe('Feed');
+  expect(f.plugin.store.catalog.article('Reading/Articles/Old.md')?.queue).toBeUndefined();
   expect(f.plugin.store.catalog.findUrl('https://example.com/old')?.path).toBe(
     'Reading/Articles/Old.md',
   );
   expect(f.plugin.store.catalog.feeds()).toHaveLength(1);
   expect(f.app.notes.get('Reading/Articles/Old.md').raw).toBe('Unchanged authored bytes');
+  expect(f.app.notes.get('Reading/Articles/Old.md').file.path).toBe('Reading/Articles/Old.md');
+  expect(move).not.toHaveBeenCalled();
   expect(old.stopped).toBe(true);
   expect(host.signal.aborted).toBe(true);
   expect(host.store).toBe(oldStore);

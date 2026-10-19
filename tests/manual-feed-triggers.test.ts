@@ -141,7 +141,7 @@ it('Refresh feeds is explicit and is never throttled by the housekeeping interva
 
 it('recovers an offline URL capture online without refreshing subscriptions', async () => {
   const f = await fixture();
-  const file = { path: 'Reading/Articles/Captured.md' };
+  const file = { path: 'Reading/Inbox/Captured.md' };
   const properties = {
     type: 'article',
     status: 'inbox',
@@ -163,7 +163,7 @@ it.each(['startup', 'foreground', 'metadata'])(
   'still acquires pending article captures on %s without importing feeds',
   async (trigger) => {
     const f = await fixture();
-    const file = { path: 'Reading/Articles/Pending.md' };
+    const file = { path: 'Reading/Inbox/Pending.md' };
     const properties = {
       type: 'article',
       status: 'inbox',
@@ -366,14 +366,16 @@ it('does not treat resolved after folder Apply as startup capture recovery', asy
     articles: 'Capture',
     feeds: 'Subscriptions',
   });
-  expect(f.plugin.store.catalog.article(file.path)?.queue).toBe('Inbox');
+  // A pre-existing external capture is indexed, but neither queued nor migrated on Apply.
+  expect(f.plugin.store.catalog.article(file.path)?.queue).toBeUndefined();
+  expect(file.path).toBe('Capture/Native.md');
   await f.metadata('resolved');
   await f.metadata('resolved');
   await f.metadata('resolve', file);
   f.runtime.watchers.at(-1).changed({ path: file.path });
   expect(f.plugin.ingestion.acquire).not.toHaveBeenCalled();
   expect(f.plugin.ingestion.refreshAll).not.toHaveBeenCalled();
-  const fresh = { path: 'Capture/New native.md', extension: 'md' };
+  const fresh = { path: 'Reading/Inbox/New native.md', extension: 'md' };
   const freshProperties = {
     type: 'article',
     status: 'inbox',
@@ -383,9 +385,10 @@ it('does not treat resolved after folder Apply as startup capture recovery', asy
   await f.metadata('resolve', fresh);
   expect(f.plugin.ingestion.acquire).toHaveBeenCalledExactlyOnceWith(fresh.path);
   f.plugin.ingestion.acquire.mockClear();
-  // Normal explicit foreground recovery still works in the new generation.
+  // Foreground does not migrate or acquire pre-existing external captures.
   await f.event('visibilitychange');
-  expect(f.plugin.ingestion.acquire).toHaveBeenCalledExactlyOnceWith(file.path);
+  expect(f.plugin.ingestion.acquire).not.toHaveBeenCalled();
+  expect(file.path).toBe('Capture/Native.md');
 });
 
 it('feed creation, enablement and metadata resolution never start imports', async () => {
@@ -434,7 +437,7 @@ it('preserves hidden/unloaded guards and hidden-view flushing', async () => {
 });
 
 it.each(['Root capture.md', 'Elsewhere/Nested/Capture.md'])(
-  'recovers explicitly inbox native captures anywhere: %s',
+  'does not auto-acquire external inbox YAML outside the mapped folder: %s',
   async (path) => {
     const f = await fixture();
     const file = { path, extension: 'md' };
@@ -446,14 +449,16 @@ it.each(['Root capture.md', 'Elsewhere/Nested/Capture.md'])(
     f.app.notes.set(path, { file, properties });
     f.plugin.store.catalog.update(path, properties);
     await f.metadata('resolve', file);
-    expect(f.plugin.ingestion.acquire).toHaveBeenCalledExactlyOnceWith(path);
+    expect(f.plugin.store.catalog.article(path)?.queue).toBeUndefined();
+    expect(file.path).toBe(path);
+    expect(f.plugin.ingestion.acquire).not.toHaveBeenCalled();
     expect(f.plugin.ingestion.refreshAll).not.toHaveBeenCalled();
   },
 );
 
-it('does not acquire a missing-status native capture displayed in Feed', async () => {
+it('does not acquire a missing-status native capture in Feed', async () => {
   const f = await fixture();
-  const file = { path: 'Reading/Articles/Missing status.md', extension: 'md' };
+  const file = { path: 'Reading/Stream/Missing status.md', extension: 'md' };
   const properties = { type: 'article', url: 'https://example.com/missing-status' };
   f.app.notes.set(file.path, { file, properties });
   f.plugin.store.catalog.update(file.path, properties);

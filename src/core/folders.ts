@@ -45,6 +45,8 @@ export function validateFolders(input: unknown): ReaderFolders {
   const folders = Object.fromEntries(
     folderKeys.map((key) => [key, folderPath(record[key])]),
   ) as Record<FolderKey, string>;
+  if (folders.feeds.split('/').some((part) => /^(?:templates|\.trash)$/i.test(part)))
+    throw new Error('Feed subscriptions cannot be created inside Templates or .trash.');
   return Object.freeze(folders);
 }
 

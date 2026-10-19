@@ -6,7 +6,11 @@ import type { ArticleStore } from '../core/store';
 import type { TFile } from 'obsidian';
 import { input } from './dialogs';
 import { articleStatuses, type ArticleStatus } from '../core/model';
-import { validateStatusFolders, type StatusFolders } from '../core/status-folders';
+import {
+  defaultStatusFolders,
+  validateStatusFolders,
+  type StatusFolders,
+} from '../core/status-folders';
 
 export function showFeeds(
   app: App,
@@ -92,7 +96,7 @@ export class ReaderSettings extends PluginSettingTab {
     private paged: boolean,
     private saveFolders: (folders: ReaderFolders) => Promise<void>,
     private savePaged: (value: boolean) => void,
-    private statusFolders: StatusFolders = {},
+    private statusFolders: StatusFolders = defaultStatusFolders,
     private saveStatusFolders: (folders: StatusFolders) => Promise<void> = async () => {},
   ) {
     super(app, plugin);
@@ -102,9 +106,9 @@ export class ReaderSettings extends PluginSettingTab {
     this.containerEl.createEl('h2', { text: 'Reader' });
     const candidate = { ...this.folders };
     this.containerEl.createEl('p', {
-      text: 'Choose creation destinations for new articles and feed subscriptions. Folders may be shared or nested; leave a path empty to use the vault root. Applying changes never moves existing files or changes their Markdown.',
+      text: 'New articles go to their queue folder below (manual captures to Inbox, imported entries to Feed). Choose where new feed subscription notes are created. Applying settings never moves existing files or changes their Markdown.',
     });
-    for (const key of folderKeys) {
+    for (const key of folderKeys.filter((key) => key === 'feeds')) {
       const setting = new Setting(this.containerEl).setName(folderLabels[key]);
       setting.addText((control) => {
         control.setValue(candidate[key]).onChange((value) => {
@@ -123,7 +127,7 @@ export class ReaderSettings extends PluginSettingTab {
     new Setting(this.containerEl)
       .setName('Apply folder locations')
       .setDesc(
-        'Both creation destinations are applied together. Reader returns to the reading list. Folders are created only when needed for a new note.',
+        'Apply the feed subscription destination. Reader returns to the reading list. Existing articles remain in place.',
       )
       .addButton((button) =>
         button
@@ -145,25 +149,24 @@ export class ReaderSettings extends PluginSettingTab {
             }
           }),
       );
-    this.containerEl.createEl('h3', { text: 'Status folders (optional)' });
+    this.containerEl.createEl('h3', { text: 'Article queue folders' });
     this.containerEl.createEl('p', {
-      text: 'When Reader changes a status, move the article to its mapped folder. Includes promotion to Later before annotations. Blank means no move; / means vault root. Observed YAML status changes also move mapped articles once native editors are safe. Applying mappings never moves existing notes.',
+      text: 'An article’s folder determines its reading list, even when its YAML status disagrees. The four folders must be distinct and cannot overlap or be inside Templates or .trash. Reader moves articles when you explicitly change their status; applying settings does not move existing notes.',
     });
-    const mappings: Partial<Record<ArticleStatus, string>> = { ...this.statusFolders };
+    const mappings: Record<ArticleStatus, string> = {
+      ...validateStatusFolders(this.statusFolders),
+    };
     for (const status of articleStatuses) {
       const setting = new Setting(this.containerEl).setName(`${status} folder`);
       setting.addText((control) => {
-        control
-          .setValue(mappings[status] === '' ? '/' : (mappings[status] ?? ''))
-          .onChange((value) => {
-            if (value === '') delete mappings[status];
-            else mappings[status] = value === '/' ? '' : value;
-          });
+        control.setValue(mappings[status]).onChange((value) => {
+          mappings[status] = value;
+        });
         setting.addButton((button) =>
           button.setButtonText('Choose folder').onClick(() => {
             new FolderPicker(this.app, (path) => {
               mappings[status] = path;
-              control.setValue(path || '/');
+              control.setValue(path);
             }).open();
           }),
         );
