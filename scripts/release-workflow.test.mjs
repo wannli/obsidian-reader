@@ -67,7 +67,7 @@ test('CI retains PR/manual checks without an independent tag publication path', 
 test('main pushes check before Release Please, then recover exact-tag drafts independently', () => {
   assert.match(release, /push:\n    branches: \[main\]/);
   assert.match(release, /actions\/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1/);
-  assert.match(release, /jdx\/mise-action@2d8d4cafcbd33be2ea37d2b6f5ad595363d1f1ca/);
+  assert.match(release, /jdx\/mise-action@08ae2a091c038e1e05ec6f5115dc5c69d5a2a6b8/);
   for (const command of ['npm run format:check', 'npm test', 'npm run test:tooling']) {
     assert.equal(release.split(command).length - 1, 1);
     assert.ok(release.indexOf(command) < release.indexOf('googleapis/release-please-action@v5'));
