@@ -385,6 +385,30 @@ export class ArticleStore<File extends NoteFile> {
     if (!relocate || !transition || folder === undefined) return saved;
     return this.relocate(saved, status, folder, guard);
   }
+  /** Explicit one-note organization request; never writes YAML or infers status from a folder. */
+  organizeStatusFolder(path: string, generation = this.statusFolderRevision): Promise<boolean> {
+    const file = this.vault.file(path);
+    if (!file) return Promise.reject(new ChangedNote('The article no longer exists.'));
+    return this.writes.run(file, async () => {
+      if (generation !== this.statusFolderRevision) throw new ChangedNote('Mappings changed.');
+      const current = await this.read(path);
+      if (current.file !== file) throw new ChangedNote();
+      const status = articleStatus(current.properties.status);
+      const folder = status && this.statusFolders[status];
+      if (!status || folder === undefined) return false;
+      const targetFolder = current.path.includes('/')
+        ? current.path.slice(0, current.path.lastIndexOf('/'))
+        : '';
+      if (targetFolder === folder) return false;
+      const guard = () => {
+        if (generation !== this.statusFolderRevision) throw new ChangedNote('Mappings changed.');
+      };
+      guard();
+      this.captures.delete(file);
+      await this.relocate(current, status, folder, guard);
+      return true;
+    });
+  }
   /** Only an observed status transition calls this; never startup or path reconciliation. */
   observedStatusChange(
     file: File,

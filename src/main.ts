@@ -45,6 +45,7 @@ export default class ReaderPlugin extends Plugin {
   private lastMaintenance = 0;
   private statusFolders: StatusFolders = {};
   private refreshing = false;
+  private organizing = false;
   private referencesReady = false;
   private referencesRecovered = false;
   private startupCaptureRecoveryPending = true;
@@ -146,6 +147,11 @@ export default class ReaderPlugin extends Plugin {
       },
     });
     this.addCommand({ id: 'manage-feeds', name: 'Manage feeds', callback: () => this.feeds() });
+    this.addCommand({
+      id: 'organize-status-folders',
+      name: 'Organize articles into status folders',
+      callback: () => void this.organizeStatusFolders().catch((error) => this.notice(error)),
+    });
     this.addCommand({
       id: 'refresh-feeds',
       name: 'Refresh feeds',
@@ -827,6 +833,40 @@ export default class ReaderPlugin extends Plugin {
       },
       signal,
     );
+  }
+  private async organizeStatusFolders(): Promise<void> {
+    if (this.organizing || this.signal.aborted) return;
+    this.organizing = true;
+    const store = this.store;
+    const signal = this.signal;
+    const generation = store.statusFolderGeneration;
+    const paths = [...store.catalog.values()].map((article) => article.path);
+    let moved = 0;
+    let skipped = 0;
+    let failed = 0;
+    try {
+      for (const path of paths) {
+        if (signal.aborted || store !== this.store || generation !== store.statusFolderGeneration) {
+          this.notice('Status folder organization stopped: Reader or its mappings changed.');
+          return;
+        }
+        try {
+          if (await store.organizeStatusFolder(path, generation)) moved++;
+          else skipped++;
+        } catch (error) {
+          failed++;
+          if (failed <= 3)
+            this.notice(
+              `Could not organize ${path}: ${error instanceof Error ? error.message : String(error)}`,
+            );
+        }
+      }
+      this.notice(
+        `Status folders: ${moved} moved, ${skipped} unchanged/unmapped, ${failed} failed${failed > 3 ? ' (first 3 errors shown)' : ''}.`,
+      );
+    } finally {
+      this.organizing = false;
+    }
   }
   private async redownloadArticle(file: TFile, view?: ReaderView): Promise<void> {
     const signal = this.signal,

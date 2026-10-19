@@ -78,6 +78,50 @@ it('supports root, shared folder and collision suffix without overwriting', asyn
   expect(await f.vault.read(existing)).toBe('Keep me');
   expect((await f.store.move(saved, 'Archive')).path).toBe(saved.path);
 });
+it('organizes existing mapped statuses on explicit request without rewriting YAML', async () => {
+  const f = await fixture('later');
+  f.store.setStatusFolders({ later: 'Later' });
+  const process = vi.spyOn(f.vault, 'process');
+  expect(await f.store.organizeStatusFolder(f.file.path)).toBe(true);
+  expect(f.file.path).toBe('Later/Article.md');
+  expect(await f.vault.read(f.file)).toBe(f.snapshot.raw);
+  expect(process).not.toHaveBeenCalled();
+  expect(await f.store.organizeStatusFolder(f.file.path)).toBe(false);
+  expect(f.store.catalog.article(f.file.path)?.status).toBe('later');
+});
+it('skips unmapped, missing and invalid status articles without changing them', async () => {
+  for (const status of ['feed', 'invalid', '']) {
+    const f = await fixture(status);
+    f.store.setStatusFolders({ later: 'Later' });
+    expect(await f.store.organizeStatusFolder(f.file.path)).toBe(false);
+    expect(f.file.path).toBe('Source/Article.md');
+    expect(await f.vault.read(f.file)).toBe(f.snapshot.raw);
+  }
+});
+it('checks fresh status and mappings at the manual move boundary', async () => {
+  const f = await fixture('later');
+  f.store.setStatusFolders({ later: 'Later' });
+  const generation = f.store.statusFolderGeneration;
+  f.vault.beforeMove = async () => {
+    f.store.setStatusFolders({ later: 'Other' });
+  };
+  await expect(f.store.organizeStatusFolder(f.file.path, generation)).rejects.toThrow();
+  expect(f.file.path).toBe('Source/Article.md');
+  expect(await f.vault.read(f.file)).toBe(f.snapshot.raw);
+});
+it('does not organize a dirty editor or stale source bytes', async () => {
+  const f = await fixture('later');
+  f.store.setStatusFolders({ later: 'Later' });
+  f.vault.dirty.add(f.file);
+  await expect(f.store.organizeStatusFolder(f.file.path)).rejects.toThrow();
+  f.vault.dirty.delete(f.file);
+  f.vault.beforeMove = async () => {
+    f.vault.bytes.set(f.file, (await f.vault.read(f.file)) + '\nUser edit');
+  };
+  await expect(f.store.organizeStatusFolder(f.file.path)).rejects.toThrow();
+  expect(f.file.path).toBe('Source/Article.md');
+  expect(await f.vault.read(f.file)).toContain('User edit');
+});
 it('creates mapped captures directly; unmapped creation retains capture destination', async () => {
   const f = await fixture();
   f.store.setStatusFolders({ inbox: 'Mapped', feed: '' });

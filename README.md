@@ -66,7 +66,7 @@ Only notes with explicit `status: feed` can expire, one calendar month after the
 - On desktop, **j / k** navigate articles. At article boundaries, **Up / PageUp** and **Down / PageDown** move to the previous or next article, resuming its saved position.
 - On iPhone, **Copy reading-list link** opens the library. **Copy dog-ear link** opens the last article you opened in Reader, or the first (newest) Inbox article if none is marked. Each gives you a vault-aware link for a Shortcuts **URL → Open URLs → Add to Home Screen** shortcut. You can also use **Open dog-eared article** from the command palette.
 
-Lists follow the note’s `status`, not its folder. Optional **Status folders** settings can move articles when their status changes, and place new Reader captures in the matching folder. Applying these settings does not reorganize existing notes. Leave a mapping blank for no move; use `/` for the vault root. Moves respect Obsidian’s internal-link update preference; disabling it can leave links broken.
+Lists follow the note’s `status`, not its folder. Optional **Status folders** settings can move articles when their status changes, and place new Reader captures in the matching folder. Applying these settings does not reorganize existing notes. Run **Organize articles into status folders** from the command palette when you want to move existing articles with a valid mapped YAML status; unmapped or invalid statuses stay where they are. Leave a mapping blank for no move; use `/` for the vault root. Moves respect Obsidian’s internal-link update preference; disabling it can leave links broken.
 
 ## Follow feeds without the backlog
 

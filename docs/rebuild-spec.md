@@ -63,7 +63,7 @@
 - Deletion uses recoverable Obsidian trash, never permanent removal.
 - No user-facing batch-delete or "delete newer articles" command in v1.
 - Exact `type: article` notes open in Reader. Open Markdown explicitly retains the native editor; dirty/uncertain editors, stale files and navigation intent are protected.
-- Ordinary notes remain native; article queues are independent of folders. Invalid-status articles remain readable but unqueued.
+- Ordinary notes remain native; article queues are independent of folders. Invalid-status articles remain readable but unqueued. The optional status-folder mapping and explicit manual organization command affect placement only, not queue membership.
 - Remember reading position as a text anchor in `bookmark` and restore it across sessions/devices via vault sync. The separate `dog_ear: true` current-article pointer moves on successful article entry and leaves reading-position anchors intact. Legacy `reading_position` remains preserved and inert, without fallback or conversion. List opens and next/previous navigation, including boundary keys, resume each article’s own saved position; do not force next-start/previous-end entry.
 - Desktop j/k navigates articles, except while typing or interacting with menus/dialogs.
 - Use native typography, themes, menus, and pickers; no Reader theme/type settings.

@@ -147,7 +147,7 @@ export class ReaderSettings extends PluginSettingTab {
       );
     this.containerEl.createEl('h3', { text: 'Status folders (optional)' });
     this.containerEl.createEl('p', {
-      text: 'When Reader changes a status, move the article to its mapped folder. Includes promotion to Later before annotations. Blank means no move; / means vault root. Observed YAML status changes also move mapped articles once native editors are safe. Applying mappings never moves existing notes.',
+      text: 'When Reader changes a status, move the article to its mapped folder. Includes promotion to Later before annotations. Blank means no move; / means vault root. Observed YAML status changes also move mapped articles once native editors are safe. Applying mappings never moves existing notes. Run Organize articles into status folders from the command palette to move existing mapped articles manually.',
     });
     const mappings: Partial<Record<ArticleStatus, string>> = { ...this.statusFolders };
     for (const status of articleStatuses) {
