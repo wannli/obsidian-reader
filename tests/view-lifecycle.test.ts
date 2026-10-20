@@ -4101,8 +4101,14 @@ describe('browsing context and presentation', () => {
       surface.marker = 'Article A';
       const move = vi.spyOn(f.store, 'move');
       f.host.ingestion.acquire.mockClear();
-      const clickLater = () =>
-        f.view.contentEl.querySelector<HTMLButtonElement>('[aria-label="Read later"]')!.click();
+      const laterButton = () =>
+        f.view.contentEl.querySelector<HTMLButtonElement>(
+          '[aria-label="Read later"], [aria-label="Saved to Later"]',
+        )!;
+      const clickLater = () => laterButton().click();
+      expect(laterButton().getAttribute('aria-label')).toBe(
+        queue === 'Later' ? 'Saved to Later' : 'Read later',
+      );
       clickLater();
       await f.probe.operations;
       expect(mocks.choose).not.toHaveBeenCalled();
@@ -4116,6 +4122,9 @@ describe('browsing context and presentation', () => {
       expect(saved.body).toBe('Article A');
       expect(saved.properties.bookmark).toBe('Article A');
       expect(f.host.ingestion.acquire).toHaveBeenCalledWith(article.path);
+      expect(laterButton().getAttribute('aria-label')).toBe('Saved to Later');
+      expect(laterButton().querySelector('svg')?.getAttribute('data-icon')).toBe('clock-check');
+      expect(mocks.notice).toHaveBeenCalledWith('Saved to Later');
       clickLater();
       await f.probe.operations;
       expect(article.path).toBe('Reading/Later/A.md');
@@ -4138,6 +4147,61 @@ describe('browsing context and presentation', () => {
     expect(article.path).toBe('Reading/Inbox/A.md');
     expect(await f.vault.read(article)).toBe(external);
     expect(f.view.file).toBe(article);
+    expect(f.view.contentEl.querySelector('[aria-label="Saved to Later"]')).toBeNull();
+    expect(mocks.notice).not.toHaveBeenCalledWith('Saved to Later');
+  });
+
+  it('does not acknowledge Later when YAML saves but the folder move fails', async () => {
+    const f = hostFixture();
+    const article = await f.note('Reading/Inbox/A.md');
+    await f.view.openArticle(article.path, true);
+    f.vault.failMove = true;
+    f.view.contentEl.querySelector<HTMLButtonElement>('[aria-label="Read later"]')!.click();
+    await expect(f.probe.operations).rejects.toThrow('Move failed');
+    expect((await f.store.read(article.path)).properties.status).toBe('later');
+    expect(article.path).toBe('Reading/Inbox/A.md');
+    expect(f.view.contentEl.querySelector('[aria-label="Saved to Later"]')).toBeNull();
+    expect(mocks.notice).not.toHaveBeenCalledWith('Saved to Later');
+  });
+
+  it('updates the Later indicator on external folder moves, not misleading YAML changes', async () => {
+    const f = hostFixture();
+    const article = await f.note('Reading/Inbox/A.md');
+    await f.view.openArticle(article.path, true);
+    const surface = f.probe.surface;
+    const expectLater = (saved: boolean) => {
+      const label = saved ? 'Saved to Later' : 'Read later';
+      const button = f.view.contentEl.querySelector(`[aria-label="${label}"]`);
+      expect(button).not.toBeNull();
+      expect(button?.querySelector('svg')?.getAttribute('data-icon')).toBe(
+        saved ? 'clock-check' : 'clock',
+      );
+      expect(f.probe.surface).toBe(surface);
+    };
+    // YAML alone cannot retain an Inbox article.
+    await f.vault.process(article, (raw) => patchProperties(raw, { status: 'later' }));
+    f.store.catalog.update(article.path, readDocument(await f.vault.read(article)).properties);
+    await f.view.changed({ path: article.path, metadataChanged: true });
+    expectLater(false);
+    // Folder moves change queue membership without rewriting the stale YAML.
+    for (const folder of ['Later', 'Treasury', 'Later', 'Outside']) {
+      const previousPath = article.path;
+      await f.vault.move(article, `Reading/${folder}/A.md`);
+      f.store.catalog.rename(
+        previousPath,
+        article.path,
+        readDocument(await f.vault.read(article)).properties,
+      );
+      await f.view.changed({ path: article.path, previousPath, metadataChanged: true });
+      expectLater(folder === 'Later');
+      if (folder === 'Later') {
+        await f.vault.process(article, (raw) => patchProperties(raw, { status: 'archive' }));
+        f.store.catalog.update(article.path, readDocument(await f.vault.read(article)).properties);
+        await f.view.changed({ path: article.path, metadataChanged: true });
+        expectLater(true);
+      }
+    }
+    expect(mocks.notice).not.toHaveBeenCalledWith('Saved to Later');
   });
 
   it('keeps capture placement independent from Feed browsing and explicit Archive', async () => {

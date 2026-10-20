@@ -1004,7 +1004,13 @@ export class ReaderView extends ItemView {
       }
     }
     this.button(this.actions, 'Article topics', () => this.topics(), 'tags');
-    this.button(this.actions, 'Read later', () => this.move('Later'), 'clock');
+    const savedForLater = this.host.store.catalog.article(this.snapshot.path)?.queue === 'Later';
+    this.button(
+      this.actions,
+      savedForLater ? 'Saved to Later' : 'Read later',
+      () => this.move('Later'),
+      savedForLater ? 'clock-check' : 'clock',
+    );
     this.button(this.actions, 'Archive', () => this.finish('keep'), 'archive').setAttribute(
       'aria-label',
       'Archive and advance',
@@ -1529,6 +1535,7 @@ export class ReaderView extends ItemView {
       if (moved.body !== snapshot.body)
         this.surface?.setBody(moved.body, text(moved.properties.url));
       this.controls();
+      if (target === 'Later') new Notice('Saved to Later');
       if (target === 'Inbox' || target === 'Later')
         void this.host.ingestion.acquire(moved.path).catch((error) => this.error(error));
     });
