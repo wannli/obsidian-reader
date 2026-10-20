@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.13.1](https://github.com/wannli/obsidian-reader/compare/0.13.0...0.13.1) (2026-10-20)
+
+
+### Fixed
+
+* **reader:** acknowledge saving an article to Later ([b6b58a9](https://github.com/wannli/obsidian-reader/commit/b6b58a9215427311c3dfafdf447a1e5d317ed168))
+
 ## [0.13.0](https://github.com/wannli/obsidian-reader/compare/0.12.0...0.13.0) (2026-10-19)
 
 
