@@ -12,6 +12,7 @@ import { hasAnnotations, hasPropertyAnnotations, isAnnotationProperty } from './
 import { excludedReaderPath, type Queue } from './core/model';
 import { defaultFolders, validateFolders, type ReaderFolders } from './core/folders';
 import { SerialWrites } from './core/work';
+import { ArticleFragmentIntents } from './core/article-fragment';
 import { loadFolders, saveFolderSettings } from './host/folder-settings';
 import {
   defaultStatusFolders,
@@ -41,6 +42,9 @@ export default class ReaderPlugin extends Plugin {
   private viewWrites = new Set<Promise<unknown>>();
   private presentations = new Map<WorkspaceLeaf, Promise<void>>();
   private routingEpoch = 0;
+  private articleFragments = new ArticleFragmentIntents<TFile>();
+  private fragmentSources = new WeakMap<Element, string>();
+  private routingLeaves = new WeakSet<WorkspaceLeaf>();
   private sourceLeaves = new Map<WorkspaceLeaf, { file: TFile; transitioning: boolean }>();
   private attempted = new Set<string>();
   private promotions = new Map<TFile, boolean>();
@@ -162,7 +166,7 @@ export default class ReaderPlugin extends Plugin {
     });
     for (const [id, name] of [
       ['move', 'Change article status…'],
-      ['topics', 'Edit article topics…'],
+      ['topics', 'Edit related notes…'],
       ['open-markdown', 'Open article as Markdown'],
     ] as const) {
       this.addCommand({
@@ -215,6 +219,18 @@ export default class ReaderPlugin extends Plugin {
             for (const view of this.views()) view.refreshArticleControls();
           }),
       ),
+    );
+    // Observe intent before native link handlers run, but never replace their
+    // openFile/new-pane behavior. Only a later native routing event can dispatch.
+    this.registerMarkdownPostProcessor?.((element, context) => {
+      if (!this.signal.aborted) this.fragmentSources.set(element, context.sourcePath);
+    });
+    this.registerDomEvent(document, 'click', (event) => this.rememberArticleFragment(event), true);
+    this.registerDomEvent(
+      document,
+      'auxclick',
+      (event) => this.rememberArticleFragment(event),
+      true,
     );
     this.registerEvent(
       this.app.workspace.on('active-leaf-change', () => {
@@ -351,6 +367,8 @@ export default class ReaderPlugin extends Plugin {
   private stopFolders(): void {
     this.lifetime.abort();
     this.routingEpoch++;
+    this.articleFragments.clear();
+    this.routingLeaves = new WeakSet();
     this.ingestion?.stop();
     this.stopIndex?.();
     this.store?.dispose();
@@ -457,6 +475,50 @@ export default class ReaderPlugin extends Plugin {
       this.syncMobileNavigation();
     });
   }
+  private rememberArticleFragment(event: MouseEvent): void {
+    // Even a non-link click supersedes a pending passive route. It must not take
+    // ownership after the user starts another native interaction.
+    this.routingEpoch++;
+    this.articleFragments.clear();
+    if (this.signal.aborted || event.defaultPrevented || (event.button !== 0 && event.button !== 1))
+      return;
+    const target = event.target instanceof Element ? event.target : null;
+    const anchor = target?.closest<HTMLAnchorElement>('a.internal-link');
+    if (!anchor) return;
+    let sourcePath: string | undefined;
+    for (let element: Element | null = anchor; element; element = element.parentElement) {
+      sourcePath = this.fragmentSources.get(element);
+      if (sourcePath !== undefined) break;
+    }
+    if (sourcePath === undefined) {
+      // Properties links do not run a Markdown postprocessor. Resolve against
+      // the containing public Markdown view, not an unrelated active pane.
+      const source = this.app.workspace
+        .getLeavesOfType('markdown')
+        .find(
+          (leaf) => leaf.view instanceof MarkdownView && leaf.view.containerEl?.contains(anchor),
+        )?.view;
+      if (source instanceof MarkdownView) sourcePath = source.file?.path;
+    }
+    if (sourcePath === undefined) return;
+    this.articleFragments.observe(
+      anchor.getAttribute('data-href') ?? anchor.getAttribute('href') ?? '',
+      sourcePath,
+      (path, source) => {
+        const file = this.app.metadataCache.getFirstLinkpathDest(path, source);
+        return file instanceof TFile && this.store.vault.file(file.path) === file
+          ? file
+          : undefined;
+      },
+    );
+  }
+  private nativeRouteState(view: MarkdownView): string | undefined {
+    if (typeof view.getEphemeralState !== 'function') return;
+    const state = view.getEphemeralState();
+    if (!state || typeof state !== 'object' || Array.isArray(state))
+      throw new Error('The native navigation state is not ready.');
+    return JSON.stringify(state);
+  }
   private routeArticle(opened?: TFile | null): void {
     const epoch = ++this.routingEpoch,
       signal = this.signal,
@@ -468,6 +530,7 @@ export default class ReaderPlugin extends Plugin {
     if (
       !leaf ||
       !view ||
+      this.routingLeaves.has(leaf) ||
       leaf.view !== view ||
       !(file instanceof TFile) ||
       (opened !== undefined && opened !== file) ||
@@ -481,43 +544,77 @@ export default class ReaderPlugin extends Plugin {
     if (!revision) return;
     // Public Editor bytes are the only evidence of a clean native buffer. Never
     // replace a loading/uncertain editor, even when the metadata cache says article.
-    let buffer: string;
+    let buffer: string, nativeState: string | undefined;
+    const activeNativeSelection = () =>
+      typeof view.editor?.getSelection === 'function' && view.editor.getSelection().length > 0;
     try {
       buffer = view.editor?.getValue();
       if (typeof buffer !== 'string') return;
+      nativeState = this.nativeRouteState(view);
+      if (activeNativeSelection()) {
+        this.sourceLeaves.set(leaf, { file, transitioning: false });
+        return;
+      }
     } catch {
       return;
     }
-    const current = () =>
-      !signal.aborted &&
-      epoch === this.routingEpoch &&
-      this.app.workspace.getMostRecentLeaf() === leaf &&
-      this.app.workspace.getActiveViewOfType(MarkdownView) === view &&
-      leaf.view === view &&
-      view.file === file &&
-      file.path === path &&
-      store.vault.file(path) === file &&
-      file.stat.mtime === revision.mtime &&
-      file.stat.size === revision.size &&
-      this.sourceLeaves.get(leaf)?.file !== file &&
-      !document.querySelector('.modal-container,.menu') &&
-      document.getSelection()?.isCollapsed !== false &&
-      // Inline properties/titles may have uncommitted input outside Editor bytes.
-      (!(document.activeElement instanceof Element) ||
-        !document.activeElement.closest(
-          'input,textarea,select,[contenteditable]:not([contenteditable="false"])',
-        ) ||
-        view.editor?.hasFocus?.() === true) &&
-      view.editor?.getValue() === buffer;
+    const intent = this.articleFragments.peek(file);
+    const current = () => {
+      if (!(
+        !signal.aborted &&
+        epoch === this.routingEpoch &&
+        (!intent || this.articleFragments.current(intent)) &&
+        this.app.workspace.getMostRecentLeaf() === leaf &&
+        this.app.workspace.getActiveViewOfType(MarkdownView) === view &&
+        leaf.view === view &&
+        view.file === file &&
+        file.path === path &&
+        store.vault.file(path) === file &&
+        file.stat.mtime === revision.mtime &&
+        file.stat.size === revision.size &&
+        this.sourceLeaves.get(leaf)?.file !== file &&
+        !document.querySelector('.modal-container,.menu') &&
+        document.getSelection()?.isCollapsed !== false &&
+        // Inline properties/titles may have uncommitted input outside Editor bytes.
+        (!(document.activeElement instanceof Element) ||
+          !document.activeElement.closest(
+            'input,textarea,select,[contenteditable]:not([contenteditable="false"])',
+          ) ||
+          view.editor?.hasFocus?.() === true)
+      ))
+        return false;
+      try {
+        if (activeNativeSelection() || this.nativeRouteState(view) !== nativeState) {
+          // A public native selection/jump changed while the bytes were read.
+          // Preserve that native navigation across metadata retries too; never
+          // infer a block ID from its cursor or overwrite it with a bookmark.
+          this.sourceLeaves.set(leaf, { file, transitioning: false });
+          return false;
+        }
+        return view.editor?.getValue() === buffer;
+      } catch {
+        return false;
+      }
+    };
     void (async () => {
       const raw = await store.vault.read(file);
       if (!current() || raw !== buffer || readDocument(raw).properties.type !== 'article') return;
       // No await between the final intent/buffer check and public dispatch. Do not
       // request focus: a host transition must not activate a now-background leaf.
-      await this.dispatchView(() =>
-        leaf.setViewState({ type: READER_VIEW, state: { file: path } }),
-      );
-      if (!signal.aborted) this.syncMobileNavigation();
+      const routing = this.routingLeaves;
+      routing.add(leaf);
+      try {
+        await this.dispatchView(() =>
+          leaf.setViewState({
+            type: READER_VIEW,
+            state: { file: path, ...(intent ? { subpath: intent.subpath } : {}) },
+          }),
+        );
+        if (intent) this.articleFragments.finish(intent);
+        if (!signal.aborted) this.syncMobileNavigation();
+      } finally {
+        routing.delete(leaf);
+      }
     })().catch(() => {
       // Passive routing is optional. Read/parse/editor uncertainty leaves Markdown intact.
     });
@@ -934,6 +1031,9 @@ export default class ReaderPlugin extends Plugin {
     // abrupt unload/process termination cannot guarantee the final unsaved selection/position.
     this.unloaded = true;
     this.lifetime.abort();
+    this.articleFragments.clear();
+    this.fragmentSources = new WeakMap();
+    this.routingLeaves = new WeakSet();
     this.network.stop();
     document.body.classList.remove('reader-mobile-active');
     this.ingestion?.stop();

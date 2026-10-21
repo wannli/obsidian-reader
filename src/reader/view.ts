@@ -5,12 +5,11 @@ import {
   setIcon,
   setTooltip,
   type App,
-  type TFile,
+  TFile,
   type ViewStateResult,
   type WorkspaceLeaf,
 } from 'obsidian';
 import {
-  addHighlight,
   changePassage,
   locateSelection,
   passages,
@@ -21,19 +20,40 @@ import { ReadingQueue } from '../core/catalog';
 import { matchesTopicArticle, type TopicFilter } from '../core/topic-filter';
 import { chooseTopicFilter } from '../host/topic-filter-dialog';
 import { TopicScanner } from './topic-scan';
-import { patchProperties, readDocument, readingMarker, replaceBody } from '../core/document';
+import { readDocument, readingMarker, replaceBody } from '../core/document';
 import { renderedHighlight } from '../core/markdown';
-import { articleInfo, linkPath, queues, text, vaultLink, type Queue } from '../core/model';
-import { type ArticleStore, type Snapshot } from '../core/store';
-import { choose, chooseTopics, confirmWebLink } from '../host/dialogs';
+import { articleInfo, linkPath, queues, text, type Queue } from '../core/model';
+import {
+  PartialCollectionError,
+  type ArticleStore,
+  type HighlightCollectionPhase,
+  type Snapshot,
+} from '../core/store';
+import {
+  convertPassage,
+  hostSelection,
+  hostPassage,
+  passageHosts,
+  replacePassageHosts,
+  type HostedHighlight,
+} from '../core/hosted-highlights';
+import { choose, confirmWebLink } from '../host/dialogs';
 import type { Ingestion } from '../host/ingestion';
 import { nodesApi, type NodesApi, type NodeResult } from '../host/nodes';
+import { chooseHighlightHost } from '../host/highlight-picker';
+import { hasNodeClass } from '../core/node-choices';
 import type { LibraryChange } from '../host/vault';
 import { ReadingSurface } from './surface';
 import { selectedPassage, selectionRange } from './render';
 import { TapHighlighter, type TapToolbarAction } from './tap-highlighter';
 
 export const READER_VIEW = 'obsidian-reader';
+export interface ReaderState {
+  file?: string;
+  queue?: Queue;
+  /** Incoming native block navigation only; intentionally omitted from getState(). */
+  subpath?: string;
+}
 type PendingSelection = {
   readonly selection: Readonly<
     Pick<NonNullable<ReturnType<ReadingSurface['selection']>>, 'quote' | 'before' | 'after'>
@@ -41,6 +61,11 @@ type PendingSelection = {
   readonly body: string;
 };
 type BrowsingContext = { queue: Queue; paths: string[]; filtered?: boolean };
+type HighlightRemoval = {
+  paths: string[];
+  previousQuote: Pick<HostedHighlight, 'quoteMarkdown' | 'blockId'>;
+  validate: (paths?: readonly string[]) => void;
+};
 /** Rendered hrefs are encoded once. Never reinterpret a decoded URI as a vault path. */
 export function nativeLinkPath(value: string, encoded = true): string | undefined {
   let path: string;
@@ -98,6 +123,13 @@ export class ReaderView extends ItemView {
   private tapHighlighter?: TapHighlighter;
   private passageActions?: readonly TapToolbarAction[];
   private passageIntent = 0;
+  private sendSource?: {
+    snapshot: Snapshot<TFile>;
+    passage: Passage;
+    generation: number;
+    draft: NodeResult[];
+    mode: 'selected' | 'explicit';
+  };
   private tapMode = false;
   private tapUndo?: { snapshot: Snapshot<TFile>; before: string; passage: Passage };
   private tapUndoUntil = 0;
@@ -184,7 +216,13 @@ export class ReaderView extends ItemView {
       return;
     }
     if (queues.includes(state.queue as Queue)) this.queue = state.queue as Queue;
-    if (typeof state.file === 'string') await this.openArticle(state.file);
+    if (typeof state.file === 'string')
+      await this.openArticle(
+        state.file,
+        false,
+        undefined,
+        typeof state.subpath === 'string' ? state.subpath : undefined,
+      );
     else await this.readingList();
     await super.setState(state, result);
   }
@@ -282,7 +320,30 @@ export class ReaderView extends ItemView {
         passive: true,
         signal: gestures.signal,
       });
+    this.contentEl.addEventListener('focusin', () => this.refreshArticleTopics(), options);
+    this.contentEl.ownerDocument.defaultView?.addEventListener(
+      'focus',
+      () => this.refreshArticleTopics(),
+      options,
+    );
+    this.contentEl.addEventListener(
+      'click',
+      (event) => {
+        if (this.topicClicked(event)) return;
+        // Tap mode suppresses modified clicks on its body. Preserve explicit
+        // reference navigation before that handler, without also filing a copy.
+        if ((event.ctrlKey || event.metaKey) && this.targetClicked(event)) event.stopPropagation();
+      },
+      { ...options, capture: true },
+    );
     this.contentEl.addEventListener('click', (event) => this.clicked(event), options);
+    this.contentEl.addEventListener(
+      'auxclick',
+      (event) => {
+        if (event.button === 1 && !this.topicClicked(event)) this.targetClicked(event);
+      },
+      options,
+    );
     this.showList();
   }
   onClose(): Promise<void> {
@@ -324,6 +385,7 @@ export class ReaderView extends ItemView {
     if (this.lifetime.signal.aborted) return;
     this.lifetime.abort();
     this.generation++;
+    this.clearSend();
     this.passageActions = undefined;
     this.tapHighlighter?.dispose();
     this.tapHighlighter = undefined;
@@ -393,11 +455,14 @@ export class ReaderView extends ItemView {
     }
     if (this.ownDeferred?.saved !== snapshot.body) this.ownDeferred = undefined;
     this.snapshot = snapshot;
+    this.refreshArticleTopics();
   }
   private syncPresentation(): void {
     const title = this.articleLabel();
-    if (this.surface) this.surface.setTitle(title);
-    else if (this.articleTitle) this.articleTitle.textContent = title;
+    if (this.surface) {
+      this.surface.setTitle(title);
+      this.refreshArticleTopics();
+    } else if (this.articleTitle) this.articleTitle.textContent = title;
     const key = JSON.stringify([this.file?.path, this.queue, this.getDisplayText()]);
     if (!this.stopping && !this.host.signal.aborted && key !== this.presentationKey) {
       this.presentationKey = key;
@@ -445,6 +510,7 @@ export class ReaderView extends ItemView {
     clearTimeout(this.selectionTimer);
     this.articleLifetime.abort();
     this.articleLifetime = new AbortController();
+    this.clearSend();
     this.passageActions = undefined;
     this.tapHighlighter?.dispose();
     this.tapHighlighter = undefined;
@@ -803,7 +869,12 @@ export class ReaderView extends ItemView {
     for (const row of rows.keys()) observer.observe(row);
     return stop;
   }
-  openArticle(path: string, fromList = false, signal?: AbortSignal): Promise<void> {
+  openArticle(
+    path: string,
+    fromList = false,
+    signal?: AbortSignal,
+    subpath?: string,
+  ): Promise<void> {
     if (signal?.aborted) return Promise.resolve();
     this.topicPicker?.abort();
     this.cancelNodeCreation();
@@ -819,13 +890,17 @@ export class ReaderView extends ItemView {
                 .map((article) => article.path),
         }
       : undefined;
-    return this.operation(() => this.openArticleNow(path, browsing, signal, !fromList), false);
+    return this.operation(
+      () => this.openArticleNow(path, browsing, signal, !fromList, subpath),
+      false,
+    );
   }
   private async openArticleNow(
     path: string,
     browsing?: BrowsingContext,
     signal?: AbortSignal,
     direct = false,
+    subpath?: string,
   ): Promise<void> {
     if (signal?.aborted) return;
     const request = ++this.opening;
@@ -895,6 +970,7 @@ export class ReaderView extends ItemView {
           if (this.current(snapshot, token!) && !this.stopping)
             this.showFailure(snapshot.file, error);
         },
+        (target, element) => this.paintReferenceIcon(target, element, snapshot.file),
       );
       this.surface = surface;
       this.articleTitle = surface.title;
@@ -909,6 +985,7 @@ export class ReaderView extends ItemView {
       if (this.surface !== surface) return; // The synchronous error callback installed the escape hatch.
       surface.restore(readingMarker(snapshot.properties.bookmark) ?? '');
       if (this.surface !== surface) return;
+      if (subpath) this.revealSubpath(surface, subpath);
       this.status = column.createDiv({ cls: 'reader-status', attr: { role: 'status' } });
       column.prepend(this.status); // Feedback stays clear of the floating controls.
       this.actions = column.createEl('nav', {
@@ -959,6 +1036,39 @@ export class ReaderView extends ItemView {
     this.actions.parentElement?.classList.toggle('reader-has-page-actions', expanded);
     this.controls();
   }
+  private revealSubpath(surface: ReadingSurface, subpath: string): void {
+    let fragment: string;
+    try {
+      fragment = decodeURIComponent(subpath);
+    } catch {
+      return;
+    }
+    const match = /^#\^([a-zA-Z0-9-]+)$/.exec(fragment);
+    if (!match || this.surface !== surface) return;
+    const targets = [
+      ...surface.body.querySelectorAll<HTMLElement>('[data-reader-paragraph]'),
+    ].filter((element) => element.dataset.readerParagraph === match[1]);
+    // A native block ID names a paragraph, not a highlight. Never silently choose
+    // the first of duplicate authored IDs, and never persist this transient intent.
+    if (targets.length === 1) surface.reveal(targets[0]);
+  }
+  private paintReferenceIcon(target: string, element: HTMLElement, source: TFile): void {
+    try {
+      const api = nodesApi(this.app),
+        path = nativeLinkPath(target, false);
+      const file = path
+        ? this.app.metadataCache.getFirstLinkpathDest(parseLinktext(path).path, source.path)
+        : null;
+      const node = file && api ? api.getNode(file.path) : null;
+      const types = api?.listTypes() ?? [];
+      if (!node || node.path !== file?.path || !hasNodeClass(node, types)) return;
+      const icon =
+        node.icon ?? types.find((type) => type.icon && node.classes.includes(type.type))?.icon;
+      if (icon) setIcon(element, icon);
+    } catch {
+      /* Optional public-provider failures must not hide reference labels. */
+    }
+  }
   private controls(): void {
     if (!this.snapshot || !this.actions || !this.surface) return;
     this.syncPresentation();
@@ -1003,7 +1113,7 @@ export class ReaderView extends ItemView {
         button.disabled = this.surface.atBoundary(direction);
       }
     }
-    this.button(this.actions, 'Article topics', () => this.topics(), 'tags');
+    this.button(this.actions, 'Related notes', () => this.topics(), 'tags');
     const savedForLater = this.host.store.catalog.article(this.snapshot.path)?.queue === 'Later';
     this.button(
       this.actions,
@@ -1039,6 +1149,7 @@ export class ReaderView extends ItemView {
         if (!active) this.controls();
       },
       passageActions: () => this.passageActions,
+      onTarget: (event) => this.targetClicked(event),
       onPassage: (word, event) => {
         const origin =
           word.startContainer.nodeType === 1
@@ -1086,7 +1197,7 @@ export class ReaderView extends ItemView {
     return ++this.selectionRevision;
   }
   private selectionChanged(): void {
-    if (this.stopping || this.host.signal.aborted) return;
+    if (this.stopping || this.host.signal.aborted || this.dialog) return;
     const revision = this.invalidateSelection();
     if (this.tapMode) return;
     const range = this.surface && selectionRange(this.surface.body);
@@ -1123,12 +1234,12 @@ export class ReaderView extends ItemView {
           live.endOffset === endOffset
         );
       };
-      const active = () => {
+      const active = (hosted = false) => {
         return !(
           this.stopping ||
           this.selecting ||
           surface.pointerActive ||
-          this.dialog ||
+          (this.dialog && !hosted) ||
           this.selectionRevision !== revision ||
           this.surface !== surface ||
           !this.current(source, generation) ||
@@ -1137,8 +1248,12 @@ export class ReaderView extends ItemView {
         );
       };
       let pending: PendingSelection;
-      const valid = () => {
-        if (!active() || !currentRange()) return false;
+      const valid = (hosted = false) => {
+        if (!active(hosted)) return false;
+        // A destination modal owns focus/Selection. Its captured source words stay
+        // immutable; modal text selection must not invalidate that source intent.
+        if (hosted && this.dialog) return true;
+        if (!currentRange()) return false;
         // Native selectionchange can itself be queued: check the current text too.
         const live = surface.selection();
         return (
@@ -1170,10 +1285,17 @@ export class ReaderView extends ItemView {
   }
   private async saveSelection(
     pending?: PendingSelection,
-    valid: () => boolean = () => true,
+    valid: (hosted?: boolean) => boolean = () => true,
+    leaving = false,
   ): Promise<void> {
     await this.positionWrite;
-    if (this.tapMode || !valid()) return;
+    const closing = leaving && this.stopping && !!pending && !this.host.signal.aborted;
+    if (
+      this.tapMode ||
+      ((this.stopping || this.articleLifetime.signal.aborted) && !closing) ||
+      !valid()
+    )
+      return;
     const selection = pending?.selection ?? this.surface?.selection(),
       snapshot = this.snapshot;
     if (!selection || !snapshot || this.selecting || this.surface?.pointerActive || this.dialog)
@@ -1182,7 +1304,7 @@ export class ReaderView extends ItemView {
     if (key === this.lastSelection) return;
     if (this.writing) {
       await this.writing;
-      return this.saveSelection(pending, valid);
+      return this.saveSelection(pending, valid, leaving);
     }
     this.assertDisplayed(snapshot, true);
     const displayed = pending?.body ?? this.surface!.displayedBody!;
@@ -1204,8 +1326,8 @@ export class ReaderView extends ItemView {
       if (candidate.from < previous.from + previous.text.length && candidate.to > previous.from)
         body = unmarked;
     }
-    const range = locateSelection(body, selection.quote, selection.before, selection.after);
-    const next = addHighlight(body, range.from, range.to);
+    // No source mark is dispatched until a typed destination has been chosen.
+    locateSelection(body, selection.quote, selection.before, selection.after);
     // Transient paint only: PendingSelection remains immutable text/source authority.
     // Capture after timer/position waits so the selectionchange event has finished.
     const feedbackSurface = this.surface,
@@ -1213,39 +1335,68 @@ export class ReaderView extends ItemView {
       acknowledge =
         !this.stopping && nativeRange ? feedbackSurface?.highlightFeedback(nativeRange) : undefined;
     const superseded = new Error('The selection changed before the highlight was saved.');
-    const promise = this.host.store
-      .annotate(snapshot, (raw) => {
-        if (!valid()) throw superseded;
-        if (!this.current(snapshot, generation))
-          throw new Error('The article changed before the highlight was saved.');
-        this.assertDisplayed(snapshot, true);
-        if (!this.acceptsSource(snapshot, displayed, true))
-          throw new Error('The selected source is no longer current.');
-        return replaceBody(raw, snapshot.body, next);
-      })
-      .catch((error) => {
-        // Expected supersession is a cancelled automatic action, not a failed disk write.
-        if (error !== superseded) throw error;
-      });
+    let edit: HostedHighlight | undefined;
+    const promise = this.withHighlightHost(
+      snapshot,
+      '',
+      { inherit: true, allowDeferred: true, noPicker: leaving, closing },
+      async (base, nodes, createdPaths, validate, authorize) => {
+        const guard = (phase: HighlightCollectionPhase = 'source') => {
+          // Once A's source annotation is saved, a new native selection B must not
+          // abandon A's quote. Provider/lifetime/source/target guards still apply;
+          // B retains its own settled-selection timer and immutable captured text.
+          if (phase === 'source' && !valid(true)) throw superseded;
+          if (!this.current(snapshot, generation))
+            throw new Error('The article changed before the highlight was saved.');
+          this.assertDisplayed(base, true);
+          if (!this.acceptsSource(base, displayed, true))
+            throw new Error('The selected source is no longer current.');
+          validate();
+        };
+        guard();
+        edit = hostSelection(
+          body,
+          selection,
+          nodes.map((node) => node.path),
+        );
+        try {
+          return await this.collectHosted(
+            base,
+            edit,
+            nodes,
+            createdPaths,
+            guard,
+            'quote',
+            displayed,
+          );
+        } catch (cause) {
+          this.offerCollectionRetry(base, edit, nodes, createdPaths, undefined, cause, authorize);
+          throw cause;
+        }
+      },
+    ).catch((error) => {
+      // Expected supersession is a cancelled automatic action, not a failed disk write.
+      if (error !== superseded) throw error;
+    });
     this.writing = promise;
     try {
       const saved = await promise;
-      if (!saved || !this.current(snapshot, generation)) return;
-      this.snapshot = saved;
+      if (!saved || !this.current(snapshot, generation)) {
+        this.lastSelection = key;
+        return;
+      }
       this.clearTapUndo();
-      this.automatic = passages(next).find((item) => item.from === range.from);
+      this.automatic = edit
+        ? this.passageAfterWrite(edit.body, edit.passage, saved.body)
+        : undefined;
       this.lastSelection = key;
-      // Only our own byte-guarded automatic markup may bridge a deferred repaint.
-      // External snapshots, passage edits and arbitrary equal-looking text get no exception.
-      this.ownDeferred = { displayed, saved: saved.body };
-      this.surface?.setBody(next, text(saved.properties.url));
-      if (this.surface?.displayedBody === next) this.ownDeferred = undefined;
+      if (this.surface?.displayedBody === saved.body) this.ownDeferred = undefined;
       this.controls();
       if (
         !this.stopping &&
         this.surface === feedbackSurface &&
-        saved.body === next &&
-        next !== snapshot.body
+        saved.body === edit?.body &&
+        saved.body !== snapshot.body
       )
         acknowledge?.();
     } finally {
@@ -1274,30 +1425,60 @@ export class ReaderView extends ItemView {
       )
         throw new Error('The article changed. Tap the first word again.');
       this.assertDisplayed(base);
-      const mapped = locateSelection(base.body, selection.quote, selection.before, selection.after);
-      const next = addHighlight(base.body, mapped.from, mapped.to);
-      const promise = this.host.store.annotate(base, (raw) => {
-        if (signal.aborted || this.stopping || !this.current(base, generation))
-          throw new Error('The article changed before the highlight could be saved.');
-        this.assertDisplayed(base);
-        return replaceBody(raw, base.body, next);
-      });
+      locateSelection(base.body, selection.quote, selection.before, selection.after);
+      let edit: HostedHighlight | undefined;
+      const promise = this.withHighlightHost(
+        base,
+        '',
+        { inherit: true },
+        async (source, nodes, createdPaths, validate, authorize) => {
+          const guard = () => {
+            if (signal.aborted || this.stopping || !this.current(base, generation))
+              throw new Error('The article changed before the highlight could be saved.');
+            this.assertDisplayed(source);
+            validate();
+          };
+          guard();
+          edit = hostSelection(
+            source.body,
+            selection,
+            nodes.map((node) => node.path),
+          );
+          try {
+            return await this.collectHosted(source, edit, nodes, createdPaths, guard);
+          } catch (cause) {
+            this.offerCollectionRetry(
+              source,
+              edit,
+              nodes,
+              createdPaths,
+              undefined,
+              cause,
+              authorize,
+            );
+            throw cause;
+          }
+        },
+      );
       this.writing = promise;
       try {
         const saved = await promise;
-        if (signal.aborted || !this.current(base, generation) || this.stopping) return;
-        this.snapshot = saved;
+        if (!saved || signal.aborted || !this.current(base, generation) || this.stopping) return;
         this.automatic = undefined;
         this.lastSelection = '';
         this.ownDeferred = undefined;
         this.clearTapUndo();
-        const passage = passages(next).find((item) => item.from === mapped.from);
-        if (
-          saved.body === next &&
-          passage &&
-          changePassage(next, passage, 'remove') === base.body
-        ) {
-          const receipt = { snapshot: saved, before: base.body, passage };
+        const passage = edit
+          ? this.passageAfterWrite(edit.body, edit.passage, saved.body)
+          : undefined;
+        if (passage) {
+          // Source-local Undo retains the paragraph anchor and remembered hosts.
+          // Destination quotations are user-owned snapshots and are never reversed.
+          const receipt = {
+            snapshot: saved,
+            before: changePassage(saved.body, passage, 'remove'),
+            passage,
+          };
           this.tapUndo = receipt;
           this.tapUndoUntil = Date.now() + 6000;
           this.tapUndoTimer = setTimeout(() => {
@@ -1306,8 +1487,7 @@ export class ReaderView extends ItemView {
         }
         this.surface?.setBody(saved.body, text(saved.properties.url));
         this.tapHighlighter?.setUndoAvailable(!!this.tapUndo);
-        const selected = this.passageAfterWrite(next, passage, saved.body);
-        if (selected && this.surface?.displayedBody === saved.body) this.passageMenu(selected);
+        if (passage && this.surface?.displayedBody === saved.body) this.passageMenu(passage);
         this.controls();
       } finally {
         if (this.writing === promise) this.writing = undefined;
@@ -1405,6 +1585,9 @@ export class ReaderView extends ItemView {
           }
           if (this.snapshot === before) {
             this.adoptSnapshot(saved);
+            const request = this.nodeCreation;
+            if (before && request?.source.file === before.file && request.source.raw === before.raw)
+              request.source = saved;
             this.surface?.setBody(saved.body, text(saved.properties.url));
             this.syncPresentation();
           } else {
@@ -1419,7 +1602,9 @@ export class ReaderView extends ItemView {
   private async prepareToLeave(pending?: PendingSelection): Promise<void> {
     clearTimeout(this.selectionTimer);
     await this.positionWrite;
-    await this.saveSelection(pending);
+    // Leaving can finish a known sole typed default, but must never start a new
+    // picker after the navigation/close intent has already cancelled modal work.
+    await this.saveSelection(pending, () => true, true);
     await this.writing;
     this.surface?.flush();
     await this.positionWrite;
@@ -1540,253 +1725,215 @@ export class ReaderView extends ItemView {
         void this.host.ingestion.acquire(moved.path).catch((error) => this.error(error));
     });
   }
-  private topics(): Promise<void> {
-    this.cancelNodeCreation();
-    return this.operation(async () => {
-      await this.prepareToLeave();
-      const snapshot = this.snapshot,
-        generation = this.generation;
-      if (!snapshot || this.stopping) return;
-      const signal = this.articleLifetime.signal;
-      const files = this.app.vault
-        .getMarkdownFiles()
-        .filter((file) => this.app.metadataCache.getFileCache(file)?.frontmatter?.type === 'topic');
-      this.assertDisplayed(snapshot, true);
-      let expectedBody = snapshot.body;
-      let stored = snapshot.properties.topics;
-      if (stored !== undefined && !Array.isArray(stored))
-        throw new Error(
-          'Topics contains unrecognized data. Edit it in Markdown; Reader has not changed it.',
-        );
-      let originals = (stored ?? []).map((value) => {
-        const link = linkPath(text(value));
-        const file = link
-          ? this.app.metadataCache.getFirstLinkpathDest(link, snapshot.file.path)
-          : null;
-        if (!link || !file || !files.includes(file))
-          throw new Error(
-            'An existing topic is unresolved or is not a topic note. Edit it in Markdown; Reader has not changed it.',
-          );
-        return { value, link, file, path: file.path };
+  private refreshArticleTopics(): void {
+    const snapshot = this.snapshot,
+      surface = this.surface;
+    if (!snapshot || !surface || this.stopping || this.lifetime.signal.aborted) return;
+    const stored = snapshot.properties.topics,
+      values = Array.isArray(stored) ? stored : stored === undefined ? [] : [stored],
+      topics: { target?: string; label: string }[] = [],
+      seen = new Set<string>();
+    for (const value of values) {
+      const raw = text(value),
+        path = linkPath(raw);
+      if (!path) continue;
+      let file: TFile | null = null;
+      try {
+        file = this.app.metadataCache.getFirstLinkpathDest(path, snapshot.path);
+      } catch {
+        // Preserve valid authored topic labels even if native resolution is unavailable.
+      }
+      if (file === snapshot.file) continue;
+      const key = file?.path ?? path;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const alias = /\|([^\]]*)\]\]$/.exec(raw)?.[1];
+      topics.push({
+        target: file?.path,
+        label: alias || file?.basename || path.replace(/\.md$/, '').split('/').pop() || path,
       });
-      const save = async (selected: string[], validate = () => {}) => {
-        if (signal.aborted || !this.current(snapshot, generation))
-          throw new Error('The article changed.');
-        await this.positionWrite;
-        if (signal.aborted || !this.current(snapshot, generation))
-          throw new Error('The article changed; reopen Topics.');
-        const base = this.snapshot!;
+    }
+    surface.setTopics(topics);
+  }
+  private relatedNodes(snapshot: Snapshot<TFile>, api: NodesApi): NodeResult[] {
+    const stored = snapshot.properties.topics;
+    const values = Array.isArray(stored) ? stored : stored === undefined ? [] : [stored];
+    const types = api.listTypes(),
+      nodes = new Map<string, NodeResult>();
+    for (const value of values) {
+      const link = linkPath(text(value));
+      const file = link ? this.app.metadataCache.getFirstLinkpathDest(link, snapshot.path) : null;
+      const node = file && file !== snapshot.file ? api.getNode(file.path) : null;
+      if (node && node.path === file!.path && hasNodeClass(node, types)) nodes.set(node.path, node);
+    }
+    return [...nodes.values()];
+  }
+  /** Snapshot public membership and file identity, including unchecked originals. */
+  private nodeAuthority(
+    api: NodesApi | undefined,
+    nodes: readonly NodeResult[],
+  ): (paths?: readonly string[]) => void {
+    if (!api) throw new Error('Fileclass Inline changed. Reopen the note picker.');
+    const types = new Set(api.listTypes().map((type) => type.type));
+    const originals = nodes.map((node) => ({
+      path: node.path,
+      file: this.app.vault.getAbstractFileByPath(node.path),
+      classes: node.classes.filter((type) => types.has(type)),
+    }));
+    return (paths) => {
+      if (nodesApi(this.app) !== api)
+        throw new Error('Fileclass Inline changed. Reopen the note picker.');
+      const registered = new Set(api.listTypes().map((type) => type.type));
+      if (paths?.some((path) => !originals.some((node) => node.path === path)))
+        throw new Error('The original destination is no longer known. Reopen the note picker.');
+      for (const original of originals) {
+        if (paths && !paths.includes(original.path)) continue;
+        const current = api.getNode(original.path);
         if (
-          base.body !== expectedBody ||
-          JSON.stringify(base.properties.topics) !== JSON.stringify(stored)
+          !(original.file instanceof TFile) ||
+          original.file.path !== original.path ||
+          this.app.vault.getAbstractFileByPath(original.path) !== original.file ||
+          !current ||
+          current.path !== original.path ||
+          !Array.isArray(current.classes) ||
+          !original.classes.some((type) => registered.has(type) && current.classes.includes(type))
         )
           throw new Error(
-            'The article or topics changed while the picker was open. Reopen Topics.',
+            'The typed destination changed or lost its Fileclass membership. Reopen its picker.',
           );
-        const targets = selected.map((path) => ({
-          path,
-          file: files.find((file) => file.path === path),
-        }));
-        const saved = await this.host.store.annotate(base, (raw) => {
-          if (signal.aborted || !this.current(snapshot, generation))
-            throw new Error('The article changed; reopen Topics.');
-          this.assertDisplayed(base, true);
-          validate();
-          for (const { path, file } of targets) {
-            if (
-              !file ||
-              file.path !== path ||
-              this.host.store.vault.file(path) !== file ||
-              this.app.metadataCache.getFileCache(file)?.frontmatter?.type !== 'topic'
-            )
-              throw new Error('A topic changed; reopen the picker.');
-          }
-          const retained = originals.filter((original) => selected.includes(original.path));
-          for (const original of retained) {
-            if (
-              this.app.metadataCache.getFirstLinkpathDest(original.link, snapshot.file.path) !==
-              original.file
-            )
-              throw new Error('An existing topic link changed meaning. Reopen Topics.');
-          }
-          const values = [
-            ...retained.map((original) => original.value),
-            ...selected
-              .filter((path) => !retained.some((original) => original.path === path))
-              .map(vaultLink),
-          ];
-          return patchProperties(raw, { topics: values.length ? values : undefined });
-        });
-        if (!this.current(snapshot, generation) || this.stopping) return;
-        this.adoptSnapshot(saved);
-        if (saved.body !== base.body) this.surface?.setBody(saved.body, text(saved.properties.url));
-        expectedBody = saved.body;
-        stored = saved.properties.topics;
-        originals = ((stored as string[] | undefined) ?? []).map((value) => {
-          const link = linkPath(value)!;
-          const file = this.app.metadataCache.getFirstLinkpathDest(link, saved.path)!;
-          return { value, link, file, path: file.path };
-        });
-        this.controls();
-        return saved;
-      };
-      let api: NodesApi | undefined;
-      let capable = false;
-      let disabledReason =
-        'Add topic requires Fileclass Inline with linked topic creation support.';
-      try {
+      }
+    };
+  }
+  private topics(): Promise<void> {
+    this.cancelNodeCreation();
+    const epoch = this.nodeCreationEpoch;
+    return this.operation(async () => {
+      await this.prepareToLeave();
+      const initial = this.snapshot,
+        generation = this.generation;
+      if (!initial || this.stopping || epoch !== this.nodeCreationEpoch) return;
+      let snapshot = initial;
+      this.assertDisplayed(snapshot, true);
+      const signal = this.articleLifetime.signal,
         api = nodesApi(this.app);
-        if (api?.createNodeForLink) {
-          capable = api.listTypes().some(({ type }) => type === 'topic');
-          disabledReason = 'Add topic requires an exact topic class in Fileclass Inline.';
-        }
-      } catch {
-        disabledReason =
-          'Fileclass Inline topic creation is unavailable. Existing topics can still be selected.';
-      }
-      let creationWork: Promise<void> | undefined;
-      const assignment = new AbortController();
-      this.topicAssignment = assignment;
-      const abortAssignment = () => assignment.abort();
-      for (const lifetime of [signal, this.host.signal]) {
-        if (lifetime.aborted) abortAssignment();
-        else lifetime.addEventListener('abort', abortAssignment, { once: true });
-      }
-      try {
-        const selected = await chooseTopics(
-          this.app,
-          files,
-          new Set(originals.map((original) => original.path)),
-          assignment.signal,
-          {
-            disabledReason,
-            create: capable
-              ? (modalSignal, added, suggestedTitle) => {
-                  creationWork = this.createArticleTopic(
-                    api!,
-                    modalSignal,
-                    async (node, validate) => {
-                      const file = this.host.store.vault.file(node.path);
-                      if (
-                        !file ||
-                        readDocument(await this.host.store.vault.read(file)).properties.type !==
-                          'topic'
-                      )
-                        throw new Error(
-                          'The created note must have exact type: topic. Configure the Fileclass binding; Reader has not changed it.',
-                        );
-                      validate();
-                      if (!files.includes(file)) files.push(file);
-                      const saved = await save(
-                        [...new Set([...originals.map((original) => original.path), file.path])],
-                        validate,
-                      );
-                      if (!saved) throw new Error('The topic link was not committed.');
-                      added(file);
-                      return saved;
-                    },
-                    suggestedTitle,
-                  );
-                  return creationWork;
-                }
-              : undefined,
-          },
-          async (draft) => {
-            if (assignment.signal.aborted) throw new Error('The article changed; reopen Topics.');
-            const saved = await save(draft);
-            if (!saved) throw new Error('The topic link was not committed.');
-          },
+      if (!api)
+        throw new Error(
+          'Editing related notes requires Fileclass Inline public Nodes API v2. Existing topic filters remain available.',
         );
-        // The modal can close while the provider is running. Drain our dispatched write,
-        // not the provider: createArticleTopic races cancellation itself.
-        await creationWork?.catch(() => {}); // The modal already displayed creation failures.
-        if (selected === null || signal.aborted || !this.current(snapshot, generation)) return;
-      } finally {
-        for (const lifetime of [signal, this.host.signal])
-          lifetime.removeEventListener('abort', abortAssignment);
-        if (this.topicAssignment === assignment) this.topicAssignment = undefined;
+      let selectedPaths = this.relatedNodes(snapshot, api).map((node) => node.path);
+      let createdOnce = false;
+      const alive = () =>
+        !signal.aborted &&
+        !this.lifetime.signal.aborted &&
+        !this.host.signal.aborted &&
+        !this.stopping &&
+        epoch === this.nodeCreationEpoch &&
+        this.current(snapshot, generation) &&
+        this.snapshot?.body === snapshot.body;
+      const active = () => alive() && nodesApi(this.app) === api;
+      while (active()) {
+        const base = this.snapshot!,
+          originals = this.relatedNodes(base, api),
+          baseline = originals.map((node) => node.path),
+          validateOriginals = this.nodeAuthority(api, originals);
+        let created = false,
+          attempted = false;
+        try {
+          await this.withHighlightHost(
+            base,
+            '',
+            {
+              title: 'Related notes',
+              multiple: true,
+              selectedPaths,
+              minSelection: 0,
+              actionLabel: 'Apply',
+              allowCreate: !createdOnce,
+              allowDeferred: true,
+              epoch,
+              onSelected: (nodes) => {
+                selectedPaths = nodes.map((node) => node.path);
+              },
+              onCreateAttempt: (nodes) => {
+                createdOnce = true;
+                attempted = true;
+                selectedPaths = nodes.map((node) => node.path);
+              },
+            },
+            async (source, nodes, createdPaths, validate) => {
+              const guard = () => {
+                if (!active()) throw new Error('The article changed. Reopen Related notes.');
+                this.assertDisplayed(source, true);
+                validate();
+                validateOriginals();
+              };
+              guard();
+              // Only the created note's link is durable before completion. Other
+              // checked/unchecked choices remain a draft until an explicit Apply.
+              const paths = createdPaths.length
+                ? [...new Set([...baseline, ...createdPaths])]
+                : nodes.map((node) => node.path);
+              const saved = await this.host.store.setRelatedNodes(source, paths, baseline, guard);
+              if (this.current(snapshot, generation) && !this.stopping) {
+                this.adoptSnapshot(saved);
+                // Advance only from this guarded write's receipt, never arbitrary
+                // reread bytes. A native retention move may legitimately rewrite links.
+                snapshot = saved;
+                if (saved.body !== source.body)
+                  this.surface?.setBody(saved.body, text(saved.properties.url));
+                this.controls();
+              }
+              created = createdPaths.length > 0;
+              return saved;
+            },
+          );
+          if (!created && !attempted) return;
+        } catch (cause) {
+          if (!alive()) return;
+          this.error(cause);
+          if (!active()) return;
+        }
+        await this.positionWrite;
+        if (!active()) return;
+        // Reopen after any settled creation attempt, including provider Cancel,
+        // null-without-callback, or failure. Keep the draft, never auto-retry a
+        // write, adopt arbitrary bytes, or allow a second creation attempt.
+        const known = this.snapshot;
+        if (!known || !this.acceptsSource(known, this.surface?.displayedBody, true)) return;
+        try {
+          const current = await this.host.store.read(known.path);
+          if (
+            !active() ||
+            this.snapshot !== known ||
+            current.file !== known.file ||
+            current.raw !== known.raw
+          )
+            return;
+        } catch {
+          return;
+        }
       }
     });
   }
-  private async createArticleTopic(
-    api: NodesApi,
-    modalSignal: AbortSignal,
-    commit: (node: NodeResult, validate: () => void) => Promise<Snapshot<TFile>>,
-    suggestedTitle?: string,
-  ): Promise<void> {
-    const source = this.snapshot;
-    if (!source) throw new Error('The article is no longer open.');
-    this.dialog = true;
-    const request = { controller: new AbortController(), source, writing: false };
-    this.nodeCreation = request;
-    const signals = [modalSignal, this.articleLifetime.signal, this.host.signal];
-    const abort = () => request.controller.abort();
-    for (const signal of signals) {
-      if (signal.aborted) abort();
-      else signal.addEventListener('abort', abort, { once: true });
-    }
-    let cancel!: () => void;
-    const cancelled = new Promise<void>((resolve) => {
-      cancel = resolve;
-      if (request.controller.signal.aborted) cancel();
-      else request.controller.signal.addEventListener('abort', cancel, { once: true });
-    });
-    let accepting = true,
-      attempted = false;
-    let pending: Promise<void> | undefined;
-    const check = () => {
-      if (!accepting || request.controller.signal.aborted)
-        throw new Error('Topic creation was cancelled or has finished.');
-      if (nodesApi(this.app) !== api || !api.listTypes().some(({ type }) => type === 'topic'))
-        throw new Error('Fileclass topic creation changed. Reopen Topics.');
-    };
-    const link = (node: NodeResult): Promise<void> => {
-      const run = async () => {
-        check();
-        if (attempted) throw new Error('The topic creation callback already ran.');
-        attempted = true;
-        const target = this.targetGuard(node.path, api, 'topic');
-        request.writing = true;
-        try {
-          request.source = await commit(node, () => {
-            check();
-            target();
-          });
-        } finally {
-          request.writing = false;
-        }
-        await this.checkNodeCreation();
-        check();
-      };
-      const result = run();
-      if (!pending) {
-        pending = result;
-        void pending.catch(() => {});
-      }
-      return result;
-    };
-    try {
-      check();
-      await Promise.race([
-        api.createNodeForLink!(
-          {
-            type: 'topic',
-            suggestedTitle,
-            sourcePath: source.path,
-            signal: request.controller.signal,
-          },
-          link,
-        ),
-        cancelled,
-      ]);
-    } finally {
-      accepting = false;
-      for (const signal of signals) signal.removeEventListener('abort', abort);
-      request.controller.signal.removeEventListener('abort', cancel);
-      if (this.nodeCreation === request) this.nodeCreation = undefined;
-      this.dialog = false;
-      await pending;
-    }
+  private topicClicked(event: MouseEvent): boolean {
+    const link =
+      event.target instanceof Element
+        ? event.target.closest<HTMLAnchorElement>('a[data-reader-topic]')
+        : null;
+    if (
+      !link ||
+      !this.surface?.topics.contains(link) ||
+      !link.dataset.readerTopic ||
+      (event.button !== 0 && event.button !== 1)
+    )
+      return false;
+    event.preventDefault();
+    event.stopPropagation();
+    void this.openLinked(
+      link.dataset.readerTopic,
+      event.button === 1 || event.ctrlKey || event.metaKey,
+    ).catch((error) => this.error(error));
+    return true;
   }
   private async openLinked(target: string, newLeaf = false): Promise<void> {
     const snapshot = this.snapshot,
@@ -1797,22 +1944,486 @@ export class ReaderView extends ItemView {
     if (!this.stopping && this.current(snapshot, generation))
       await openExistingNote(this.app, target, this.snapshot!.file.path, newLeaf);
   }
-  private targetGuard(path: string, api?: NodesApi, type?: string): () => void {
-    const file = this.host.store.vault.file(path);
-    return () => {
-      if (!file || file.path !== path || this.host.store.vault.file(path) !== file)
-        throw new Error('The selected note changed or was deleted. Reopen the picker.');
-      if (
-        api &&
-        (nodesApi(this.app) !== api ||
-          type === undefined ||
-          !api.getNode(path)?.classes.includes(type))
-      )
-        throw new Error('The selected node or Nodes API changed. Reopen the picker.');
+  private async collectHosted(
+    source: Snapshot<TFile>,
+    edit: Pick<HostedHighlight, 'body' | 'quoteMarkdown' | 'blockId'>,
+    nodes: readonly NodeResult[],
+    createdPaths: readonly string[],
+    validate: (phase: HighlightCollectionPhase) => void,
+    mode: 'quote' | 'mention' = 'quote',
+    displayed?: string,
+    removal?: HighlightRemoval,
+  ): Promise<Snapshot<TFile>> {
+    const generation = this.generation;
+    const guard = (phase: HighlightCollectionPhase) => {
+      validate(phase);
+      removal?.validate(removal.paths);
     };
+    const adopt = (saved: Snapshot<TFile>) => {
+      if (!this.current(source, generation) || this.stopping) return;
+      this.adoptSnapshot(saved);
+      if (displayed !== undefined) this.ownDeferred = { displayed, saved: saved.body };
+      this.surface?.setBody(saved.body, text(saved.properties.url));
+      if (this.surface?.displayedBody === saved.body) this.ownDeferred = undefined;
+      this.controls();
+    };
+    try {
+      const saved =
+        nodes.length === 1 && !removal?.paths.length
+          ? await this.host.store.collectHighlight(source, edit, nodes[0].path, {
+              guard,
+              created: createdPaths.includes(nodes[0].path),
+              ...(mode === 'mention' ? { mode: 'mention' as const } : {}),
+            })
+          : nodes.length || removal?.paths.length
+            ? await this.host.store.collectHighlightMany(
+                source,
+                edit,
+                nodes.map((node) => node.path),
+                {
+                  guard,
+                  createdPaths,
+                  ...(removal
+                    ? {
+                        removedDestinationPaths: removal.paths,
+                        previousQuote: removal.previousQuote,
+                      }
+                    : {}),
+                },
+              )
+            : await this.host.store.annotate(source, (raw) => {
+                guard('source');
+                return replaceBody(raw, source.body, edit.body);
+              });
+      adopt(saved);
+      return saved;
+    } catch (error) {
+      // A source-first multi-file write can retain/save the article before a target
+      // fails. Show that actual saved state and report the partial failure explicitly.
+      if (error instanceof PartialCollectionError && error.snapshot?.file === source.file)
+        adopt(error.snapshot as Snapshot<TFile>);
+      throw error;
+    }
+  }
+  /** Reader owns destination choice; Fileclass owns typed creation and required completion. */
+  private async withHighlightHost(
+    source: Snapshot<TFile>,
+    title: string,
+    options: {
+      inherit?: boolean;
+      node?: NodeResult;
+      nodes?: NodeResult[];
+      directNodes?: NodeResult[];
+      includeNodes?: NodeResult[];
+      title?: string;
+      multiple?: boolean;
+      selectedPaths?: string[];
+      minSelection?: number;
+      actionLabel?: string;
+      allowCreate?: boolean;
+      onCreateAttempt?: (existing: NodeResult[]) => void;
+      onSelected?: (nodes: NodeResult[]) => void;
+      onPickFromArticle?: (nodes: NodeResult[]) => void;
+      allowDeferred?: boolean;
+      noPicker?: boolean;
+      closing?: boolean;
+      epoch?: number;
+    },
+    commit: (
+      source: Snapshot<TFile>,
+      nodes: NodeResult[],
+      createdPaths: string[],
+      validate: () => void,
+      authorize: (paths?: readonly string[]) => void,
+    ) => Promise<Snapshot<TFile>>,
+  ): Promise<Snapshot<TFile> | undefined> {
+    const epoch = options.epoch ?? this.nodeCreationEpoch;
+    await this.positionWrite;
+    if (epoch !== this.nodeCreationEpoch) return;
+    const snapshot = this.snapshot,
+      generation = this.generation,
+      signal = options.closing ? this.lifetime.signal : this.articleLifetime.signal;
+    if (
+      signal.aborted ||
+      (this.stopping && !options.closing) ||
+      !snapshot ||
+      snapshot.file !== source.file ||
+      snapshot.body !== source.body
+    )
+      return;
+    this.assertDisplayed(snapshot, options.allowDeferred);
+    const api = nodesApi(this.app);
+    if (!api) {
+      if (options.noPicker) return;
+      throw new Error(
+        'Hosted highlights and related notes require Fileclass Inline public Nodes API v2. Existing highlights remain readable and editable.',
+      );
+    }
+    const types = api.listTypes(),
+      minimum = options.minSelection ?? 1;
+    if (!types.length && minimum > 0)
+      throw new Error(
+        'No Fileclass destinations are available. Configure a typed note before highlighting.',
+      );
+    const request = { controller: new AbortController(), source: snapshot, writing: false };
+    this.nodeCreation = request;
+    const abort = () => request.controller.abort();
+    for (const lifetime of [signal, this.host.signal]) {
+      if (lifetime.aborted) abort();
+      else lifetime.addEventListener('abort', abort, { once: true });
+    }
+    let settleCancellation!: () => void;
+    const cancelled = new Promise<null>((resolve) => {
+      settleCancellation = () => resolve(null);
+      if (request.controller.signal.aborted) settleCancellation();
+      else request.controller.signal.addEventListener('abort', settleCancellation, { once: true });
+    });
+    let accepting = true,
+      attempted = false;
+    let saved: Snapshot<TFile> | undefined, pendingLink: Promise<void> | undefined;
+    const check = () => {
+      if (!accepting)
+        throw new Error(
+          'The highlight destination request has finished; its callback was cancelled.',
+        );
+      if (request.controller.signal.aborted)
+        throw new Error('The highlight destination request was cancelled.');
+      if (epoch !== this.nodeCreationEpoch)
+        throw new Error('A newer Reader action cancelled the highlight destination request.');
+      if (!this.current(snapshot, generation) || (this.stopping && !options.closing))
+        throw new Error('The article changed or the highlight destination request was cancelled.');
+      if (nodesApi(this.app) !== api)
+        throw new Error('Fileclass Inline changed. Choose the highlight destination again.');
+    };
+    const selection = (nodes: NodeResult[], required?: { path: string; type: string }) => {
+      const selected = [...new Map(nodes.map((node) => [node?.path, node])).values()].map(
+        (node) => {
+          if (
+            !node ||
+            !hasNodeClass(node, types) ||
+            (required?.path === node.path && !node.classes.includes(required.type))
+          )
+            throw new Error(
+              'The selected note must belong to the chosen Fileclass. Reader has not reclassified it.',
+            );
+          return { ...node, classes: [...node.classes], aliases: [...node.aliases] };
+        },
+      );
+      const targets = selected.map((node) => ({
+        path: node.path,
+        file: this.host.store.vault.file(node.path),
+        classes:
+          required?.path === node.path
+            ? [required.type]
+            : node.classes.filter((type) => types.some((choice) => choice.type === type)),
+      }));
+      // Retain only public provider/file/class authority for an explicit retry.
+      // The original request's check() must expire, but its target identities and
+      // a newly created note's requested Fileclass must never be reacquired.
+      const authorize = (paths?: readonly string[]) => {
+        if (nodesApi(this.app) !== api)
+          throw new Error('Fileclass Inline changed. Choose the highlight destination again.');
+        if (paths?.some((path) => !targets.some((target) => target.path === path)))
+          throw new Error('The original destination is no longer known. Reopen the note picker.');
+        const currentTypes = api.listTypes();
+        for (const { path, file, classes } of targets) {
+          if (paths && !paths.includes(path)) continue;
+          const current = api.getNode(path);
+          if (
+            !file ||
+            file === source.file ||
+            file.path !== path ||
+            this.host.store.vault.file(path) !== file ||
+            !current ||
+            current.path !== path ||
+            !hasNodeClass(current, currentTypes) ||
+            !classes.some(
+              (type) =>
+                current.classes.includes(type) &&
+                currentTypes.some((choice) => choice.type === type),
+            )
+          )
+            throw new Error('The typed destination changed or was deleted. Choose it again.');
+        }
+      };
+      const validate = () => {
+        check();
+        authorize();
+      };
+      validate();
+      return { selected, validate, authorize };
+    };
+    const link = (
+      nodes: NodeResult[],
+      createdPaths: string[] = [],
+      required?: { path: string; type: string },
+    ): Promise<void> => {
+      const result = (async () => {
+        check();
+        if (attempted) throw new Error('The highlight creation callback already ran.');
+        attempted = true;
+        options.onSelected?.(nodes);
+        const { selected, validate, authorize } = selection(
+          [...(options.includeNodes ?? []), ...nodes],
+          required,
+        );
+        if (selected.length < minimum || (options.multiple === false && selected.length !== 1))
+          throw new Error('Choose at least one typed destination for a new highlight.');
+        request.writing = true;
+        try {
+          saved = await commit(request.source, selected, createdPaths, validate, authorize);
+          request.source = saved;
+        } finally {
+          request.writing = false;
+        }
+        await this.checkNodeCreation();
+        check();
+      })();
+      if (!pendingLink) pendingLink = result;
+      void result.catch(() => {});
+      return result;
+    };
+    try {
+      check();
+      let direct = options.directNodes ?? (options.node ? [options.node] : undefined);
+      const preferred = options.inherit ? this.relatedNodes(snapshot, api) : [];
+      if (preferred.length === 1 && !direct) direct = preferred;
+      if (!direct && options.noPicker) return;
+      // Only an actual modal owns focus/Selection. Inherited sole defaults retain
+      // the live native range check through the final source annotation boundary.
+      if (!direct) this.dialog = true;
+      const fixedChoice =
+        !direct && options.nodes
+          ? choose(
+              this.app,
+              options.title ?? 'Choose highlighted destination',
+              options.nodes,
+              (node) => node.title,
+              request.controller.signal,
+            ).then((node) => (node ? { kind: 'existing' as const, node } : null))
+          : undefined;
+      const choice = direct
+        ? { kind: 'existing-many' as const, nodes: direct }
+        : await Promise.race([
+            fixedChoice ??
+              chooseHighlightHost(this.app, api, {
+                title: options.title ?? 'Add highlight to notes',
+                query: title,
+                preferredPaths: preferred.map((node) => node.path),
+                multiple: options.multiple !== false,
+                selectedPaths: [...(options.selectedPaths ?? [])],
+                minSelection: minimum,
+                actionLabel: options.actionLabel ?? 'Add highlight',
+                allowCreate: options.allowCreate,
+                allowPickFromArticle: !!options.onPickFromArticle,
+                signal: request.controller.signal,
+              }),
+            cancelled,
+          ]);
+      if (!choice || request.controller.signal.aborted) return;
+      check();
+      if (choice.kind === 'existing') await link([choice.node]);
+      else if (choice.kind === 'existing-many') await link(choice.nodes);
+      else if (choice.kind === 'pick-in-article') {
+        if (!options.onPickFromArticle)
+          throw new Error('Choose from article is unavailable for this action.');
+        options.onPickFromArticle(selection(choice.nodes).selected);
+      } else {
+        if (options.allowCreate === false)
+          throw new Error('Only one new note may be created in this selection flow.');
+        if (!api.createNodeForLink)
+          throw new Error(
+            'Creating a typed destination requires Fileclass Inline createNodeForLink support. Choose an existing typed note instead.',
+          );
+        if (!types.some(({ type }) => type === choice.type))
+          throw new Error('The chosen Fileclass is no longer available.');
+        const existing = selection(choice.existingNodes ?? []).selected;
+        options.onCreateAttempt?.(existing);
+        // The single-use durable callback precedes required completion. Never
+        // commit from the provider return value or remove a created note.
+        await Promise.race([
+          api.createNodeForLink(
+            {
+              type: choice.type,
+              suggestedTitle: choice.title,
+              sourcePath: request.source.path,
+              signal: request.controller.signal,
+            },
+            (created) =>
+              link([...existing, created], [created.path], {
+                path: created.path,
+                type: choice.type,
+              }),
+          ),
+          cancelled,
+        ]);
+      }
+      return saved;
+    } finally {
+      accepting = false;
+      signal.removeEventListener('abort', abort);
+      this.host.signal.removeEventListener('abort', abort);
+      request.controller.signal.removeEventListener('abort', settleCancellation);
+      if (this.nodeCreation === request) {
+        this.nodeCreation = undefined;
+        this.dialog = false;
+      }
+      await pendingLink; // Drain dispatched writes, never an uncooperative provider.
+    }
+  }
+  private clearSend(): void {
+    this.sendSource = undefined;
+    this.surface?.body.classList.remove('reader-send-active');
+    for (const mark of this.surface?.body.querySelectorAll('.reader-send-source') ?? [])
+      mark.classList.remove('reader-send-source');
+  }
+  private armSend(
+    passage: Passage,
+    draft: NodeResult[] = [],
+    mode: 'selected' | 'explicit' = 'explicit',
+  ): void {
+    const snapshot = this.snapshot;
+    if (!snapshot) return;
+    this.assertDisplayed(snapshot);
+    this.clearSend();
+    const generation = this.generation;
+    if (!this.tapHighlighter?.active) this.tapHighlighter?.setActive(true);
+    this.sendSource = { snapshot, passage, generation, draft, mode };
+    this.surface?.body.classList.add('reader-send-active');
+    const index = passages(snapshot.body).findIndex(
+      (item) => item.from === passage.from && item.to === passage.to,
+    );
+    const marks = this.surface?.body.querySelectorAll<HTMLElement>('mark') ?? [];
+    for (const [ordinal, mark] of [...marks].entries())
+      if (
+        mark.dataset.readerPassage === String(index) ||
+        (!mark.hasAttribute('data-reader-passage') && ordinal === index)
+      )
+        mark.classList.add('reader-send-source');
+    if (mode === 'selected') return;
+    this.passageActions = [
+      {
+        id: 'cancel-send',
+        label: 'Cancel choosing from article',
+        icon: 'x',
+        run: () => {
+          this.cancelNodeCreation();
+          if (this.current(snapshot, generation) && this.snapshot?.body === snapshot.body)
+            this.passageMenu(passage);
+        },
+      },
+    ];
+    this.tapHighlighter?.refreshActions();
+  }
+  private typedDestinations(paths: readonly string[]): NodeResult[] {
+    const source = this.snapshot,
+      api = nodesApi(this.app);
+    if (!source || !api)
+      throw new Error('Sending highlights requires Fileclass Inline public Nodes API v2.');
+    const types = api.listTypes(),
+      nodes: NodeResult[] = [];
+    for (const target of paths) {
+      const safe = nativeLinkPath(target, false);
+      const file = safe
+        ? this.app.metadataCache.getFirstLinkpathDest(parseLinktext(safe).path, source.path)
+        : undefined;
+      const node = file ? api.getNode(file.path) : null;
+      if (node && hasNodeClass(node, types) && !nodes.some((item) => item.path === node.path))
+        nodes.push(node);
+    }
+    return nodes;
+  }
+  private targetClicked(event: MouseEvent): boolean {
+    const element = event.target instanceof Element ? event.target : undefined;
+    const link = element?.closest<HTMLAnchorElement>('a.internal-link[href]');
+    if (!link || !this.surface?.body.contains(link) || this.surface.selection()) return false;
+    const reference = link.closest('.reader-reference-group');
+    if (!reference && this.sendSource?.mode !== 'explicit') return false;
+    // A highlighted link chooses that highlight's hosts; a pill chooses its exact node.
+    if (this.sendSource && !reference && element?.closest('mark')) return false;
+    event.preventDefault();
+    try {
+      const target = nativeLinkPath(link.getAttribute('href')!);
+      if (!target) throw new Error('This is not a safe vault-note destination.');
+      if (event.ctrlKey || event.metaKey || event.button === 1) {
+        void this.openLinked(target, true).catch((error) => this.error(error));
+      } else if (this.sendSource) {
+        const nodes = this.typedDestinations([target]);
+        if (nodes.length !== 1)
+          throw new Error(
+            'Choose a typed Fileclass note. This link is not an eligible destination.',
+          );
+        this.sendToNodes(nodes);
+      } else {
+        const source = this.snapshot;
+        if (!source) throw new Error('The article is no longer open.');
+        this.assertDisplayed(source);
+        const index = reference?.getAttribute('data-reader-passage');
+        const passage =
+          index && /^\d+$/.test(index) ? passages(source.body)[Number(index)] : undefined;
+        if (!passage)
+          throw new Error(
+            'This reference cannot be matched safely to a highlight. Open Markdown to edit it.',
+          );
+        this.passageMenu(passage, event);
+        const edit = this.passageActions?.find((action) => action.id === 'link-note');
+        if (!edit || edit.disabled)
+          throw new Error(
+            'Editing highlight destinations requires Fileclass Inline public Nodes API v2.',
+          );
+        void Promise.resolve(edit.run()).catch((error) => this.error(error));
+      }
+    } catch (error) {
+      this.error(error);
+    }
+    return true;
+  }
+  private sendToPassage(passage: Passage): void {
+    try {
+      const hosts = this.snapshot ? passageHosts(this.snapshot.body, passage) : [];
+      // An original inline note link is not another host when an explicit source
+      // citation records this excerpt's actual destinations. Preserve that link;
+      // use the legacy wrapped target only when no hosted association exists.
+      const nodes = this.typedDestinations(
+        hosts.length ? hosts : passage.target ? [passage.target] : [],
+      );
+      if (!nodes.length)
+        throw new Error(
+          'This highlight has no typed destination. Click a linked highlight or a typed node instead.',
+        );
+      this.sendToNodes(nodes);
+    } catch (error) {
+      this.error(error);
+    }
+  }
+  private sendToNodes(nodes: NodeResult[]): void {
+    const send = this.sendSource;
+    if (!send) return;
+    this.cancelNodeCreation();
+    const epoch = this.nodeCreationEpoch,
+      intent = this.passageIntent;
+    void this.operation(async () => {
+      if (epoch !== this.nodeCreationEpoch) return;
+      if (
+        !this.current(send.snapshot, send.generation) ||
+        this.snapshot?.body !== send.snapshot.body
+      )
+        throw new Error('The source highlight changed. Choose its destinations again.');
+      await this.editPassage(send.snapshot, send.passage, 'highlight', epoch, intent, {
+        ...(nodes.length === 1 ? { direct: nodes } : { limited: nodes }),
+        include: send.mode === 'explicit' ? send.draft : [],
+        addOnly: send.mode === 'selected',
+      });
+    }).catch((error) => this.error(error));
   }
   private clicked(event: MouseEvent): void {
     const element = event.target instanceof Element ? event.target : undefined;
+    if (this.surface?.body.contains(element ?? null) && this.surface.selection()) {
+      // Releasing a native selection over a URL must not also open/capture that URL.
+      if (element?.closest('a[href]')) event.preventDefault();
+      return;
+    }
+    if (this.targetClicked(event)) return;
     const mark = element?.closest('mark');
     if (mark && this.surface?.body.contains(mark) && this.snapshot && !this.surface.selection()) {
       event.preventDefault();
@@ -1833,7 +2444,12 @@ export class ReaderView extends ItemView {
       const target = [...this.surface.body.querySelectorAll<HTMLElement>('[id]')].find(
         (element) => element.id === id,
       );
-      if (target) this.surface.reveal(target);
+      if (target)
+        this.surface.reveal(
+          target.hidden && target.parentElement?.hasAttribute('data-reader-paragraph')
+            ? target.parentElement
+            : target,
+        );
     } else if (link.classList.contains('internal-link')) {
       const target = nativeLinkPath(href);
       if (!target) {
@@ -1886,13 +2502,23 @@ export class ReaderView extends ItemView {
     try {
       this.assertDisplayed(this.snapshot);
       const marks = [...this.surface.body.querySelectorAll('mark')],
-        source = passages(this.snapshot.body);
-      if (marks.length !== source.length)
+        source = passages(this.snapshot.body),
+        mapped = mark.getAttribute('data-reader-passage');
+      const index =
+        mapped !== null && /^\d+$/.test(mapped)
+          ? Number(mapped)
+          : marks.length === source.length
+            ? marks.indexOf(mark as HTMLElement)
+            : -1;
+      if (index < 0 || !source[index])
         throw new Error(
           'This highlight contains unsupported formatting. Use Open Markdown to edit it safely.',
         );
-      const passage = source[marks.indexOf(mark as HTMLElement)];
-      if (passage) this.passageMenu(passage, event);
+      const passage = source[index];
+      if (passage) {
+        if (this.sendSource?.mode === 'explicit') this.sendToPassage(passage);
+        else this.passageMenu(passage, event);
+      }
     } catch (error) {
       this.error(error);
     }
@@ -1912,6 +2538,255 @@ export class ReaderView extends ItemView {
     // Relocation may rewrite links. Bind only to the actual saved body and decline
     // ambiguous matches rather than carrying pre-move offsets into a new source.
     return matches.length === 1 ? matches[0] : undefined;
+  }
+  private nativeHostPaths(snapshot: Snapshot<TFile>, passage: Passage): string[] {
+    return [
+      ...new Set(
+        passageHosts(snapshot.body, passage).map((target) => {
+          const safe = nativeLinkPath(target, false);
+          const file = safe
+            ? this.app.metadataCache.getFirstLinkpathDest(parseLinktext(safe).path, snapshot.path)
+            : null;
+          if (!file || file === snapshot.file)
+            throw new Error(
+              'An existing highlight destination no longer resolves safely. Fix its link in Markdown before editing destinations.',
+            );
+          return file.path;
+        }),
+      ),
+    ];
+  }
+  private offerCollectionRetry(
+    original: Snapshot<TFile>,
+    edit: Pick<HostedHighlight, 'body' | 'quoteMarkdown' | 'blockId'>,
+    nodes: readonly NodeResult[],
+    createdPaths: readonly string[],
+    removal: HighlightRemoval | undefined,
+    error: unknown,
+    authorize: (paths?: readonly string[]) => void,
+  ): void {
+    if (
+      !(error instanceof PartialCollectionError) ||
+      !error.annotationSaved ||
+      error.snapshot.file !== original.file ||
+      !edit.quoteMarkdown.trim()
+    )
+      return;
+    const remainingNodes = nodes.filter(
+      (node) => !error.completedDestinationPaths.includes(node.path),
+    );
+    const remainingCreated = createdPaths.filter((path) =>
+      remainingNodes.some((node) => node.path === path),
+    );
+    const remainingPaths = (removal?.paths ?? []).filter(
+      (path) => !error.completedRemovalPaths.includes(path),
+    );
+    if (!remainingNodes.length && !remainingPaths.length) return;
+    const saved = error.snapshot as Snapshot<TFile>,
+      generation = this.generation;
+    if (!this.current(original, generation) || this.stopping || this.snapshot?.body !== saved.body)
+      return;
+    const remainingRemoval =
+      remainingPaths.length && removal ? { ...removal, paths: remainingPaths } : undefined;
+    this.tapHighlighter?.setActive(true);
+    this.passageActions = [
+      {
+        id: 'retry-note-updates',
+        label: 'Retry note updates',
+        icon: 'rotate-ccw',
+        run: () => {
+          this.cancelNodeCreation();
+          const epoch = this.nodeCreationEpoch;
+          void this.operation(async () => {
+            await this.positionWrite;
+            const base = this.snapshot;
+            if (
+              !base ||
+              epoch !== this.nodeCreationEpoch ||
+              !this.current(saved, generation) ||
+              base.body !== saved.body
+            )
+              throw new Error('The source changed. Reopen it before retrying note updates.');
+            await this.withHighlightHost(
+              base,
+              '',
+              { directNodes: remainingNodes, minSelection: 0, epoch },
+              async (source, selected, _created, validate) => {
+                const guard = () => {
+                  if (
+                    !this.current(saved, generation) ||
+                    this.stopping ||
+                    this.snapshot?.body !== saved.body
+                  )
+                    throw new Error('The source changed before note updates could be retried.');
+                  this.assertDisplayed(source);
+                  validate();
+                  authorize(selected.map((node) => node.path));
+                };
+                const currentEdit = { ...edit, body: source.body };
+                try {
+                  const result = await this.collectHosted(
+                    source,
+                    currentEdit,
+                    selected,
+                    remainingCreated,
+                    guard,
+                    'quote',
+                    undefined,
+                    remainingRemoval,
+                  );
+                  this.tapHighlighter?.reset();
+                  this.controls();
+                  return result;
+                } catch (cause) {
+                  this.offerCollectionRetry(
+                    source,
+                    currentEdit,
+                    selected,
+                    remainingCreated,
+                    remainingRemoval,
+                    cause,
+                    authorize,
+                  );
+                  throw cause;
+                }
+              },
+            );
+          }).catch((cause) => this.error(cause));
+        },
+      },
+    ];
+    this.tapHighlighter?.refreshActions();
+  }
+  private async editPassage(
+    snapshot: Snapshot<TFile>,
+    passage: Passage,
+    mode: 'highlight' | 'mention',
+    epoch: number,
+    intent: number,
+    choice?: {
+      direct?: NodeResult[];
+      limited?: NodeResult[];
+      include?: NodeResult[];
+      addOnly?: boolean;
+    },
+  ): Promise<void> {
+    const generation = this.generation,
+      signal = this.articleLifetime.signal;
+    const previousPaths = mode === 'highlight' ? this.nativeHostPaths(snapshot, passage) : [];
+    const previousNodes = this.typedDestinations(previousPaths);
+    if (previousNodes.length !== previousPaths.length)
+      throw new Error('The typed destination changed. Tap the highlight again.');
+    const removalAuthority = this.nodeAuthority(nodesApi(this.app), previousNodes);
+    let edit:
+      | (Pick<HostedHighlight, 'body' | 'blockId' | 'quoteMarkdown'> & { removed?: boolean })
+      | undefined;
+    const showSaved = (saved: Snapshot<TFile> | undefined) => {
+      if (
+        !saved ||
+        mode === 'mention' ||
+        edit?.removed ||
+        signal.aborted ||
+        this.stopping ||
+        epoch !== this.nodeCreationEpoch ||
+        this.passageIntent !== intent ||
+        !this.current(snapshot, generation) ||
+        this.snapshot?.body !== saved.body ||
+        this.surface?.displayedBody !== saved.body
+      )
+        return;
+      const expected = edit
+        ? passages(edit.body).find((item) => item.from === passage.from)
+        : undefined;
+      const selected = edit ? this.passageAfterWrite(edit.body, expected, saved.body) : undefined;
+      if (selected) {
+        this.passageMenu(selected);
+        if (choice?.addOnly) this.armSend(selected, [], 'selected');
+      }
+    };
+    const saved = await this.withHighlightHost(
+      snapshot,
+      mode === 'mention' ? passage.text : '',
+      {
+        title: mode === 'mention' ? 'Convert passage to note link' : 'Add highlight to notes',
+        multiple: mode !== 'mention',
+        minSelection: mode === 'mention' ? 1 : 0,
+        selectedPaths: previousPaths,
+        actionLabel: mode === 'mention' ? 'Convert to note link' : 'Apply',
+        epoch,
+        ...(choice?.direct ? { directNodes: choice.direct } : {}),
+        ...(choice?.limited ? { nodes: choice.limited } : {}),
+        ...(choice?.include ? { includeNodes: choice.include } : {}),
+        ...(mode === 'highlight'
+          ? {
+              onPickFromArticle: (nodes: NodeResult[]) => {
+                if (
+                  epoch !== this.nodeCreationEpoch ||
+                  !this.current(snapshot, generation) ||
+                  this.snapshot?.body !== snapshot.body
+                )
+                  throw new Error('The source highlight changed. Choose its destinations again.');
+                this.armSend(passage, nodes);
+              },
+            }
+          : {}),
+      },
+      async (base, nodes, createdPaths, validate, authorize) => {
+        const guard = () => {
+          if (signal.aborted || this.stopping || !this.current(snapshot, generation))
+            throw new Error('The article changed. Tap the highlight again.');
+          this.assertDisplayed(base);
+          validate();
+        };
+        guard();
+        edit =
+          mode === 'mention'
+            ? { ...convertPassage(base.body, passage, nodes[0].path), quoteMarkdown: '' }
+            : choice?.addOnly
+              ? hostPassage(
+                  base.body,
+                  passage,
+                  nodes.map((node) => node.path),
+                )
+              : replacePassageHosts(
+                  base.body,
+                  passage,
+                  nodes.map((node) => node.path),
+                );
+        const removed = choice?.addOnly
+          ? []
+          : previousPaths.filter((path) => !nodes.some((node) => node.path === path));
+        const removal = removed.length
+          ? {
+              paths: removed,
+              previousQuote: { quoteMarkdown: edit.quoteMarkdown, blockId: edit.blockId },
+              validate: removalAuthority,
+            }
+          : undefined;
+        let saved: Snapshot<TFile>;
+        try {
+          saved = await this.collectHosted(
+            base,
+            edit,
+            nodes,
+            createdPaths,
+            guard,
+            mode === 'mention' ? 'mention' : 'quote',
+            undefined,
+            removal,
+          );
+        } catch (cause) {
+          if (mode === 'highlight')
+            this.offerCollectionRetry(base, edit, nodes, createdPaths, removal, cause, authorize);
+          throw cause;
+        }
+        // Fresh actions must be usable before a provider's required completion,
+        // even if it never settles. Old snapshots/buttons cannot dispatch edits.
+        showSaved(saved);
+        return saved;
+      },
+    );
+    showSaved(saved);
   }
   private passageMenu(passage: Passage, event?: MouseEvent): void {
     if (!this.snapshot) return;
@@ -1985,122 +2860,71 @@ export class ReaderView extends ItemView {
           this.cancelNodeCreation();
           const epoch = this.nodeCreationEpoch;
           const invoke = async () => {
-            if (!signal.aborted && this.current(snapshot, generation)) await run(epoch);
+            if (
+              !signal.aborted &&
+              epoch === this.nodeCreationEpoch &&
+              this.current(snapshot, generation)
+            )
+              await run(epoch);
           };
           void (serialize ? this.operation(invoke) : invoke()).catch((error) => this.error(error));
         },
       });
     const api = nodesApi(this.app);
-    if (passage.target)
+    const references = passageHosts(snapshot.body, passage);
+    const hosts = [
+      ...new Set(references.length ? references : passage.target ? [passage.target] : []),
+    ];
+    for (const [index, host] of hosts.entries())
       action(
-        'open-note',
-        'Open note',
+        index ? `open-note-${index}` : 'open-note',
+        hosts.length === 1 ? 'Open note' : `Open ${host.replace(/\.md$/i, '').split('/').pop()}`,
         'file-symlink',
-        () => this.openLinked(passage.target!),
+        () => this.openLinked(host),
         false,
       );
-    if (api?.pickNodeForLink) {
-      const pick = async (creationEpoch: number) => {
-        if (creationEpoch !== this.nodeCreationEpoch) return;
-        this.dialog = true;
-        const request = { controller: new AbortController(), source: snapshot, writing: false };
-        this.nodeCreation = request;
-        const abort = () => request.controller.abort();
-        for (const lifetime of [signal, this.host.signal]) {
-          if (lifetime.aborted) abort();
-          else lifetime.addEventListener('abort', abort, { once: true });
-        }
-        let settleCancellation!: () => void;
-        const cancelled = new Promise<undefined>((resolve) => {
-          settleCancellation = () => resolve(undefined);
-          if (request.controller.signal.aborted) settleCancellation();
-          else
-            request.controller.signal.addEventListener('abort', settleCancellation, { once: true });
-        });
-        let acceptingLink = true,
-          attemptedLink = false;
-        let pendingLink: Promise<void> | undefined;
-        const checkCallback = () => {
-          if (!acceptingLink) throw new Error('The node creation request has finished.');
-          if (request.controller.signal.aborted)
-            throw new Error('The node creation request was cancelled.');
-        };
-        const commitLink = async (node: NodeResult) => {
-          checkCallback();
-          if (attemptedLink) throw new Error('The node creation callback already ran.');
-          attemptedLink = true;
-          const validate = this.targetGuard(node.path, api, node.type);
-          // Already inside this action's operation: re-enqueueing would deadlock Nodes.
-          // Metadata echoes during our write/render must not cancel required completion.
-          request.writing = true;
-          try {
-            const saved = await apply(
-              'link',
-              node.path,
-              () => {
-                checkCallback();
-                validate();
-              },
-              true,
-            );
-            if (!saved) throw new Error('The node link was not committed.');
-            request.source = saved;
-          } finally {
-            request.writing = false;
-          }
-          await this.checkNodeCreation();
-          checkCallback();
-        };
-        const link = (node: NodeResult): Promise<void> => {
-          const result = commitLink(node);
-          if (!pendingLink) {
-            pendingLink = result;
-            // Observe failure immediately even if a provider fails to await its callback.
-            void pendingLink.catch(() => {});
-          }
-          return result;
-        };
-        try {
-          if (nodesApi(this.app) !== api)
-            throw new Error('The Nodes API changed. Tap the highlight again.');
-          this.assertDisplayed(snapshot);
-          checkCallback();
-          const options = {
-            suggestedTitle: passage.text.length <= 80 ? passage.text : undefined,
-            sourcePath: snapshot.path,
-            signal: request.controller.signal,
-          };
-          // The shared picker awaits our commit before required completion. Never link
-          // again from its return value or prune a created/partially filled note.
-          // Race cancellation so an uncooperative provider cannot block navigation.
-          await Promise.race([api.pickNodeForLink!(options, link), cancelled]);
-        } finally {
-          acceptingLink = false;
-          signal.removeEventListener('abort', abort);
-          this.host.signal.removeEventListener('abort', abort);
-          request.controller.signal.removeEventListener('abort', settleCancellation);
-          if (this.nodeCreation === request) this.nodeCreation = undefined;
-          this.dialog = false;
-          // Drain only our own dispatched write, never an uncooperative provider dialog.
-          // Closing the callback scope first also rejects a premature provider return.
-          await pendingLink;
-        }
-      };
-      action('link-note', passage.target ? 'Change link…' : 'Link to note…', 'link', pick);
-      action('create-note', 'Create note…', 'file-plus', pick);
+    const pick = (mode: 'highlight' | 'mention', epoch: number) =>
+      this.editPassage(snapshot, passage, mode, epoch, intent);
+    if (api) {
+      action('link-note', 'Add highlight to notes…', 'highlighter', (epoch) =>
+        pick('highlight', epoch),
+      );
+      action('convert-node', 'Convert to note link…', 'file-symlink', (epoch) =>
+        pick('mention', epoch),
+      );
+    } else {
+      actions.push({
+        id: 'link-note',
+        label: 'Add highlight to notes… (requires Fileclass Inline v2)',
+        icon: 'link',
+        disabled: true,
+        run() {},
+      });
+      actions.push({
+        id: 'convert-node',
+        label: 'Convert to note link… (requires Fileclass Inline v2)',
+        icon: 'file-symlink',
+        disabled: true,
+        run() {},
+      });
     }
-    if (passage.target)
-      action('unlink', 'Remove link (keeps highlight)', 'unlink', () => apply('unlink'));
-    action('remove-highlight', 'Remove highlight', 'eraser', () => apply('remove'));
+    if (hosts.length)
+      action('unlink', 'Remove references (article only)', 'unlink', () => apply('unlink'));
+    action('remove-highlight', 'Remove highlight (article only)', 'eraser', () => apply('remove'));
     this.tapHighlighter?.setActive(true);
     this.tapHighlighter?.reset();
     this.passageActions = actions;
     this.tapHighlighter?.refreshActions();
+    if (event) this.armSend(passage, [], 'selected');
   }
   private cancelNodeCreation(): void {
     // Explicit navigation/action intent only, never save/render/position/background flush.
     // Run before entering the operation queue that Nodes currently occupies.
     this.nodeCreationEpoch++;
+    const selection = this.surface?.selection();
+    if (selection && this.nodeCreation)
+      this.lastSelection = JSON.stringify([selection.quote, selection.before, selection.after]);
+    this.clearSend();
     this.topicAssignment?.abort();
     this.nodeCreation?.controller.abort();
   }
@@ -2180,7 +3004,10 @@ export class ReaderView extends ItemView {
         });
       return;
     }
-    if (this.snapshot.file.path !== change.path) return;
+    if (this.snapshot.file.path !== change.path) {
+      this.refreshArticleTopics();
+      return;
+    }
     if (this.operating || this.writing) {
       this.refreshPending = true;
       return;

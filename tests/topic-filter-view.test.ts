@@ -1,5 +1,6 @@
 // @vitest-environment node
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { TFile } from 'obsidian';
 import { Catalog } from '../src/core/catalog';
 import { articleInfo } from '../src/core/model';
 import { createDocument } from '../src/core/document';
@@ -11,8 +12,9 @@ const dom = await vi.hoisted(async () => {
   return builtinEnvironments.jsdom.setup(globalThis, {});
 });
 afterAll(() => dom.teardown(globalThis));
-const mocks = vi.hoisted(() => ({ filter: vi.fn(), topics: vi.fn() }));
+const mocks = vi.hoisted(() => ({ filter: vi.fn(), topics: vi.fn(), highlightHost: vi.fn() }));
 vi.mock('../src/host/topic-filter-dialog', () => ({ chooseTopicFilter: mocks.filter }));
+vi.mock('../src/host/highlight-picker', () => ({ chooseHighlightHost: mocks.highlightHost }));
 vi.mock('../src/host/dialogs', () => ({
   choose: vi.fn(),
   chooseTopics: mocks.topics,
@@ -21,14 +23,24 @@ vi.mock('../src/host/dialogs', () => ({
 vi.mock('../src/reader/surface', () => ({
   ReadingSurface: class {
     title: HTMLElement;
+    body: HTMLElement;
     constructor(parent: HTMLElement) {
       const flow = parent.createDiv({ cls: 'reader-flow' });
       this.title = flow.createEl('h1', { cls: 'reader-article-title' });
+      this.body = flow.createDiv({ cls: 'reader-article-body' });
     }
     setTitle(title: string) {
       this.title.textContent = title;
     }
-    setBody() {}
+    setTopics = vi.fn();
+    displayedBody = '';
+    setBody(body: string) {
+      this.displayedBody = body;
+      this.body.textContent = body;
+    }
+    selection() {
+      return null;
+    }
     restore() {}
     flush() {}
     dispose() {}
@@ -57,6 +69,8 @@ vi.mock('obsidian', () => ({
 beforeEach(() => {
   document.body.replaceChildren();
   mocks.filter.mockReset();
+  mocks.topics.mockReset();
+  mocks.highlightHost.mockReset().mockResolvedValue(null);
   vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => {
     queueMicrotask(() => callback(0));
     return 1;
@@ -93,7 +107,10 @@ function fixture() {
   const cache = new Map<any, any>();
   const read = vi.fn(async (file: any) => file.raw);
   const app: any = {
-    vault: { getMarkdownFiles: () => [...files.values()] },
+    vault: {
+      getMarkdownFiles: () => [...files.values()],
+      getAbstractFileByPath: (path: string) => files.get(path),
+    },
     metadataCache: {
       getFileCache: (file: any) => cache.get(file),
       getFirstLinkpathDest: (path: string) => files.get(path) ?? files.get(`${path}.md`),
@@ -103,6 +120,9 @@ function fixture() {
     app,
     store: {
       catalog,
+      annotate: vi.fn(async () => undefined),
+      collectHighlight: vi.fn(async () => undefined),
+      setRelatedNodes: vi.fn(async (source: unknown) => source),
       vault: { file: (path: string) => files.get(path), read },
       read: vi.fn(async (path: string) => {
         const file = files.get(path);
@@ -129,6 +149,7 @@ function fixture() {
       stat: { mtime: 1, size: raw.length },
       raw,
     };
+    Object.setPrototypeOf(file, TFile.prototype);
     files.set(path, file);
     cache.set(file, { frontmatter: properties });
     catalog.update(path, properties);
@@ -158,6 +179,8 @@ describe('topic-filter view integration', () => {
     f.add('Reading/Inbox/Body.md', 'About GLOBAL **WARMING** today.');
     f.add('Reading/Inbox/No.md', 'warmingness');
     f.add('Reading/Later/Other queue.md', 'global warming', { status: 'later' });
+    const originalBytes = [...f.files].map(([path, file]) => [path, file.raw]);
+    expect(f.host.app.plugins).toBeUndefined();
     f.probe.topicFilter = { label: 'Climate', path: 'Topics/Climate.md', terms: ['obsolete'] };
     f.view.showList();
     await tick();
@@ -167,6 +190,13 @@ describe('topic-filter view integration', () => {
       'Reading/Inbox/No.md',
     ]);
     expect(f.host.ingestion.acquire).not.toHaveBeenCalled();
+    expect(f.host.capture).not.toHaveBeenCalled();
+    expect(f.host.store.annotate).not.toHaveBeenCalled();
+    expect(f.host.store.collectHighlight).not.toHaveBeenCalled();
+    expect(f.host.store.setRelatedNodes).not.toHaveBeenCalled();
+    expect(mocks.highlightHost).not.toHaveBeenCalled();
+    expect(mocks.topics).not.toHaveBeenCalled();
+    expect([...f.files].map(([path, file]) => [path, file.raw])).toEqual(originalBytes);
     const filter = f.view.contentEl.querySelector('[aria-label="Filter by topic"]')!;
     expect(filter.getAttribute('aria-pressed')).toBe('true');
     expect(filter.classList.contains('reader-filter-active')).toBe(true);
@@ -174,6 +204,30 @@ describe('topic-filter view integration', () => {
     expect(f.view.contentEl.querySelector('.reader-list-heading')?.textContent).toBe(
       'Reading list: Climate',
     );
+  });
+
+  it('keeps existing-content filtering provider-independent during a Fileclass reload', async () => {
+    const f = fixture();
+    f.add('Reading/Inbox/Existing.md', 'Previously saved climate text.');
+    const getPlugin = vi.fn(() => {
+      throw new Error('Fileclass is reloading');
+    });
+    f.host.app.plugins = { getPlugin };
+    f.probe.topicFilter = { label: 'climate', terms: ['climate'] };
+    const before = [...f.files].map(([path, file]) => [path, file.raw]);
+    f.view.showList();
+    await tick();
+    expect(f.rows()).toEqual(['Existing']);
+    expect(getPlugin).not.toHaveBeenCalled();
+    expect(mocks.highlightHost).not.toHaveBeenCalled();
+    expect(f.host.store.annotate).not.toHaveBeenCalled();
+    expect(f.host.store.collectHighlight).not.toHaveBeenCalled();
+    expect(f.host.store.setRelatedNodes).not.toHaveBeenCalled();
+    expect(f.host.ingestion.acquire).not.toHaveBeenCalled();
+    expect(f.host.capture).not.toHaveBeenCalled();
+    expect(mocks.filter).not.toHaveBeenCalled();
+    expect(mocks.topics).not.toHaveBeenCalled();
+    expect([...f.files].map(([path, file]) => [path, file.raw])).toEqual(before);
   });
 
   it('supports free text, all-result navigation, pagination, clearing and retained queue filters', async () => {
@@ -479,22 +533,79 @@ describe('topic-filter view integration', () => {
     expect(f.view.contentEl.textContent).not.toContain('Filtering articles…');
   });
 
-  it('preserves the existing assignment action without a separate article filter banner', () => {
+  it('preserves Related notes without a separate article filter banner', () => {
     const f = fixture();
     const file = f.add('Reading/Inbox/A.md', 'body');
     f.probe.snapshot = { file, path: file.path, body: 'body', properties: { type: 'article' } };
-    f.probe.surface = { canPage: () => false };
+    f.probe.surface = { canPage: () => false, setTopics: vi.fn() };
     f.probe.actions = document.createElement('nav');
     f.view.contentEl.append(f.probe.actions);
     f.probe.topicFilter = { label: 'body', terms: ['body'] };
     const topics = vi.spyOn(f.probe, 'topics').mockResolvedValue(undefined);
     f.probe.controls();
-    (f.view.contentEl.querySelector('[aria-label="Article topics"]') as HTMLButtonElement).click();
+    (f.view.contentEl.querySelector('[aria-label="Related notes"]') as HTMLButtonElement).click();
     expect(topics).toHaveBeenCalledOnce();
     expect(f.view.contentEl.querySelector('[aria-label="Clear topic filter"]')).toBeNull();
     expect(f.view.contentEl.querySelector('.reader-topic-filter-state')).toBeNull();
     expect(f.view.getDisplayText()).toBe('Reader: A');
     expect(f.probe.actions.querySelectorAll('button')).toHaveLength(7);
+  });
+
+  it('uses the staged Related notes multiselect and routes an empty Apply through setRelatedNodes', async () => {
+    const f = fixture();
+    const topic = f.add('Topics/Old.md', 'typed note', { type: 'topic' });
+    const article = f.add('Reading/Inbox/A.md', 'body', { topics: ['[[Topics/Old.md]]'] });
+    const node = { path: topic.path, title: 'Old', type: 'topic', classes: ['topic'], aliases: [] };
+    const api = {
+      version: 2,
+      listTypes: vi.fn(() => [{ type: 'topic', label: 'Topic' }]),
+      searchNodes: vi.fn(() => [node]),
+      getNode: vi.fn((path: string) => (path === topic.path ? node : null)),
+      createNode: vi.fn(async () => null),
+      createNodeForLink: vi.fn(async () => null),
+    };
+    f.host.app.plugins = { getPlugin: () => ({ api }) };
+    await f.view.openArticle(article.path);
+    let apply!: (choice: { kind: 'existing-many'; nodes: never[] }) => void;
+    mocks.highlightHost.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          apply = resolve;
+        }),
+    );
+    const pending = f.probe.topics();
+    await tick();
+    expect(mocks.highlightHost).toHaveBeenCalledOnce();
+    expect(mocks.highlightHost).toHaveBeenCalledWith(
+      f.host.app,
+      api,
+      expect.objectContaining({
+        title: 'Related notes',
+        multiple: true,
+        selectedPaths: [topic.path],
+        minSelection: 0,
+        actionLabel: 'Apply',
+        allowCreate: true,
+        signal: expect.any(AbortSignal),
+      }),
+    );
+    expect(f.host.store.setRelatedNodes).not.toHaveBeenCalled();
+    expect(f.host.store.annotate).not.toHaveBeenCalled();
+    apply({ kind: 'existing-many', nodes: [] });
+    await pending;
+    expect(f.host.store.setRelatedNodes).toHaveBeenCalledOnce();
+    expect(f.host.store.setRelatedNodes).toHaveBeenCalledWith(
+      expect.objectContaining({ file: article }),
+      [],
+      [topic.path],
+      expect.any(Function),
+    );
+    expect(f.host.store.annotate).not.toHaveBeenCalled();
+    expect(f.host.store.collectHighlight).not.toHaveBeenCalled();
+    expect(api.createNodeForLink).not.toHaveBeenCalled();
+    expect(mocks.topics).not.toHaveBeenCalled();
+    expect(mocks.filter).not.toHaveBeenCalled();
+    expect(f.host.ingestion.acquire).not.toHaveBeenCalled();
   });
 });
 

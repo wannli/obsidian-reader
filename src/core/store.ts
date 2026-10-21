@@ -8,6 +8,7 @@ import {
   rememberDeletedUrl,
   requireArticle,
   replaceArticleBody,
+  replaceBody,
   savePosition,
 } from './document';
 import { hasAnnotations } from './annotations';
@@ -23,11 +24,19 @@ import {
   excludedReaderPath,
   queueStatus,
   timestamp,
+  vaultLink,
   webUrl,
   type Properties,
   type Queue,
 } from './model';
 import { SerialWrites } from './work';
+import {
+  appendQuotation,
+  localCollectionDate,
+  originLink,
+  rememberOrigin,
+  removeQuotation,
+} from './quotation';
 import { defaultFolders, type ReaderFolders } from './folders';
 import {
   defaultStatusFolders,
@@ -72,11 +81,68 @@ export interface Snapshot<File extends NoteFile> {
   body: string;
   properties: Properties;
 }
+export interface HighlightCollectionEdit {
+  /** Source body produced by the source-mapped hosting/conversion operation. */
+  body: string;
+  quoteMarkdown: string;
+  blockId: string;
+}
+export type HighlightCollectionPhase = 'source' | 'destination';
+export interface HighlightCollectionOptions {
+  created?: boolean;
+  remember?: boolean;
+  mode?: 'highlight' | 'mention';
+  /** Testable collection clock, frozen at invocation; persisted only as a quotation date link. */
+  collectedOn?: Date;
+  /** Required at runtime: recheck provider, membership, source and lifetime in both
+   * phases. Live native Selection is authoritative only until annotation is saved. */
+  guard?: (phase: HighlightCollectionPhase) => void;
+}
+export interface HighlightCollectionManyOptions extends Omit<
+  HighlightCollectionOptions,
+  'created' | 'mode'
+> {
+  /** Only notes newly created for this operation may receive a missing origin. */
+  createdPaths?: readonly string[];
+  /** Explicitly unchecked hosts of this particular passage, not article topics. */
+  removedDestinationPaths?: readonly string[];
+  /** Exact previous passage/citation authority, required for explicit removals. */
+  previousQuote?: Pick<HighlightCollectionEdit, 'quoteMarkdown' | 'blockId'>;
+  mode?: 'highlight';
+}
+/** Source retention or annotation succeeded, but collection did not finish. Never roll it back. */
+export class PartialCollectionError<File extends NoteFile> extends Error {
+  readonly completedDestinationPaths: readonly string[];
+  readonly completedRemovalPaths: readonly string[];
+  get savedSnapshot(): Snapshot<File> {
+    return this.snapshot;
+  }
+  constructor(
+    readonly snapshot: Snapshot<File>,
+    readonly destinationPath: string,
+    cause: unknown,
+    mode: 'highlight' | 'mention' = 'highlight',
+    readonly annotationSaved = true,
+    completedDestinationPaths: readonly string[] = [],
+    completedRemovalPaths: readonly string[] = [],
+    readonly destinationOperation: 'collect' | 'remove' = 'collect',
+  ) {
+    super(
+      `${annotationSaved ? 'The source annotation was saved, but' : 'The source was retained; its annotation was not saved and'} ${destinationOperation === 'remove' ? 'the stored quotation was not removed' : mode === 'mention' ? 'the destination update was not saved' : 'the quotation was not filed'} in ${destinationPath}. Reopen the source and retry: ${cause instanceof Error ? cause.message : String(cause)}`,
+      { cause },
+    );
+    this.name = 'PartialCollectionError';
+    this.completedDestinationPaths = Object.freeze([...completedDestinationPaths]);
+    this.completedRemovalPaths = Object.freeze([...completedRemovalPaths]);
+  }
+}
 
 /** The only route to article mutations: one per-file queue, fresh bytes, then guarded commit. */
 export class ArticleStore<File extends NoteFile> {
   readonly catalog: Catalog;
   private writes = new SerialWrites<File>();
+  // Enter before any file lane; never hold one file lane while acquiring another.
+  private collections = new SerialWrites<string>();
   private dogEarWrites = new SerialWrites<string>();
   private creates = new SerialWrites<string>();
   // Imports and explicit trash share a lane through the final native operation.
@@ -403,24 +469,363 @@ export class ArticleStore<File extends NoteFile> {
   }
   /** Retain first: interruption may leave Later, never an annotated disposable Feed article. */
   annotate(snapshot: Snapshot<File>, transform: (raw: string) => string): Promise<Snapshot<File>> {
+    return this.writes.run(snapshot.file, () => this.annotateNow(snapshot, transform));
+  }
+  private async annotateNow(
+    snapshot: Snapshot<File>,
+    transform: (raw: string) => string,
+    guard: () => void = () => {},
+    onSaved?: (saved: Snapshot<File>) => void,
+    onRetained?: (saved: Snapshot<File>) => void,
+  ): Promise<Snapshot<File>> {
+    // Validate before moving: invalid selections/cancelled pickers must not cause any mutation.
+    guard();
+    const proposed = transform(snapshot.raw);
+    if (proposed === snapshot.raw && !onSaved) return snapshot;
+    let current = snapshot;
+    const promote = queueForPath(current.path, this.statusFolders) === 'Feed';
+    const folder = this.statusFolders.later;
+    if (promote) {
+      current = await this.moveNow(current, 'Later', guard, false);
+      onRetained?.(current);
+    }
+    if (current.body !== snapshot.body)
+      throw new ChangedNote(
+        'The article changed to Later, but its text changed. Reopen it to retry the annotation.',
+      );
+    const annotated = await this.commit(current, (raw) => {
+      guard();
+      if (promote && requireArticle(raw).properties.status !== 'later') throw new ChangedNote();
+      return transform(raw);
+    });
+    onSaved?.(annotated);
+    if (promote) return this.relocate(annotated, 'later', folder, guard);
+    return annotated;
+  }
+  /** Replace only baseline typed relationships; never edit filed snapshots. The guard
+   * must recheck public membership for selected nodes and unchecked typed originals. */
+  async setRelatedNodes(
+    snapshot: Snapshot<File>,
+    selectedPaths: readonly string[],
+    replaceablePaths: readonly string[],
+    guard?: () => void,
+  ): Promise<Snapshot<File>> {
+    snapshot = { ...snapshot, properties: { ...snapshot.properties } };
+    const selected = [...new Set(selectedPaths)].map((path) => ({
+      path,
+      file: this.vault.file(path),
+    }));
+    const baseline = new Map(
+      [...new Set(replaceablePaths)].map((path) => [path, this.vault.file(path)]),
+    );
+    if (typeof guard !== 'function')
+      throw new Error(
+        'A current typed-destination eligibility guard is required to set related nodes.',
+      );
+    guard();
+    const doc = requireArticle(snapshot.raw);
+    const previous = Object.hasOwn(doc.properties, 'topics')
+      ? Array.isArray(doc.properties.topics)
+        ? doc.properties.topics
+        : [doc.properties.topics]
+      : [];
+    const resolve = (link: string) =>
+      this.vault.resolveLink
+        ? this.vault.resolveLink(link, snapshot.path)
+        : (this.vault.file(link) ?? this.vault.file(link + '.md'));
+    const originals = previous.map((value) => {
+      const link = linkPath(text(value));
+      const file = link ? resolve(link) : undefined;
+      return {
+        value,
+        link,
+        file,
+        path: file?.path,
+        replaceable: !!file && !excludedReaderPath(file.path) && baseline.get(file.path) === file,
+      };
+    });
     return this.writes.run(snapshot.file, async () => {
-      // Validate before moving: invalid selections/cancelled pickers must not cause any mutation.
-      const proposed = transform(snapshot.raw);
-      if (proposed === snapshot.raw) return snapshot;
-      let current = snapshot;
-      const promote = queueForPath(current.path, this.statusFolders) === 'Feed';
-      const folder = this.statusFolders.later;
-      if (promote) current = await this.moveNow(current, 'Later', () => {}, false);
-      if (current.body !== snapshot.body)
-        throw new ChangedNote(
-          'The article changed to Later, but its text changed. Reopen it to retry the annotation.',
+      const check = () => {
+        guard();
+        for (const target of selected) {
+          vaultLink(target.path);
+          if (
+            !target.file ||
+            excludedReaderPath(target.path) ||
+            target.file.path !== target.path ||
+            this.vault.file(target.path) !== target.file
+          )
+            throw new ChangedNote('A related typed destination changed. Reopen the picker.');
+        }
+      };
+      check();
+      const retained = originals.filter(
+        (original) =>
+          !original.replaceable || selected.some((target) => target.file === original.file),
+      );
+      const values = [
+        ...retained.map((original) => original.value),
+        ...selected
+          .filter((target) => !retained.some((original) => original.file === target.file))
+          .map((target) => vaultLink(target.path)),
+      ];
+      const unchanged =
+        values.length === previous.length &&
+        values.every((value, index) => value === previous[index]);
+      const validate = () => {
+        check();
+        for (const original of originals) {
+          if (
+            original.file &&
+            (original.replaceable || selected.some((target) => target.file === original.file)) &&
+            (original.file.path !== original.path || resolve(original.link!) !== original.file)
+          )
+            throw new ChangedNote(
+              'An existing related-node link changed meaning. Reopen the picker.',
+            );
+        }
+      };
+      const transform = (raw: string) => {
+        validate();
+        if (requireArticle(raw).body !== snapshot.body) throw new ChangedNote();
+        return unchanged
+          ? raw
+          : patchProperties(raw, { topics: values.length ? values : undefined });
+      };
+      await this.validate(snapshot);
+      this.vault.assertWritable(snapshot.file, snapshot.raw);
+      // A no-op must still validate exact source bytes, without promoting a Feed article.
+      if (unchanged) {
+        const saved = await this.commit(snapshot, transform);
+        validate();
+        return saved;
+      }
+      return this.annotateNow(snapshot, transform, validate);
+    });
+  }
+  /** Backward-compatible single destination, including explicit node-only conversion. */
+  collectHighlight(
+    snapshot: Snapshot<File>,
+    edit: HighlightCollectionEdit,
+    destinationPath: string,
+    options: HighlightCollectionOptions = {},
+  ): Promise<Snapshot<File>> {
+    const { created = false, ...rest } = options;
+    return this.collectHighlightSet(snapshot, edit, [destinationPath], {
+      ...rest,
+      createdPaths: created ? [destinationPath] : [],
+    });
+  }
+  /** One source annotation, then sequential guarded destination writes; never a cross-file transaction. */
+  collectHighlightMany(
+    snapshot: Snapshot<File>,
+    edit: HighlightCollectionEdit,
+    destinationPaths: readonly string[],
+    options: HighlightCollectionManyOptions = {},
+  ): Promise<Snapshot<File>> {
+    if (options.mode !== undefined && options.mode !== 'highlight')
+      return Promise.reject(new Error('Multi-destination collection only supports highlights.'));
+    return this.collectHighlightSet(snapshot, edit, destinationPaths, options);
+  }
+  private collectHighlightSet(
+    snapshot: Snapshot<File>,
+    edit: HighlightCollectionEdit,
+    destinationPaths: readonly string[],
+    options: Omit<HighlightCollectionManyOptions, 'mode'> &
+      Pick<HighlightCollectionOptions, 'mode'>,
+  ): Promise<Snapshot<File>> {
+    // Freeze caller-owned inputs before serialization, including provider/lifetime authority.
+    snapshot = { ...snapshot, properties: { ...snapshot.properties } };
+    const { body, quoteMarkdown, blockId } = edit;
+    const { remember = true, mode = 'highlight', guard } = options;
+    const paths = [...new Set(destinationPaths)];
+    const removedPaths = [...new Set(options.removedDestinationPaths ?? [])];
+    const created = new Set(options.createdPaths ?? []);
+    const previousQuote = options.previousQuote ? { ...options.previousQuote } : undefined;
+    const collectedOn = new Date(options.collectedOn?.getTime() ?? Date.now());
+    const destinationFiles = new Map(
+      [...paths, ...removedPaths].map((path) => [path, this.vault.file(path)]),
+    );
+    return this.collections.run('collection', async () => {
+      if (typeof guard !== 'function')
+        throw new Error(
+          'A current typed-destination eligibility guard is required to collect a highlight.',
         );
-      const annotated = await this.commit(current, (raw) => {
-        if (promote && requireArticle(raw).properties.status !== 'later') throw new ChangedNote();
-        return transform(raw);
+      if (mode !== 'highlight' && mode !== 'mention') throw new Error('Invalid collection mode.');
+      if (!paths.length && !removedPaths.length)
+        throw new Error('A new highlight needs at least one typed destination.');
+      if (removedPaths.length && (!previousQuote || mode !== 'highlight'))
+        throw new Error(
+          'Explicit quotation removal requires the previous highlight passage and paragraph citation.',
+        );
+      if (removedPaths.some((path) => paths.includes(path)))
+        throw new Error('A destination cannot be both selected and removed.');
+      if ([...created].some((path) => !paths.includes(path)))
+        throw new Error('A newly created destination must be selected.');
+      guard('source');
+      const collectedDate = localCollectionDate(collectedOn);
+      const destinations = [
+        ...paths.map((path) => ({ path, operation: 'collect' as const })),
+        ...removedPaths.map((path) => ({ path, operation: 'remove' as const })),
+      ].map(({ path, operation }) => {
+        const file = destinationFiles.get(path);
+        if (!file) throw new ChangedNote('The destination note no longer exists.');
+        if (file === snapshot.file || path === snapshot.path)
+          throw new Error('The source and destination must not be the same note.');
+        return {
+          path,
+          operation,
+          file,
+          link: vaultLink(path.replace(/\.md$/iu, '')),
+          raw: undefined as string | undefined,
+        };
       });
-      if (promote) return this.relocate(annotated, 'later', folder);
-      return annotated;
+      let saved: Snapshot<File> | undefined;
+      let annotationSaved = false;
+      let failed = destinations[0];
+      const completed: string[] = [],
+        completedRemovals: string[] = [];
+      const assertDestination = (destination: (typeof destinations)[number]) => {
+        guard(annotationSaved ? 'destination' : 'source');
+        this.assert(destination.file, destination.path);
+        this.vault.assertWritable(destination.file, destination.raw);
+      };
+      const assertDestinations = () => {
+        for (const destination of destinations) {
+          try {
+            assertDestination(destination);
+          } catch (error) {
+            failed = destination;
+            throw error;
+          }
+        }
+      };
+      const updateDestination = (
+        destination: (typeof destinations)[number],
+        raw: string,
+        source: Snapshot<File>,
+      ): string => {
+        const title =
+          text(source.properties.title) || source.path.split('/').pop()!.replace(/\.md$/iu, '');
+        if (destination.operation === 'remove') {
+          return removeQuotation(
+            raw,
+            previousQuote!.quoteMarkdown,
+            originLink(source.path, previousQuote!.blockId, title),
+          ).raw;
+        }
+        const origin = originLink(source.path, blockId);
+        let next =
+          mode === 'highlight'
+            ? appendQuotation(raw, quoteMarkdown, originLink(source.path, blockId, title), {
+                path: source.path,
+                title,
+                collectedOn: collectedDate,
+              }).raw
+            : raw;
+        if (created.has(destination.path)) next = rememberOrigin(next, origin);
+        return next;
+      };
+      try {
+        const annotated = await this.writes.run(snapshot.file, async () => {
+          await this.validate(snapshot);
+          this.vault.assertWritable(snapshot.file, snapshot.raw);
+          // Every selected/removed target must be provably safe before even retaining Feed.
+          for (const destination of destinations) {
+            failed = destination;
+            assertDestination(destination);
+            destination.raw = await this.vault.read(destination.file);
+            assertDestination(destination);
+            readDocument(destination.raw);
+            updateDestination(destination, destination.raw, snapshot);
+          }
+          failed = destinations[0];
+          const transform = (raw: string): string => {
+            assertDestinations();
+            const doc = requireArticle(raw);
+            let next = replaceBody(raw, snapshot.body, body);
+            if (!remember) return next;
+            const previous = Object.hasOwn(doc.properties, 'topics')
+              ? Array.isArray(doc.properties.topics)
+                ? doc.properties.topics
+                : [doc.properties.topics]
+              : [];
+            const additions = destinations
+              .filter(
+                (destination) =>
+                  destination.operation === 'collect' &&
+                  !previous.some((value) => {
+                    const path = linkPath(text(value));
+                    return (
+                      path !== undefined &&
+                      (path.replace(/\.md$/iu, '') === destination.path.replace(/\.md$/iu, '') ||
+                        this.vault.resolveLink?.(path, snapshot.path) === destination.file)
+                    );
+                  }),
+              )
+              .map((destination) => destination.link);
+            if (additions.length)
+              next = patchProperties(next, { topics: [...previous, ...additions] });
+            return next;
+          };
+          return this.annotateNow(
+            snapshot,
+            transform,
+            assertDestinations,
+            (source) => {
+              saved = source;
+              annotationSaved = true;
+            },
+            (source) => {
+              saved = source;
+            },
+          );
+        });
+        saved = annotated;
+        // Never hold the source lane while acquiring a destination lane (or two destinations).
+        for (const destination of destinations) {
+          failed = destination;
+          await this.writes.run(destination.file, async () => {
+            await this.validate(annotated);
+            this.vault.assertWritable(annotated.file, annotated.raw);
+            // Native source relocation may have rewritten any target's links. Reread each.
+            destination.raw = undefined;
+            assertDestination(destination);
+            destination.raw = await this.vault.read(destination.file);
+            assertDestination(destination);
+            const expected = destination.raw;
+            await this.validate(annotated);
+            const update = (current: string) => {
+              assertDestination(destination);
+              this.assert(annotated.file, annotated.path);
+              this.vault.assertWritable(annotated.file, annotated.raw);
+              if (current !== expected) throw new ChangedNote();
+              return updateDestination(destination, current, annotated);
+            };
+            if (update(expected) === expected) update(await this.vault.read(destination.file));
+            else await this.vault.process(destination.file, update);
+          });
+          (destination.operation === 'remove' ? completedRemovals : completed).push(
+            destination.path,
+          );
+        }
+        return annotated;
+      } catch (error) {
+        if (!saved) throw error;
+        // A native rename can complete before rejecting; preserve the known saved bytes.
+        if (this.vault.file(saved.file.path) === saved.file)
+          saved = { ...saved, path: saved.file.path };
+        throw new PartialCollectionError(
+          saved,
+          failed.path,
+          error,
+          mode,
+          annotationSaved,
+          completed,
+          completedRemovals,
+          failed.operation,
+        );
+      }
     });
   }
   /** One serialized local transition; native Sync cannot make two-note writes atomic. */

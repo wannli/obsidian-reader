@@ -15,7 +15,16 @@ import {
 import { ArticleStore, type VaultPort } from '../src/core/store';
 import { defaultFolders, type ReaderFolders } from '../src/core/folders';
 import { createDocument, patchProperties, readDocument, replaceBody } from '../src/core/document';
-import { passages } from '../src/core/annotations';
+import { changePassage, passages } from '../src/core/annotations';
+import { hostPassage, hostSelection, paragraphAnchors } from '../src/core/hosted-highlights';
+import {
+  appendQuotation,
+  originLink,
+  rememberOrigin,
+  removeQuotation,
+} from '../src/core/quotation';
+import { renderBody } from '../src/reader/render';
+import { articleTopicPill, type ArticleTopic } from '../src/reader/topic-pills';
 import { READER_VIEW, ReaderView, nativeLinkPath, openExistingNote } from '../src/reader/view';
 import * as surfaceModule from '../src/reader/surface';
 import ReaderPlugin from '../src/main';
@@ -36,6 +45,7 @@ const mocks = vi.hoisted(() => ({
   notice: vi.fn(),
   input: vi.fn(),
   confirmWebLink: vi.fn(),
+  highlightPicker: vi.fn(),
   menus: [] as Map<string, () => void>[],
   menuShown: vi.fn(),
   dom: new Map<string, () => void>(),
@@ -162,6 +172,8 @@ vi.mock('../src/host/dialogs', () => ({
   input: mocks.input,
   confirmWebLink: mocks.confirmWebLink,
 }));
+vi.mock('../src/host/highlight-picker', () => ({ chooseHighlightHost: mocks.highlightPicker }));
+const defaultHighlightPath = 'Nodes/Default.md';
 vi.mock('../src/host/topic-filter-dialog', () => ({ chooseTopicFilter: vi.fn() }));
 vi.mock('../src/host/settings', () => ({ ReaderSettings: class {}, showFeeds: vi.fn() }));
 vi.mock('../src/host/vault', () => ({
@@ -185,6 +197,13 @@ vi.mock('../src/reader/surface', () => ({
     flow = document.createElement('div');
     body = document.createElement('article');
     title = document.createElement('h1');
+    topics = document.createElement('div');
+    setTopics = vi.fn((topics: readonly ArticleTopic[]) => {
+      const pill = articleTopicPill(document, topics, this.referenceIcon);
+      this.topics.replaceChildren(...(pill ? [pill] : []));
+      if (pill) this.body.before(this.topics);
+      else this.topics.remove();
+    });
     setTitle = (title: string) => {
       this.title.textContent = title;
     };
@@ -224,7 +243,9 @@ vi.mock('../src/reader/surface', () => ({
       readonly paged: boolean,
       private position: (marker: string) => void,
       private renderError?: (error: unknown) => void,
+      private referenceIcon?: (target: string, element: HTMLElement) => void,
     ) {
+      this.topics.className = 'reader-article-topics';
       this.viewport.className = 'reader-viewport';
       this.flow.className = 'reader-flow';
       this.flow.append(this.title, this.body);
@@ -261,6 +282,7 @@ beforeAll(() => {
     },
   });
 });
+const fixtureViews = new Set<ReaderView>();
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.menus.length = 0;
@@ -270,9 +292,13 @@ beforeEach(() => {
   mocks.renderError = undefined;
   Platform.isMobile = false;
   mocks.choose.mockReset().mockResolvedValue(null);
+  mocks.highlightPicker.mockReset().mockResolvedValue(null);
   mocks.topics.mockResolvedValue(null);
 });
 afterEach(() => {
+  // Detached fixture leaves must not retain document-level Escape handlers.
+  for (const view of fixtureViews) view.stopForUnload();
+  fixtureViews.clear();
   document.getSelection()?.removeAllRanges();
   document.body.replaceChildren();
   document.body.classList.remove('is-mobile', 'reader-mobile-active');
@@ -337,6 +363,7 @@ function hostFixture(folders: ReaderFolders = defaultFolders) {
   const leaf: any = { app, setViewState: vi.fn(async () => {}) };
   leaves.push(leaf);
   const view = new ReaderView(leaf as WorkspaceLeaf, host);
+  fixtureViews.add(view);
   leaf.view = view;
   async function note(path: string, body = 'before words after', type = 'article') {
     const status = /(?:^|\/)Stream\//.test(path)
@@ -371,6 +398,60 @@ function hostFixture(folders: ReaderFolders = defaultFolders) {
     metadata: (name: string, ...args: any[]) => emit(metadataEvents, name, ...args),
   };
 }
+async function enableHighlightHost(f: ReturnType<typeof hostFixture>, ...articles: TFile[]) {
+  const target =
+    (f.vault.file(defaultHighlightPath) as TFile | undefined) ??
+    (await f.note(defaultHighlightPath, 'Lifecycle destination.', 'topic'));
+  const node: NodeResult = {
+    path: target.path,
+    title: 'Default',
+    type: 'Other',
+    classes: ['Other', 'topic'],
+    aliases: [],
+  };
+  const api: NodesApi = {
+    version: 2,
+    listTypes: vi.fn(() => [{ type: 'topic', label: 'Topic' }]),
+    searchNodes: vi.fn(() => [node]),
+    getNode: vi.fn((path) => (path === target.path ? node : null)),
+    createNode: vi.fn(async () => null),
+    createNodeForLink: vi.fn(async () => null),
+    pickNodeForLink: vi.fn(async () => null),
+  };
+  (f.app as any).plugins = {
+    getPlugin: (id: string) => (id === 'fileclass-inline' ? { api } : undefined),
+  };
+  mocks.highlightPicker.mockImplementation(async (_app, current) =>
+    current === api ? { kind: 'existing', node } : null,
+  );
+  for (const article of articles) await rememberDefaultHost(f, article);
+  return { target, node, api };
+}
+function enableTypedTopics(f: ReturnType<typeof hostFixture>) {
+  const nodeAt = (path: string): NodeResult | null => {
+    const file = f.vault.file(path);
+    return file && f.cache.get(file)?.frontmatter?.type === 'topic'
+      ? {
+          path,
+          title: (file as TFile).basename,
+          type: 'Other',
+          classes: ['Other', 'topic'],
+          aliases: [],
+        }
+      : null;
+  };
+  const api: NodesApi = {
+    version: 2,
+    listTypes: vi.fn(() => [{ type: 'topic', label: 'Topic' }]),
+    searchNodes: vi.fn(() => [...f.vault.files.keys()].flatMap((path) => nodeAt(path) ?? [])),
+    getNode: vi.fn(nodeAt),
+    createNode: vi.fn(async () => null),
+  };
+  (f.app as any).plugins = {
+    getPlugin: (id: string) => (id === 'fileclass-inline' ? { api } : undefined),
+  };
+  return api;
+}
 async function pluginFixture() {
   const fixture = hostFixture(),
     plugin = new ReaderPlugin(fixture.app, {} as any);
@@ -403,10 +484,60 @@ function expectNoPassagePopup() {
   expect(mocks.menus).toHaveLength(0);
   expect(mocks.menuShown).not.toHaveBeenCalled();
 }
+function expectedPassageActions({ linked = false, provider = true, undo = false } = {}): string[] {
+  return [
+    ...(linked ? ['Open note'] : []),
+    ...(provider
+      ? ['Add highlight to notes…', 'Convert to note link…']
+      : [
+          'Add highlight to notes… (requires Fileclass Inline v2)',
+          'Convert to note link… (requires Fileclass Inline v2)',
+        ]),
+    ...(linked ? ['Remove references (article only)'] : []),
+    'Remove highlight (article only)',
+    ...(undo ? ['Undo'] : []),
+    'Done',
+  ];
+}
+function expectedHosted(marked: string, target = defaultHighlightPath, blockId?: string): string {
+  // Compare complete native Markdown, including every host citation and paragraph anchor.
+  // An explicit prior anchor also proves adjustments/Undo do not invent a new paragraph ID.
+  let body = marked;
+  for (let index = 0; index < passages(body).length; index++)
+    body = hostPassage(body, passages(body)[index], [target]).body;
+  if (blockId) {
+    const anchors = paragraphAnchors(body);
+    expect(anchors).toHaveLength(1);
+    body =
+      body.slice(0, anchors[0].anchor.from) + ` ^${blockId}` + body.slice(anchors[0].anchor.to);
+  }
+  return body;
+}
+function expectedRemovedHosted(marked: string, target = defaultHighlightPath): string {
+  let body = expectedHosted(marked, target);
+  for (const passage of passages(body).reverse()) body = changePassage(body, passage, 'remove');
+  return body;
+}
+async function rememberDefaultHost(f: ReturnType<typeof hostFixture>, file: TFile) {
+  const raw = await f.vault.process(file, (current) =>
+    patchProperties(current, {
+      topics: [`[[${defaultHighlightPath.replace(/\.md$/, '')}]]`],
+    }),
+  );
+  f.cache.get(file).frontmatter = readDocument(raw).properties;
+  f.store.catalog.update(file.path, readDocument(raw).properties);
+}
 function menu(view: ReaderView, title: string) {
   const probe = view as any;
-  probe.passageMenu(passages(probe.snapshot.body)[0], new MouseEvent('click'));
-  passageButton(view, title).click();
+  const passage = passages(probe.snapshot.body)[0];
+  probe.passageMenu(passage, new MouseEvent('click'));
+  if (title === 'Choose from article…') {
+    mocks.highlightPicker.mockResolvedValueOnce({
+      kind: 'pick-in-article',
+      nodes: probe.typedDestinations(passage.hosts ?? []),
+    });
+    passageButton(view, 'Add highlight to notes…').click();
+  } else passageButton(view, title).click();
   return probe.operations as Promise<void>;
 }
 
@@ -447,6 +578,7 @@ describe('Reader operation and close lifecycle', () => {
   it('drains a pending selection and position on normal close, without waiting for debounce', async () => {
     const f = hostFixture(),
       file = await f.note('Reading/Inbox/A.md');
+    await enableHighlightHost(f, file);
     await f.view.openArticle(file.path);
     const surface = f.probe.surface;
     surface.selectionValue = { quote: 'words', before: 'before ', after: ' after' };
@@ -454,7 +586,7 @@ describe('Reader operation and close lifecycle', () => {
     f.probe.selectionChanged();
     await f.view.onClose();
     const saved = readDocument(await f.vault.read(file));
-    expect(saved.body).toBe('before ==words== after');
+    expect(saved.body).toBe(expectedHosted('before ==words== after'));
     expect(saved.properties.bookmark).toBe('words');
     expect(surface.dispose).toHaveBeenCalledOnce();
     expect(f.probe.surface).toBeUndefined();
@@ -555,28 +687,38 @@ describe('Reader operation and close lifecycle', () => {
   it('keeps both highlights when identical words are selected in different contexts', async () => {
     const f = hostFixture(),
       file = await f.note('Reading/Inbox/A.md', 'First words end. Second words stop.');
+    await enableHighlightHost(f, file);
     await f.view.openArticle(file.path);
     f.probe.surface.selectionValue = {
       quote: 'words',
       before: 'First ',
       after: ' end. Second words stop.',
     };
+    const firstExpected = hostSelection(
+      'First words end. Second words stop.',
+      f.probe.surface.selectionValue,
+      [defaultHighlightPath],
+    ).body;
     await f.probe.saveSelection();
+    expect((await f.store.read(file.path)).body).toBe(firstExpected);
     f.probe.surface.selectionValue = {
       quote: 'words',
       before: 'First words end. Second ',
       after: ' stop.',
     };
     await f.probe.saveSelection();
-    expect((await f.store.read(file.path)).body).toBe(
-      'First ==words== end. Second ==words== stop.',
+    const saved = (await f.store.read(file.path)).body;
+    expect(saved).toBe(
+      hostSelection(firstExpected, f.probe.surface.selectionValue, [defaultHighlightPath]).body,
     );
+    expect(paragraphAnchors(saved)).toHaveLength(1);
+    expect(paragraphAnchors(saved)[0].blockId).toBe(paragraphAnchors(firstExpected)[0].blockId);
   });
 });
 
 describe('automatic selection event ownership', () => {
   let f: Awaited<ReturnType<typeof selectionFixture>>;
-  async function selectionFixture() {
+  async function selectionFixture(remember = true) {
     const actual = await vi.importActual<typeof surfaceModule>('../src/reader/surface');
     vi.spyOn(surfaceModule, 'ReadingSurface').mockImplementation(function (...args) {
       return new actual.ReadingSurface(...args);
@@ -598,6 +740,7 @@ describe('automatic selection event ownership', () => {
     const f = hostFixture(),
       body = 'Alpha phrase.\n\nBeta phrase.',
       article = await f.note('Reading/Inbox/Selection.md', body);
+    const highlight = await enableHighlightHost(f, ...(remember ? [article] : []));
     await f.view.onOpen();
     await f.view.openArticle(article.path);
     const surface = f.probe.surface as surfaceModule.ReadingSurface;
@@ -611,11 +754,12 @@ describe('automatic selection event ownership', () => {
       selection.addRange(range);
       if (notify) document.dispatchEvent(new Event('selectionchange'));
     }
-    return { ...f, article, body, surface, select };
+    return { ...f, article, body, surface, select, highlight };
   }
-  beforeEach(async () => {
+  beforeEach(async ({ task }) => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
-    f = await selectionFixture();
+    // Bottom-navigation cases start unassociated; a remembered host makes Delete protected.
+    f = await selectionFixture(!task.name.startsWith('uses the real bottom '));
   });
   afterEach(() => {
     f?.view.stopForUnload();
@@ -646,7 +790,9 @@ describe('automatic selection event ownership', () => {
     vi.advanceTimersByTime(1);
     await f.probe.operations;
     expect(capture).toHaveBeenCalled();
-    expect((await f.store.read(f.article.path)).body).toBe('Alpha phrase.\n\n==Beta== phrase.');
+    expect((await f.store.read(f.article.path)).body).toBe(
+      expectedHosted('Alpha phrase.\n\n==Beta== phrase.'),
+    );
   });
 
   it('rejects a range changed without selectionchange before the quiet timer fires', async () => {
@@ -668,7 +814,7 @@ describe('automatic selection event ownership', () => {
     expect([...actions.querySelectorAll('button')].map(actionName)).toEqual([
       'Previous',
       'Next',
-      'Article topics',
+      'Related notes',
       'Read later',
       'Archive',
       'Delete',
@@ -677,7 +823,11 @@ describe('automatic selection event ownership', () => {
     ]);
     expect(actions.parentElement).toBe(f.surface.viewport.parentElement);
     expect(f.surface.viewport.contains(actions)).toBe(false);
-    expect([...f.surface.flow.children]).toEqual([f.surface.title, f.surface.body]);
+    expect([...f.surface.flow.children]).toEqual([
+      f.surface.title,
+      f.surface.topics,
+      f.surface.body,
+    ]);
     expect(f.view.contentEl.querySelector('.reader-toolbar,.reader-finish')).toBeNull();
     expect(f.view.contentEl.textContent).not.toContain('End of article');
   });
@@ -729,10 +879,12 @@ describe('automatic selection event ownership', () => {
       expect(tapAction(action).disabled).toBe(false);
       tapAction(action).click();
       await tapSettled();
-      expect((await f.store.read(f.article.path)).body).toBe('==Alpha phrase.==\n\nBeta phrase.');
+      expect((await f.store.read(f.article.path)).body).toBe(
+        expectedHosted('==Alpha phrase.==\n\nBeta phrase.'),
+      );
       expect(f.surface.body.querySelector('mark')?.textContent).toBe('Alpha phrase.');
       expect(document.getSelection()?.isCollapsed).toBe(true);
-      expect(passageLabels(f.view)).toEqual(['Remove highlight', 'Undo', 'Done']);
+      expect(passageLabels(f.view)).toEqual(expectedPassageActions({ linked: true, undo: true }));
       expect(f.view.contentEl.querySelector('.reader-actions')).toBe(bar);
       expect(f.probe.tapHighlighter.active).toBe(true);
       expect(f.view.contentEl.querySelector('[aria-label="Sentence"]')).toBeNull();
@@ -740,7 +892,9 @@ describe('automatic selection event ownership', () => {
       expect(tapAction('Undo').hidden).toBe(false);
       tapAction('Undo').click();
       await tapSettled();
-      expect((await f.store.read(f.article.path)).body).toBe(f.body);
+      expect((await f.store.read(f.article.path)).body).toBe(
+        expectedRemovedHosted('==Alpha phrase.==\n\nBeta phrase.'),
+      );
       expect(f.surface.body.querySelector('mark')).toBeNull();
       expect(tapAction('Undo').hidden).toBe(true);
       expect(passageLabels(f.view)).toEqual(['Sentence', 'Paragraph', 'Done']);
@@ -759,35 +913,38 @@ describe('automatic selection event ownership', () => {
     const entered = gate();
     let requestSignal!: AbortSignal;
     let callback!: (node: NodeResult) => Promise<void>;
-    const api = {
-      version: 2,
-      listTypes: () => [],
-      searchNodes: () => [node],
-      getNode: () => node,
-      createNode: async () => node,
-      pickNodeForLink: (options: { signal: AbortSignal }, link: typeof callback) => {
-        requestSignal = options.signal;
+    const api: NodesApi = {
+      ...f.highlight.api,
+      searchNodes: () => [f.highlight.node, node],
+      getNode: (path) => (path === node.path ? node : f.highlight.api.getNode(path)),
+      createNodeForLink: (options, link) => {
+        requestSignal = options.signal!;
         callback = link;
         entered.resolve();
         return new Promise(() => {});
       },
     };
+    mocks.highlightPicker.mockResolvedValue({ kind: 'create', type: 'topic', title: node.title });
     (f.app as any).plugins = { getPlugin: () => ({ api }) };
     armTapHighlight();
     await tapWord();
     tapAction('Sentence').click();
     await tapSettled();
-    tapAction('Link to note…').click();
+    tapAction('Add highlight to notes…').click();
     await entered.promise;
     expect(requestSignal.aborted).toBe(false);
     tapAction('Undo').click();
     expect(requestSignal.aborted).toBe(true);
     await tapSettled();
-    expect((await f.store.read(f.article.path)).body).toBe(f.body);
+    expect((await f.store.read(f.article.path)).body).toBe(
+      expectedRemovedHosted('==Alpha phrase.==\n\nBeta phrase.'),
+    );
     expect(passageLabels(f.view)).toEqual(['Sentence', 'Paragraph', 'Done']);
     expect(f.probe.dialog).toBe(false);
     await expect(callback(node)).rejects.toThrow(/finished|cancelled/);
-    expect((await f.store.read(f.article.path)).body).toBe(f.body);
+    expect((await f.store.read(f.article.path)).body).toBe(
+      expectedRemovedHosted('==Alpha phrase.==\n\nBeta phrase.'),
+    );
     expect(f.vault.file(target.path)).toBe(target);
   });
 
@@ -797,7 +954,9 @@ describe('automatic selection event ownership', () => {
     expect((await f.store.read(f.article.path)).body).toBe(f.body);
     await tapWord();
     await tapSettled();
-    expect((await f.store.read(f.article.path)).body).toBe('==Alpha== phrase.\n\nBeta phrase.');
+    expect((await f.store.read(f.article.path)).body).toBe(
+      expectedHosted('==Alpha== phrase.\n\nBeta phrase.'),
+    );
     tapAction('Done').click();
     expect(f.view.contentEl.querySelectorAll('.reader-actions > button')).toHaveLength(8);
     expect(f.view.contentEl.querySelector('.reader-tap-highlight-actions')).toBeNull();
@@ -822,7 +981,7 @@ describe('automatic selection event ownership', () => {
     tapAction('Undo').click();
     await tapSettled();
     const saved = await f.store.read(f.article.path);
-    expect(saved.body).toBe(f.body);
+    expect(saved.body).toBe(expectedRemovedHosted('==Alpha phrase.==\n\nBeta phrase.'));
     expect(saved.properties.status).toBe('later');
     expect(saved.properties.title).toBe('Changed title');
   });
@@ -842,7 +1001,7 @@ describe('automatic selection event ownership', () => {
     tapAction('Undo').click();
     await tapSettled();
     const saved = await f.store.read(f.article.path);
-    expect(saved.body).toBe(f.body);
+    expect(saved.body).toBe(expectedRemovedHosted('==Alpha phrase.==\n\nBeta phrase.'));
     expect(saved.properties.title).toBe('Edited after highlight');
     expect(saved.properties.custom_property).toBe('Keep this value');
   });
@@ -901,16 +1060,20 @@ describe('automatic selection event ownership', () => {
     expect(tapAction('Undo').hidden).toBe(false);
     vi.advanceTimersByTime(6000);
     expect(tapAction('Undo').hidden).toBe(true);
-    expect(passageLabels(f.view)).toEqual(['Remove highlight', 'Done']);
+    expect(passageLabels(f.view)).toEqual(expectedPassageActions({ linked: true }));
     expectNoPassagePopup();
-    expect((await f.store.read(f.article.path)).body).toBe('==Alpha phrase.==\n\nBeta phrase.');
+    expect((await f.store.read(f.article.path)).body).toBe(
+      expectedHosted('==Alpha phrase.==\n\nBeta phrase.'),
+    );
   });
 
   it('keeps passive native-selection saves outside tap mode until the saved mark is tapped', async () => {
     f.select(0);
     vi.advanceTimersByTime(900);
     await tapSettled();
-    expect((await f.store.read(f.article.path)).body).toBe('==Alpha== phrase.\n\nBeta phrase.');
+    expect((await f.store.read(f.article.path)).body).toBe(
+      expectedHosted('==Alpha== phrase.\n\nBeta phrase.'),
+    );
     expect(f.probe.tapMode).toBe(false);
     expect(f.view.contentEl.querySelector('[aria-label="Highlight mode"]')).not.toBeNull();
     expect(f.view.contentEl.querySelector('[aria-label="Done"]')).toBeNull();
@@ -919,7 +1082,7 @@ describe('automatic selection event ownership', () => {
     f.surface.body
       .querySelector('mark')!
       .dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
-    expect(passageLabels(f.view)).toEqual(['Remove highlight', 'Done']);
+    expect(passageLabels(f.view)).toEqual(expectedPassageActions({ linked: true }));
     expect(f.probe.tapHighlighter.active).toBe(true);
     expectNoPassagePopup();
   });
@@ -941,11 +1104,11 @@ describe('automatic selection event ownership', () => {
         vi.spyOn(TapText.prototype, 'wordAt').mockReturnValueOnce(word);
       }
       mark.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
-      expect(passageLabels(f.view)).toEqual(['Remove highlight', 'Done']);
+      expect(passageLabels(f.view)).toEqual(expectedPassageActions());
       expect(f.view.contentEl.querySelector('.reader-actions')).toBe(bar);
       expect(f.probe.tapHighlighter.active).toBe(true);
       expectNoPassagePopup();
-      passageButton(f.view, 'Remove highlight').click();
+      passageButton(f.view, 'Remove highlight (article only)').click();
       await tapSettled();
       expect((await f.store.read(f.article.path)).body).toBe('==Alpha phrase.==\n\nBeta phrase.');
       expect(passageLabels(f.view)).toEqual(['Sentence', 'Paragraph', 'Done']);
@@ -959,19 +1122,23 @@ describe('automatic selection event ownership', () => {
     await tapWord();
     tapAction('Sentence').click();
     await tapSettled();
-    const oldRemove = passageButton(f.view, 'Remove highlight');
-    const annotate = vi.spyOn(f.store, 'annotate');
+    const oldRemove = passageButton(f.view, 'Remove highlight (article only)');
+    const annotate = vi.spyOn(f.store, 'collectHighlight');
     await tapWord(0, 4, 1);
     expect(f.view.contentEl.querySelector('[data-action="remove-highlight"]')).toBeNull();
     expect(tapAction('Sentence').disabled).toBe(false);
-    expect((await f.store.read(f.article.path)).body).toBe('==Alpha phrase.==\n\nBeta phrase.');
+    expect((await f.store.read(f.article.path)).body).toBe(
+      expectedHosted('==Alpha phrase.==\n\nBeta phrase.'),
+    );
     oldRemove.click();
     await tapSettled();
     expect(annotate).not.toHaveBeenCalled();
     tapAction('Sentence').click();
     await tapSettled();
-    expect((await f.store.read(f.article.path)).body).toBe('==Alpha phrase.==\n\n==Beta phrase.==');
-    expect(passageLabels(f.view)).toEqual(['Remove highlight', 'Undo', 'Done']);
+    expect((await f.store.read(f.article.path)).body).toBe(
+      expectedHosted('==Alpha phrase.==\n\n==Beta phrase.=='),
+    );
+    expect(passageLabels(f.view)).toEqual(expectedPassageActions({ linked: true, undo: true }));
     expectNoPassagePopup();
   });
 
@@ -988,9 +1155,9 @@ describe('automatic selection event ownership', () => {
     f.vault.bytes.set(f.article, raw);
     f.store.catalog.update(f.article.path, readDocument(raw).properties);
     await f.view.changed({ path: f.article.path, metadataChanged: true });
-    expect(passageLabels(f.view)).toEqual(['Remove highlight', 'Undo', 'Done']);
+    expect(passageLabels(f.view)).toEqual(expectedPassageActions({ linked: true, undo: true }));
     expect((await f.store.read(f.article.path)).body).toBe(body);
-    const staleRemove = passageButton(f.view, 'Remove highlight');
+    const staleRemove = passageButton(f.view, 'Remove highlight (article only)');
     const replacement = replaceBody(raw, body, 'Replacement article.');
     f.vault.bytes.set(f.article, replacement);
     await f.view.changed({ path: f.article.path });
@@ -1014,13 +1181,13 @@ describe('automatic selection event ownership', () => {
       body + '\n\nExternal text.',
     );
     f.vault.bytes.set(f.article, replacement);
-    passageButton(f.view, 'Remove highlight').click();
+    passageButton(f.view, 'Remove highlight (article only)').click();
     await expect(tapSettled()).rejects.toThrow('The note changed');
     expect(await f.vault.read(f.article)).toBe(replacement);
     expectNoPassagePopup();
   });
 
-  it('refreshes Link/Unlink passage actions against the saved body and Remove preserves the words', async () => {
+  it('refreshes destination/unlink passage actions against the saved body and Remove preserves the words', async () => {
     const target = await f.note('Nodes/One.md', 'Keep the target', 'topic');
     const node: NodeResult = {
       path: target.path,
@@ -1030,67 +1197,66 @@ describe('automatic selection event ownership', () => {
       aliases: [],
     };
     const api: NodesApi = {
-      version: 2,
-      listTypes: () => [],
-      searchNodes: () => [node],
-      getNode: () => node,
-      createNode: vi.fn(async () => node),
-      pickNodeForLink: vi.fn(async (_options, link) => {
-        await link(node);
-        return node;
-      }),
+      ...f.highlight.api,
+      searchNodes: () => [f.highlight.node, node],
+      getNode: (path) => (path === node.path ? node : f.highlight.api.getNode(path)),
     };
     (f.app as any).plugins = { getPlugin: () => ({ api }) };
+    mocks.highlightPicker.mockResolvedValue({ kind: 'existing', node });
     const bar = f.view.contentEl.querySelector('.reader-actions');
     const targetBefore = await f.vault.read(target);
     armTapHighlight();
     await tapWord();
     tapAction('Sentence').click();
     await tapSettled();
-    expect(passageLabels(f.view)).toEqual([
-      'Link to note…',
-      'Create note…',
-      'Remove highlight',
-      'Undo',
-      'Done',
-    ]);
-    passageButton(f.view, 'Link to note…').click();
+    const blockId = paragraphAnchors((await f.store.read(f.article.path)).body)[0].blockId;
+    expect(passageLabels(f.view)).toEqual(expectedPassageActions({ linked: true, undo: true }));
+    passageButton(f.view, 'Add highlight to notes…').click();
     await tapSettled();
-    expect(api.pickNodeForLink).toHaveBeenCalledWith(
-      {
-        suggestedTitle: 'Alpha phrase.',
-        sourcePath: f.article.path,
+    expect(mocks.highlightPicker).toHaveBeenCalledWith(
+      f.app,
+      api,
+      expect.objectContaining({
+        query: '',
+        title: 'Add highlight to notes',
+        multiple: true,
+        minSelection: 0,
+        selectedPaths: [defaultHighlightPath],
         signal: expect.any(AbortSignal),
-      },
-      expect.any(Function),
+      }),
     );
-    expect((await f.store.read(f.article.path)).body).toBe(
-      '==[[Nodes/One.md|Alpha phrase.]]==\n\nBeta phrase.',
+    expect(api.pickNodeForLink).not.toHaveBeenCalled();
+    const linked = expectedHosted('==Alpha phrase.==\n\nBeta phrase.', target.path, blockId);
+    expect((await f.store.read(f.article.path)).body).toBe(linked);
+    expect(passageLabels(f.view).filter((label) => label !== 'Undo')).toEqual(
+      expectedPassageActions({ linked: true }),
     );
-    expect(passageLabels(f.view).filter((label) => label !== 'Undo')).toEqual([
-      'Open note',
-      'Change link…',
-      'Create note…',
-      'Remove link (keeps highlight)',
-      'Remove highlight',
-      'Done',
-    ]);
     expect(f.view.contentEl.querySelector('.reader-actions')).toBe(bar);
-    passageButton(f.view, 'Remove link (keeps highlight)').click();
+    const collected = appendQuotation(
+      targetBefore,
+      'Alpha phrase.',
+      originLink(f.article.path, blockId, f.article.basename),
+    ).raw;
+    expect(await f.vault.read(target)).toBe(collected);
+    passageButton(f.view, 'Remove references (article only)').click();
     await tapSettled();
-    expect((await f.store.read(f.article.path)).body).toBe('==Alpha phrase.==\n\nBeta phrase.');
-    expect(passageLabels(f.view).filter((label) => label !== 'Undo')).toEqual([
-      'Link to note…',
-      'Create note…',
-      'Remove highlight',
-      'Done',
+    const unlinked = changePassage(linked, passages(linked)[0], 'unlink');
+    expect((await f.store.read(f.article.path)).body).toBe(unlinked);
+    expect(passageLabels(f.view).filter((label) => label !== 'Undo')).toEqual(
+      expectedPassageActions(),
+    );
+    passageButton(f.view, 'Remove highlight (article only)').click();
+    await tapSettled();
+    expect((await f.store.read(f.article.path)).body).toBe(
+      changePassage(unlinked, passages(unlinked)[0], 'remove'),
+    );
+    expect((await f.store.read(f.article.path)).properties.topics).toEqual([
+      '[[Nodes/Default]]',
+      '[[Nodes/One]]',
     ]);
-    passageButton(f.view, 'Remove highlight').click();
-    await tapSettled();
-    expect((await f.store.read(f.article.path)).body).toBe(f.body);
     expect(passageLabels(f.view)).toEqual(['Sentence', 'Paragraph', 'Done']);
     expect(f.probe.tapHighlighter.active).toBe(true);
-    expect(await f.vault.read(target)).toBe(targetBefore);
+    expect(await f.vault.read(target)).toBe(collected);
     expect(f.vault.trashed).toEqual([]);
     expectNoPassagePopup();
   });
@@ -1157,7 +1323,7 @@ describe('automatic selection event ownership', () => {
   )(
     'preserves selection and saves exactly once 900ms after isolated $kind $release',
     async ({ kind, release }) => {
-      const annotate = vi.spyOn(f.store, 'annotate'),
+      const annotate = vi.spyOn(f.store, 'collectHighlight'),
         workspace = vi.fn();
       for (const type of ['pointerdown', 'pointerup', 'pointercancel', 'touchstart', 'touchend'])
         f.view.containerEl.addEventListener(type, workspace);
@@ -1182,7 +1348,9 @@ describe('automatic selection event ownership', () => {
       vi.advanceTimersByTime(1);
       await f.probe.operations;
       expect(annotate).toHaveBeenCalledOnce();
-      expect((await f.store.read(f.article.path)).body).toBe('==Alpha== phrase.\n\nBeta phrase.');
+      expect((await f.store.read(f.article.path)).body).toBe(
+        expectedHosted('==Alpha== phrase.\n\nBeta phrase.'),
+      );
       expect(document.getSelection()!.toString()).toBe('Alpha');
       expect(workspace).not.toHaveBeenCalled();
     },
@@ -1191,7 +1359,7 @@ describe('automatic selection event ownership', () => {
   it.each(['pointerup', 'pointercancel'])(
     'saves pointer-only desktop selection after stopped %s and Surface capture release',
     async (release) => {
-      const annotate = vi.spyOn(f.store, 'annotate');
+      const annotate = vi.spyOn(f.store, 'collectHighlight');
       f.surface.body.addEventListener(release, (event) => event.stopPropagation(), { once: true });
       gesture('pointerdown', f.surface.body, 'mouse', 17);
       f.select(0); // selectionchange arrives before release, while both trackers are held.
@@ -1220,7 +1388,7 @@ describe('automatic selection event ownership', () => {
   )(
     'observes stopped mixed-stream termination: $pointerRelease / $touchRelease, pointer first=$pointerFirst',
     async ({ pointerRelease, touchRelease, pointerFirst }) => {
-      const annotate = vi.spyOn(f.store, 'annotate');
+      const annotate = vi.spyOn(f.store, 'collectHighlight');
       const target = f.surface.body;
       for (const type of [pointerRelease, touchRelease])
         target.addEventListener(type, (event) => event.stopPropagation(), { once: true });
@@ -1259,7 +1427,7 @@ describe('automatic selection event ownership', () => {
   it.each(['touchend'])(
     'reconciles accumulated iOS pointers only at authoritative empty %s',
     async (release) => {
-      const annotate = vi.spyOn(f.store, 'annotate');
+      const annotate = vi.spyOn(f.store, 'collectHighlight');
       gesture('pointerdown', f.surface.body, 'touch', 17);
       nativeTouch('touchstart', [42], [42]);
       gesture('pointerdown', f.surface.body, 'touch', 18);
@@ -1296,7 +1464,7 @@ describe('automatic selection event ownership', () => {
   );
 
   it('does not treat a lone zero-touch cancellation as a missing pointer release', async () => {
-    const annotate = vi.spyOn(f.store, 'annotate');
+    const annotate = vi.spyOn(f.store, 'collectHighlight');
     gesture('pointerdown', f.surface.body, 'touch', 17);
     nativeTouch('touchstart', [42], [42]);
     f.select(0);
@@ -1309,7 +1477,7 @@ describe('automatic selection event ownership', () => {
   });
 
   it('keeps simultaneous mouse and pen guards after native touches lift', async () => {
-    const annotate = vi.spyOn(f.store, 'annotate');
+    const annotate = vi.spyOn(f.store, 'collectHighlight');
     for (const [id, kind] of [
       [17, 'touch'],
       [18, 'mouse'],
@@ -1336,7 +1504,7 @@ describe('automatic selection event ownership', () => {
   });
 
   it('restarts the full 900ms quiet period for every adjustment, including repeated text', async () => {
-    const annotate = vi.spyOn(f.store, 'annotate');
+    const annotate = vi.spyOn(f.store, 'collectHighlight');
     f.select(0);
     vi.advanceTimersByTime(899);
     f.select(1);
@@ -1348,14 +1516,16 @@ describe('automatic selection event ownership', () => {
     vi.advanceTimersByTime(1);
     await f.probe.operations;
     expect(annotate).toHaveBeenCalledOnce();
-    expect((await f.store.read(f.article.path)).body).toBe('Alpha phrase.\n\n==Beta== phrase.');
+    expect((await f.store.read(f.article.path)).body).toBe(
+      expectedHosted('Alpha phrase.\n\n==Beta== phrase.'),
+    );
     expect(document.getSelection()!.toString()).toBe('Beta');
   });
 
   it.each(['pointerup', 'pointercancel', 'touchend', 'touchcancel'])(
     'retains the outside-Reader %s fallback and its full quiet period',
     async (release) => {
-      const annotate = vi.spyOn(f.store, 'annotate');
+      const annotate = vi.spyOn(f.store, 'collectHighlight');
       gesture(release.startsWith('touch') ? 'touchstart' : 'pointerdown');
       f.select(0);
       vi.advanceTimersByTime(1200);
@@ -1416,7 +1586,7 @@ describe('automatic selection event ownership', () => {
     'removes mobile interception after %s',
     async (end) => {
       const workspace = vi.fn(),
-        annotate = vi.spyOn(f.store, 'annotate');
+        annotate = vi.spyOn(f.store, 'collectHighlight');
       f.view.containerEl.addEventListener('touchstart', workspace);
       if (end === 'close') await f.view.onClose();
       else if (end === 'unload') f.view.stopForUnload();
@@ -1430,7 +1600,7 @@ describe('automatic selection event ownership', () => {
   );
 
   it('keeps a touch-only adjustment held until every known touch releases', async () => {
-    const annotate = vi.spyOn(f.store, 'annotate');
+    const annotate = vi.spyOn(f.store, 'collectHighlight');
     gesture('touchstart', f.surface.body, 'touch', 1);
     gesture('touchstart', f.surface.body, 'touch', 2);
     f.select(0);
@@ -1449,7 +1619,7 @@ describe('automatic selection event ownership', () => {
   });
 
   it('cancels a pending automatic save on host retirement without isolating later gestures', async () => {
-    const annotate = vi.spyOn(f.store, 'annotate'),
+    const annotate = vi.spyOn(f.store, 'collectHighlight'),
       workspace = vi.fn();
     f.view.containerEl.addEventListener('touchmove', workspace);
     f.select(0);
@@ -1500,7 +1670,9 @@ describe('automatic selection event ownership', () => {
       expect((await f.store.read(f.article.path)).body).toBe(f.body);
       vi.advanceTimersByTime(1);
       await f.probe.operations;
-      expect((await f.store.read(f.article.path)).body).toBe('==Alpha== phrase.\n\nBeta phrase.');
+      expect((await f.store.read(f.article.path)).body).toBe(
+        expectedHosted('==Alpha== phrase.\n\nBeta phrase.'),
+      );
       expect(document.getSelection()!.toString()).toBe('Alpha');
       const feedback = f.view.contentEl.querySelector<HTMLElement>('.reader-highlight-feedback')!;
       expect(feedback.hidden).toBe(false);
@@ -1542,7 +1714,7 @@ describe('automatic selection event ownership', () => {
       document.getSelection()!.addRange(range);
       document.dispatchEvent(new Event('selectionchange'));
       const before = await f.vault.read(f.article),
-        annotate = vi.spyOn(f.store, 'annotate');
+        annotate = vi.spyOn(f.store, 'collectHighlight');
       vi.advanceTimersByTime(900);
       await f.probe.operations;
       expect(await f.vault.read(f.article)).toBe(before);
@@ -1663,7 +1835,9 @@ describe('automatic selection event ownership', () => {
       expect((await f.store.read(f.article.path)).body).toBe(f.body);
       vi.advanceTimersByTime(900);
       await f.probe.operations;
-      expect((await f.store.read(f.article.path)).body).toBe('Alpha phrase.\n\n==Beta== phrase.');
+      expect((await f.store.read(f.article.path)).body).toBe(
+        expectedHosted('Alpha phrase.\n\n==Beta== phrase.'),
+      );
       if (wait === 'position')
         expect((await f.store.read(f.article.path)).properties.bookmark).toBe('position sentinel');
     },
@@ -1698,9 +1872,11 @@ describe('automatic selection event ownership', () => {
       vi.advanceTimersByTime(900);
       await f.probe.operations;
       expect((await f.store.read(f.article.path)).body).toBe(
-        kind === 'unreported'
-          ? 'Alpha phrase.\n\n==Beta== phrase.'
-          : '==Alpha== phrase.\n\nBeta phrase.',
+        expectedHosted(
+          kind === 'unreported'
+            ? 'Alpha phrase.\n\n==Beta== phrase.'
+            : '==Alpha== phrase.\n\nBeta phrase.',
+        ),
       );
     },
   );
@@ -1726,7 +1902,9 @@ describe('automatic selection event ownership', () => {
     expect(mocks.notice).not.toHaveBeenCalled();
     vi.advanceTimersByTime(900);
     await f.probe.operations;
-    expect((await f.store.read(f.article.path)).body).toBe('Alpha phrase.\n\n==Beta== phrase.');
+    expect((await f.store.read(f.article.path)).body).toBe(
+      expectedHosted('Alpha phrase.\n\n==Beta== phrase.'),
+    );
   });
 
   it.each(['body', 'replacement'] as const)(
@@ -1755,16 +1933,23 @@ describe('automatic selection event ownership', () => {
     f.select(0);
     vi.advanceTimersByTime(900);
     await f.probe.operations;
-    expect((await f.store.read(f.article.path)).body).toBe('==Alpha== phrase.\n\nBeta phrase.');
+    const blockId = paragraphAnchors((await f.store.read(f.article.path)).body)[0].blockId;
+    expect((await f.store.read(f.article.path)).body).toBe(
+      expectedHosted('==Alpha== phrase.\n\nBeta phrase.'),
+    );
     expect(f.surface.displayedBody).toBe(f.body);
     expect(document.getSelection()!.toString()).toBe('Alpha');
     f.select(0, 12);
     vi.advanceTimersByTime(900);
     await f.probe.operations;
-    expect((await f.store.read(f.article.path)).body).toBe('==Alpha phrase==.\n\nBeta phrase.');
+    expect((await f.store.read(f.article.path)).body).toBe(
+      expectedHosted('==Alpha phrase==.\n\nBeta phrase.', defaultHighlightPath, blockId),
+    );
     document.getSelection()!.removeAllRanges();
     document.dispatchEvent(new Event('selectionchange'));
-    expect(f.surface.displayedBody).toBe('==Alpha phrase==.\n\nBeta phrase.');
+    expect(f.surface.displayedBody).toBe(
+      expectedHosted('==Alpha phrase==.\n\nBeta phrase.', defaultHighlightPath, blockId),
+    );
     vi.advanceTimersByTime(900);
     await f.probe.operations;
     expect([...f.surface.body.querySelectorAll('mark')].map((mark) => mark.textContent)).toEqual([
@@ -1787,7 +1972,9 @@ describe('automatic selection event ownership', () => {
     await f.probe.operations;
     expect(f.article.path).toBe('Reading/Later/Selection.md');
     expect((await f.store.read(f.article.path)).properties.status).toBe('later');
-    expect((await f.store.read(f.article.path)).body).toBe('==Alpha== phrase.\n\nBeta phrase.');
+    expect((await f.store.read(f.article.path)).body).toBe(
+      expectedHosted('==Alpha== phrase.\n\nBeta phrase.'),
+    );
     expect(mocks.notice).not.toHaveBeenCalled();
   });
 
@@ -1808,10 +1995,14 @@ describe('automatic selection event ownership', () => {
     f.select(1);
     release.resolve();
     await oldJob;
-    expect((await f.store.read(f.article.path)).body).toBe('==Alpha== phrase.\n\nBeta phrase.');
+    expect((await f.store.read(f.article.path)).body).toBe(
+      expectedHosted('==Alpha== phrase.\n\nBeta phrase.'),
+    );
     vi.advanceTimersByTime(900);
     await f.probe.operations;
-    expect((await f.store.read(f.article.path)).body).toBe('==Alpha== phrase.\n\n==Beta== phrase.');
+    expect((await f.store.read(f.article.path)).body).toBe(
+      expectedHosted('==Alpha== phrase.\n\n==Beta== phrase.'),
+    );
     expect(mocks.notice).not.toHaveBeenCalled();
   });
 
@@ -1830,7 +2021,9 @@ describe('automatic selection event ownership', () => {
     document.getSelection()!.removeAllRanges();
     release.resolve();
     await closing;
-    expect((await f.store.read(f.article.path)).body).toBe('Alpha phrase.\n\n==Beta== phrase.');
+    expect((await f.store.read(f.article.path)).body).toBe(
+      expectedHosted('Alpha phrase.\n\n==Beta== phrase.'),
+    );
     expect(mocks.notice).not.toHaveBeenCalled();
   });
 });
@@ -1839,6 +2032,7 @@ describe('displayed source and deferred rendering', () => {
   it('rejects stale selection, passage, move, topic, trash and position actions while newer source is deferred', async () => {
     const f = hostFixture(),
       article = await f.note('Reading/Inbox/A.md', 'before ==words== after');
+    enableTypedTopics(f);
     await f.view.openArticle(article.path);
     const surface = f.probe.surface,
       old = f.probe.snapshot.body;
@@ -1877,14 +2071,20 @@ describe('displayed source and deferred rendering', () => {
   it('permits automatic range adjustment over its own deferred highlight markup only', async () => {
     const f = hostFixture(),
       article = await f.note('Reading/Inbox/A.md');
+    await enableHighlightHost(f, article);
     await f.view.openArticle(article.path);
     const surface = f.probe.surface;
     surface.selectionValue = { quote: 'words', before: 'before ', after: ' after' };
     await f.probe.saveSelection();
+    const first = expectedHosted('before ==words== after');
+    expect((await f.store.read(article.path)).body).toBe(first);
+    const blockId = paragraphAnchors(first)[0].blockId;
     expect(surface.displayedBody).toBe('before words after');
     surface.selectionValue = { quote: 'words after', before: 'before ', after: '' };
     await f.probe.saveSelection();
-    expect((await f.store.read(article.path)).body).toBe('before ==words after==');
+    expect((await f.store.read(article.path)).body).toBe(
+      expectedHosted('before ==words after==', defaultHighlightPath, blockId),
+    );
     expect(surface.displayedBody).toBe('before words after');
     f.vault.bytes.set(
       article,
@@ -1899,13 +2099,14 @@ describe('displayed source and deferred rendering', () => {
   it('captures the pending selection before an awaited close loses the native range', async () => {
     const f = hostFixture(),
       article = await f.note('Reading/Inbox/A.md');
+    await enableHighlightHost(f, article);
     await f.view.openArticle(article.path);
     const surface = f.probe.surface;
     surface.selectionValue = { quote: 'words', before: 'before ', after: ' after' };
     const closing = f.view.onClose();
     surface.selectionValue = undefined;
     await closing;
-    expect((await f.store.read(article.path)).body).toBe('before ==words== after');
+    expect((await f.store.read(article.path)).body).toBe(expectedHosted('before ==words== after'));
     expect(surface.dispose).toHaveBeenCalledOnce();
   });
 
@@ -1951,6 +2152,7 @@ describe('public article commands', () => {
     vi.mocked(f.app.workspace.getActiveViewOfType).mockReturnValue(f.view);
     for (const id of ['move', 'topics', 'open-markdown']) expect(command(id, false)).toBe(false);
     const article = await f.note('Reading/Inbox/Commands.md');
+    enableTypedTopics(f);
     await f.view.openArticle(article.path);
     const before = await f.vault.read(article);
     for (const id of ['move', 'topics', 'open-markdown']) expect(command(id)).toBe(true);
@@ -1965,7 +2167,13 @@ describe('public article commands', () => {
     expect(await f.vault.read(article)).toBe(patchProperties(before, { status: 'later' }));
     command('topics', false);
     await f.probe.operations;
-    expect(mocks.topics).toHaveBeenCalledOnce();
+    expect(mocks.highlightPicker).toHaveBeenCalledOnce();
+    expect(mocks.highlightPicker).toHaveBeenCalledWith(
+      f.app,
+      expect.any(Object),
+      expect.objectContaining({ title: 'Related notes', actionLabel: 'Apply', multiple: true }),
+    );
+    expect(mocks.topics).not.toHaveBeenCalled();
     f.vault.bytes.set(article, '---\ntype: other\n---\nUnchanged authored words.');
     await f.view.changed({ path: article.path });
     expect(command('move')).toBe(false);
@@ -2050,26 +2258,45 @@ describe('public reading-list command and URI', () => {
     async (route) => {
       const f = await pluginFixture();
       const article = await f.note('Reading/Inbox/Article.md');
+      const highlight = await enableHighlightHost(f, article);
       await f.view.openArticle(article.path);
       vi.mocked(f.app.workspace.getActiveViewOfType).mockReturnValue(f.view);
       expect(mocks.commands.get('open-reader')!.name).toBe('Open reading list');
       expect([...mocks.protocols.keys()]).toEqual(['obsidian-reader']);
-      const pending = gate(),
-        creation = new AbortController();
+      const pending = gate();
       f.probe.positionWrite = pending.promise;
-      f.probe.nodeCreation = { controller: creation };
       f.probe.surface.selectionValue = { quote: 'words', before: 'before ', after: ' after' };
       f.probe.surface.marker = 'words';
       invoke(route);
-      expect(creation.signal.aborted).toBe(true);
       expect(f.view.file).toBe(article);
       pending.resolve();
       await f.probe.operations;
       expect(f.view.file).toBeUndefined();
       expect(f.view.contentEl.querySelector('.reader-list')).not.toBeNull();
       const saved = readDocument(await f.vault.read(article));
-      expect(saved.body).toBe('before ==words== after');
+      expect(saved.body).toBe(expectedHosted('before ==words== after'));
       expect(saved.properties.bookmark).toBe('words');
+      // Cancel a genuine Reader create intent separately: cancelling a modal's captured
+      // selection must not replay that cancelled intent as a fresh automatic highlight.
+      await f.view.openArticle(article.path);
+      const beforeCancel = await f.vault.read(article),
+        entered = gate();
+      let requestSignal!: AbortSignal;
+      highlight.api.createNodeForLink = (options) => {
+        requestSignal = options.signal!;
+        entered.resolve();
+        return new Promise(() => {});
+      };
+      mocks.highlightPicker.mockResolvedValue({ kind: 'create', title: 'words', type: 'topic' });
+      const creating = menu(f.view, 'Add highlight to notes…');
+      await entered.promise;
+      invoke(route);
+      expect(requestSignal.aborted).toBe(true);
+      await f.probe.operations;
+      await creating;
+      expect(f.view.file).toBeUndefined();
+      expect(f.view.contentEl.querySelector('.reader-list')).not.toBeNull();
+      expect(await f.vault.read(article)).toBe(beforeCancel);
       expect(f.app.workspace.getLeaf).not.toHaveBeenCalled();
     },
   );
@@ -2079,6 +2306,7 @@ describe('public reading-list command and URI', () => {
     async (route) => {
       const f = await pluginFixture();
       const article = await f.note('Reading/Inbox/Article.md');
+      await enableHighlightHost(f, article);
       await f.view.openArticle(article.path);
       vi.mocked(f.app.workspace.getActiveViewOfType).mockReturnValue(f.view);
       f.probe.surface.selectionValue = { quote: 'words', before: 'before ', after: ' after' };
@@ -2318,7 +2546,7 @@ describe('article keyboard boundaries', () => {
     expect(names()).toEqual([
       'Previous page',
       'Next page',
-      'Article topics',
+      'Related notes',
       'Read later',
       'Archive',
       'Delete',
@@ -3027,6 +3255,8 @@ describe('article keyboard boundaries', () => {
   });
   it('keeps boundary navigation behind the existing flush/source guard', async () => {
     const f = await fixture();
+    await enableHighlightHost(f, f.b);
+    await f.view.changed({ path: f.b.path, metadataChanged: true });
     f.probe.surface.selectionValue = { quote: 'words', before: 'before ', after: ' after' };
     const raw = createDocument({ type: 'article' }, 'External changed body');
     f.vault.bytes.set(f.b, raw);
@@ -3355,14 +3585,14 @@ describe('bounded Reader UI', () => {
       expect(buttons.map((button) => button.getAttribute('aria-label'))).toEqual([
         'Previous article',
         'Next article',
-        'Article topics',
+        'Related notes',
         'Read later',
         'Archive and advance',
         'Trash article and advance',
         'List',
         'Highlight mode',
       ]);
-      expect(setTooltip).toHaveBeenCalledWith(buttons[2], 'Article topics');
+      expect(setTooltip).toHaveBeenCalledWith(buttons[2], 'Related notes');
       expect(setTooltip).toHaveBeenCalledWith(buttons[3], 'Read later');
       expect(setTooltip).toHaveBeenCalledWith(buttons[4], 'Archive');
       expect(buttons[0].disabled).toBe(true);
@@ -3964,13 +4194,14 @@ describe('folder-authoritative queue presentation', () => {
       f.vault.bytes.set(article, raw);
       f.store.catalog.update(article.path, readDocument(raw).properties);
       expect(f.store.catalog.article(article.path)?.queue).toBe(queue);
+      await enableHighlightHost(f);
       await f.view.openArticle(article.path);
       expect(await f.vault.read(article)).toBe(patchProperties(raw, { dog_ear: true }));
       f.probe.surface.selectionValue = { quote: 'words', before: 'before ', after: ' after' };
       await f.probe.saveSelection();
       const saved = await f.store.read(article.path);
       expect(saved.properties.status).toBe(savedStatus);
-      expect(saved.body).toBe('before ==words== after');
+      expect(saved.body).toBe(expectedHosted('before ==words== after'));
       expect(article.path).toBe(finalPath);
       expect(f.store.catalog.article(article.path)?.queue).toBe(queue === 'Feed' ? 'Later' : queue);
     },
@@ -4037,10 +4268,11 @@ describe('browsing context and presentation', () => {
     f.probe.topicFilter = { label: 'sea level', terms: ['sea level'] };
     f.view.showList('Feed');
     for (let i = 0; i < 100; i++) await Promise.resolve();
+    const api = enableTypedTopics(f);
     await f.view.openArticle(current.path, true);
-    mocks.topics.mockImplementation(async (_app, _files, _selected, _signal, _creation, commit) => {
-      await commit([topic.path]);
-      return [topic.path];
+    mocks.highlightPicker.mockResolvedValueOnce({
+      kind: 'existing-many',
+      nodes: [api.getNode(topic.path)!],
     });
     await f.probe.topics();
     expect((await f.store.read(current.path)).properties.status).toBe('later');
@@ -4325,6 +4557,7 @@ describe('browsing context and presentation', () => {
       a = await f.note('Reading/Stream/A.md', 'before words after'),
       b = await f.note('Reading/Stream/B.md');
     f.view.showList('Feed');
+    await enableHighlightHost(f);
     await f.view.openArticle(a.path, true);
     const raw = await f.vault.read(a);
     vi.spyOn(f.vault, 'process').mockRejectedValueOnce(new Error('Queue change failed'));
@@ -4341,7 +4574,7 @@ describe('browsing context and presentation', () => {
 });
 
 describe('commit-time annotation targets', () => {
-  function sharedPicker(f: ReturnType<typeof hostFixture>, target: TFile, wait = async () => {}) {
+  function readerPicker(f: ReturnType<typeof hostFixture>, target: TFile, wait = async () => {}) {
     const node: NodeResult = {
       path: target.path,
       title: 'Target',
@@ -4351,17 +4584,18 @@ describe('commit-time annotation targets', () => {
     };
     const api: NodesApi = {
       version: 2,
-      listTypes: () => [],
+      listTypes: () => [{ type: 'topic', label: 'Topic' }],
       searchNodes: () => [node],
-      getNode: () => node,
+      getNode: (path) => (path === target.path ? node : null),
       createNode: vi.fn(async () => null),
-      pickNodeForLink: async (_options, link) => {
-        await wait();
-        await link(node);
-        return node;
-      },
+      createNodeForLink: vi.fn(async () => null),
+      pickNodeForLink: vi.fn(async () => null),
     };
     (f.app as any).plugins = { getPlugin: () => ({ api }) };
+    mocks.highlightPicker.mockImplementation(async () => {
+      await wait();
+      return { kind: 'existing', node };
+    });
   }
   it('allows a position save while a link picker is open without losing the annotation', async () => {
     const f = hostFixture(),
@@ -4370,17 +4604,17 @@ describe('commit-time annotation targets', () => {
     await f.view.openArticle(article.path);
     const started = gate(),
       finish = gate();
-    sharedPicker(f, target, async () => {
+    readerPicker(f, target, async () => {
       started.resolve();
       await finish.promise;
     });
-    const linking = menu(f.view, 'Link to note…');
+    const linking = menu(f.view, 'Add highlight to notes…');
     await started.promise;
     f.probe.persistPosition('words');
     await f.probe.positionWrite;
     finish.resolve();
     await linking;
-    expect((await f.store.read(article.path)).body).toBe('==[[Notes/Target.md|words]]==');
+    expect((await f.store.read(article.path)).body).toBe(expectedHosted('==words==', target.path));
     expect((await f.store.read(article.path)).properties.bookmark).toBe('words');
   });
 
@@ -4389,13 +4623,15 @@ describe('commit-time annotation targets', () => {
       article = await f.note('Reading/Inbox/A.md', '==words=='),
       target = await f.note('Notes/Target.md', '', 'topic');
     await f.view.openArticle(article.path);
-    sharedPicker(f, target);
+    readerPicker(f, target);
     const original = f.vault.process.bind(f.vault);
     vi.spyOn(f.vault, 'process').mockImplementation(async (file, transform) => {
       f.vault.files.set(target.path, { path: target.path });
       return original(file, transform);
     });
-    await expect(menu(f.view, 'Link to note…')).rejects.toThrow('selected note changed');
+    await expect(menu(f.view, 'Add highlight to notes…')).rejects.toThrow(
+      'typed destination changed',
+    );
     expect((await f.store.read(article.path)).body).toBe('==words==');
   });
 
@@ -4414,19 +4650,18 @@ describe('commit-time annotation targets', () => {
       };
       const api = {
         version: 2,
-        listTypes: () => [],
+        listTypes: () => [{ type: 'topic', label: 'Topic' }],
         searchNodes: () => [node],
         getNode: () => node,
         createNode: async () => node,
-        pickNodeForLink: async (_options: unknown, link: (node: NodeResult) => Promise<void>) => {
-          await link({ ...node });
-          return node;
-        },
+        pickNodeForLink: vi.fn(async () => null),
       };
       let current: unknown = api;
       (f.app as any).plugins = { getPlugin: () => ({ api: current }) };
+      mocks.highlightPicker.mockResolvedValue({ kind: 'existing', node });
       await f.view.openArticle(article.path);
-      const original = f.vault.process.bind(f.vault);
+      const before = await f.vault.read(article),
+        original = f.vault.process.bind(f.vault);
       vi.spyOn(f.vault, 'process').mockImplementation(async (file, transform) => {
         if (kind === 'api') current = { ...api };
         else if (kind === 'classes') node.classes = ['person'];
@@ -4434,7 +4669,11 @@ describe('commit-time annotation targets', () => {
         else f.vault.files.set(target.path, { path: target.path });
         return original(file, transform);
       });
-      await expect(menu(f.view, 'Link to note…')).rejects.toThrow(/selected (node|note)/);
+      await expect(menu(f.view, 'Add highlight to notes…')).rejects.toThrow(
+        /Fileclass Inline changed|typed destination changed/,
+      );
+      expect(api.pickNodeForLink).not.toHaveBeenCalled();
+      expect(await f.vault.read(article)).toBe(before);
       expect((await f.store.read(article.path)).body).toBe('==words==');
     },
   );
@@ -4449,15 +4688,25 @@ describe('commit-time annotation targets', () => {
     );
     vi.mocked(f.app.metadataCache.getFirstLinkpathDest).mockImplementation((path, source) => {
       expect(source).toBe(article.path);
-      return path === 'Short topic name' ? target : null;
+      return path === 'Short topic name' || path === target.path ? target : null;
     });
+    // The production NativeVault delegates native aliases to the metadata cache.
+    Object.assign(f.vault, {
+      resolveLink: (link: string, source: string) =>
+        f.app.metadataCache.getFirstLinkpathDest(link, source) ?? undefined,
+    });
+    const api = enableTypedTopics(f);
     await f.view.openArticle(article.path);
-    mocks.topics.mockImplementation(async (_app, _files, _selected, _signal, _creation, commit) => {
-      await commit([target.path]);
-      return [target.path];
+    mocks.highlightPicker.mockResolvedValueOnce({
+      kind: 'existing-many',
+      nodes: [api.getNode(target.path)!],
     });
     await f.probe.topics();
-    expect(mocks.topics.mock.calls[0][2]).toEqual(new Set([target.path]));
+    expect(mocks.highlightPicker).toHaveBeenCalledWith(
+      f.app,
+      api,
+      expect.objectContaining({ selectedPaths: [target.path] }),
+    );
     expect((await f.store.read(article.path)).properties.topics).toEqual([
       '[[Short topic name|My label]]',
     ]);
@@ -4468,69 +4717,88 @@ describe('commit-time annotation targets', () => {
     { topics: ['[[Missing]]'] },
     { topics: [42] },
     { topics: 'not an array' },
-  ])('fails closed on unrecognized/unresolved topic data: $topics', async ({ topics }) => {
-    const f = hostFixture(),
-      article = await f.note('Reading/Inbox/A.md');
-    const original = createDocument({ type: 'article', status: 'inbox', topics }, 'body');
-    f.vault.bytes.set(article, original);
-    await f.view.openArticle(article.path);
-    await expect(f.probe.topics()).rejects.toThrow(/Markdown/);
-    expect(mocks.topics).not.toHaveBeenCalled();
-    expect(await f.vault.read(article)).toBe(patchProperties(original, { dog_ear: true }));
-  });
+  ])(
+    'preserves unrecognized/unresolved topic data while adding a typed destination: $topics',
+    async ({ topics }) => {
+      const f = hostFixture(),
+        article = await f.note('Reading/Inbox/A.md'),
+        target = await f.note('Topics/Typed.md', 'Keep this target', 'topic');
+      const original = createDocument({ type: 'article', status: 'inbox', topics }, 'body');
+      f.vault.bytes.set(article, original);
+      const api = enableTypedTopics(f),
+        targetBefore = await f.vault.read(target);
+      await f.view.openArticle(article.path);
+      mocks.highlightPicker.mockImplementationOnce(async (_app, current, options) => {
+        expect(current).toBe(api);
+        expect(options.selectedPaths).toEqual([]);
+        expect(api.searchNodes('')).toEqual([api.getNode(target.path)]);
+        return { kind: 'existing-many', nodes: [api.getNode(target.path)!] };
+      });
+      await f.probe.topics();
+      expect(mocks.highlightPicker).toHaveBeenCalledOnce();
+      expect(api.getNode).toHaveBeenCalledWith(target.path);
+      expect(await f.vault.read(article)).toBe(
+        patchProperties(patchProperties(original, { dog_ear: true }), {
+          topics: [...(Array.isArray(topics) ? topics : [topics]), '[[Topics/Typed.md]]'],
+        }),
+      );
+      expect(await f.vault.read(target)).toBe(targetBefore);
+    },
+  );
 
   it('retains an article promoted before a link target disappears, without saving the stale link', async () => {
     const f = hostFixture(),
       article = await f.note('Reading/Stream/A.md', '==words=='),
       target = await f.note('Notes/Target.md', '', 'topic');
     await f.view.openArticle(article.path);
-    sharedPicker(f, target);
-    // Exercise the annotation's retain-first partial-failure boundary.
+    readerPicker(f, target);
+    // Lose the target only after retention is durably saved; preflight loss must not promote.
     f.probe.snapshot = await f.store.move(await f.store.read(article.path), 'Feed');
     const process = f.vault.process.bind(f.vault);
     vi.spyOn(f.vault, 'process').mockImplementationOnce(async (file, update) => {
+      const raw = await process(file, update);
       f.vault.files.delete(target.path);
-      return process(file, update);
+      return raw;
     });
-    await expect(menu(f.view, 'Link to note…')).rejects.toThrow('selected note changed');
+    await expect(menu(f.view, 'Add highlight to notes…')).rejects.toThrow(
+      'typed destination changed',
+    );
     expect(article.path).toBe('Reading/Stream/A.md');
     expect((await f.store.read(article.path)).properties.status).toBe('later');
     expect((await f.store.read(article.path)).body).toBe('==words==');
   });
 
-  it('rechecks topic identity and type at commit time', async () => {
+  it('rechecks topic identity and type at commit time and keeps the rejected draft for Cancel', async () => {
     const f = hostFixture(),
       article = await f.note('Reading/Inbox/A.md'),
       target = await f.note('Topics/One.md', '', 'topic');
+    const api = enableTypedTopics(f);
     await f.view.openArticle(article.path);
     const before = await f.vault.read(article);
-    let cancel!: () => void;
-    let error: unknown;
+    let cancel: (() => void) | undefined;
     let draft: string[] = [];
-    mocks.topics.mockImplementation(async (_app, _files, _selected, _signal, _creation, commit) => {
-      draft = [target.path];
-      try {
-        await commit(draft);
-      } catch (cause) {
-        error = cause; // The picker displays this and keeps the same draft until Cancel.
-      }
-      return new Promise<null>((resolve) => {
-        cancel = () => resolve(null);
+    mocks.highlightPicker
+      .mockResolvedValueOnce({ kind: 'existing-many', nodes: [api.getNode(target.path)!] })
+      .mockImplementationOnce(async (_app, current, options) => {
+        expect(current).toBe(api);
+        draft = options.selectedPaths;
+        return new Promise<null>((resolve) => {
+          cancel = () => resolve(null);
+        });
       });
-    });
     const original = f.vault.process.bind(f.vault);
     vi.spyOn(f.vault, 'process').mockImplementation(async (file, transform) => {
       f.cache.set(target, { frontmatter: { type: 'person' } });
       return original(file, transform);
     });
     const pending = f.probe.topics();
-    for (let i = 0; i < 100 && !error; i++) await Promise.resolve();
-    expect(error).toBeInstanceOf(Error);
-    expect((error as Error).message).toContain('topic changed');
+    for (let i = 0; i < 100 && !cancel; i++) await Promise.resolve();
+    expect(mocks.notice).toHaveBeenCalledWith(expect.stringContaining('typed destination changed'));
     expect(draft).toEqual([target.path]);
-    expect(mocks.topics).toHaveBeenCalledOnce();
+    expect(mocks.highlightPicker).toHaveBeenCalledTimes(2);
     expect(await f.vault.read(article)).toBe(before);
-    cancel();
+    expect(cancel).toBeDefined();
+    cancel!();
     await pending;
     expect((await f.store.read(article.path)).properties.topics).toBeUndefined();
   });
@@ -4542,7 +4810,7 @@ describe('commit-time annotation targets', () => {
         '==[**formatted words**](/Notes/URI%20Path.md)==',
       );
     await f.view.openArticle(article.path);
-    await menu(f.view, 'Remove link (keeps highlight)');
+    await menu(f.view, 'Remove references (article only)');
     expect((await f.store.read(article.path)).body).toBe('==**formatted words**==');
   });
 });
@@ -4561,22 +4829,37 @@ describe('Nodes v2 linked creation', () => {
     };
     const api: NodesApi = {
       version: 2,
-      listTypes: vi.fn(() => []),
+      listTypes: vi.fn(() => [
+        { type: 'topic', label: 'Topic' },
+        { type: 'Other', label: 'Other' },
+      ]),
       searchNodes: vi.fn(() => [node]),
       // Discovery's last-bound type legitimately differs from creation's chosen class.
-      getNode: vi.fn(() => ({ ...node, type: 'Other', classes: [...node.classes] })),
+      getNode: vi.fn((path) =>
+        path === node.path ? { ...node, type: 'Other', classes: [...node.classes] } : null,
+      ),
       createNode: vi.fn(async () => node),
-      pickNodeForLink: vi.fn(async (_options, link) => {
+      createNodeForLink: vi.fn(async (_options, link) => {
         await link(node);
         return node;
       }),
+      pickNodeForLink: vi.fn(async () => null),
     };
     (f.app as any).plugins = { getPlugin: () => ({ api }) };
+    mocks.highlightPicker.mockResolvedValue({ kind: 'create', title: 'words', type: 'topic' });
     await f.view.openArticle(article.path);
-    return { ...f, article, target, node, api };
+    return { ...f, article, target, node, api, linkedBody: expectedHosted(body, target.path) };
   }
-  const linkedBody = '==[[Nodes/One.md|words]]==';
+  const linkedBody = expectedHosted('==words==', 'Nodes/One.md');
   const originalLinkedBody = '==[[Notes/Existing.md|words]]==';
+  function expectedFiledTarget(f: Awaited<ReturnType<typeof fixture>>, before: string): string {
+    const blockId = paragraphAnchors(f.linkedBody)[0].blockId;
+    const citation = originLink(f.article.path, blockId, f.article.basename);
+    return rememberOrigin(
+      appendQuotation(before, 'words', citation).raw,
+      originLink(f.article.path, blockId),
+    );
+  }
   async function uiFixture() {
     const f = await fixture(originalLinkedBody);
     await f.note('Reading/Inbox/0.md');
@@ -4594,6 +4877,8 @@ describe('Nodes v2 linked creation', () => {
     f.host.edit = vi.fn((view: ReaderView, file: TFile) => plugin.edit(view, file));
     const web = vi.spyOn(window, 'open').mockReturnValue(null);
     async function click(route: string, label: string) {
+      if (route === 'footer' && label === 'Related notes')
+        mocks.highlightPicker.mockResolvedValueOnce(null); // Explicitly Cancel the separate related-note draft.
       if (route === 'footer' || (route === 'link' && !['heading', 'unsafe'].includes(label))) {
         const signal = f.probe.nodeCreation?.controller.signal as AbortSignal | undefined;
         // Normal article navigation is intentionally replaced by the passage bar.
@@ -4608,6 +4893,7 @@ describe('Nodes v2 linked creation', () => {
         ];
         const command = mocks.commands.get(id!);
         expect(command?.checkCallback?.(true)).toBe(true);
+        if (id === 'topics') mocks.highlightPicker.mockResolvedValueOnce(null); // Cancel the new staged Related notes dialog, not the uncooperative provider.
         expect(command?.checkCallback?.(false)).toBe(true);
       } else if (route === 'menu') {
         // Legacy route name; actions now use the existing passage bar, not a popup.
@@ -4663,20 +4949,17 @@ describe('Nodes v2 linked creation', () => {
         f.probe.surface.body
           .querySelector('mark')
           .dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
-        expect(passageLabels(f.view)).toEqual([
-          ...(linked ? ['Open note'] : []),
-          ...(integrated ? [linked ? 'Change link…' : 'Link to note…', 'Create note…'] : []),
-          ...(linked ? ['Remove link (keeps highlight)'] : []),
-          'Remove highlight',
-          'Done',
-        ]);
+        expect(passageLabels(f.view)).toEqual(
+          expectedPassageActions({ linked, provider: integrated }),
+        );
         expect(
           [...f.view.contentEl.querySelectorAll<HTMLButtonElement>('[data-action]')].map(
             (button) => button.dataset.action,
           ),
         ).toEqual([
           ...(linked ? ['open-note'] : []),
-          ...(integrated ? ['link-note', 'create-note'] : []),
+          'link-note',
+          'convert-node',
           ...(linked ? ['unlink'] : []),
           'remove-highlight',
         ]);
@@ -4691,55 +4974,96 @@ describe('Nodes v2 linked creation', () => {
     },
   );
 
-  it.each(['Link to note…', 'Change link…', 'Create note…'])(
-    'uses the shared seeded picker for %s',
-    async (label) => {
-      const f = await fixture(label === 'Change link…' ? originalLinkedBody : '==words==');
-      await menu(f.view, label);
-      expect(f.api.pickNodeForLink).toHaveBeenCalledWith(
-        { suggestedTitle: 'words', sourcePath: f.article.path, signal: expect.any(AbortSignal) },
-        expect.any(Function),
+  it.each([
+    { linked: false, intent: 'existing' },
+    { linked: true, intent: 'existing' },
+    { linked: false, intent: 'create' },
+  ] as const)(
+    'uses the Reader multiselect for linked=$linked / $intent, never the shared provider picker',
+    async ({ linked, intent }) => {
+      const f = await fixture(linked ? originalLinkedBody : '==words==');
+      if (intent === 'existing')
+        mocks.highlightPicker.mockResolvedValue({ kind: 'existing', node: f.node });
+      else
+        mocks.highlightPicker.mockResolvedValue({
+          kind: 'create',
+          title: 'Typed topic',
+          type: 'topic',
+        });
+      await menu(f.view, 'Add highlight to notes…');
+      expect(mocks.highlightPicker).toHaveBeenCalledWith(
+        f.app,
+        f.api,
+        expect.objectContaining({
+          query: '',
+          signal: expect.any(AbortSignal),
+          title: 'Add highlight to notes',
+          multiple: true,
+          minSelection: 0,
+          actionLabel: 'Apply',
+        }),
       );
+      if (intent === 'create')
+        expect(f.api.createNodeForLink).toHaveBeenCalledWith(
+          {
+            type: 'topic',
+            suggestedTitle: 'Typed topic',
+            sourcePath: f.article.path,
+            signal: expect.any(AbortSignal),
+          },
+          expect.any(Function),
+        );
+      else expect(f.api.createNodeForLink).not.toHaveBeenCalled();
+      expect(f.api.pickNodeForLink).not.toHaveBeenCalled();
       expect(mocks.choose).not.toHaveBeenCalled();
       expect(f.api.createNode).not.toHaveBeenCalled();
-      expect((await f.store.read(f.article.path)).body).toBe(linkedBody);
+      const body = (await f.store.read(f.article.path)).body;
+      expect(body).toBe(linked ? expectedHosted(originalLinkedBody, f.target.path) : linkedBody);
+      if (linked) {
+        expect(body).toContain('==[[Notes/Existing.md|words]]=='); // Preserve the authored URL; it is not an extra host.
+        expect(passages(body)[0].hosts).toEqual(['Nodes/One']);
+      }
     },
   );
 
-  it.each(['Link to note…', 'Create note…'])(
-    'cancels the shared picker without a write: %s',
-    async (label) => {
+  it.each(['picker', 'creation'] as const)(
+    'cancels the Reader %s flow without a write',
+    async (stage) => {
       const f = await fixture(),
-        before = await f.vault.read(f.article);
-      f.api.pickNodeForLink = vi.fn(async () => null);
-      await menu(f.view, label);
+        before = await f.vault.read(f.article),
+        targetBefore = await f.vault.read(f.target);
+      if (stage === 'picker') mocks.highlightPicker.mockResolvedValue(null);
+      else f.api.createNodeForLink = vi.fn(async () => null);
+      await menu(f.view, 'Add highlight to notes…');
       expect(await f.vault.read(f.article)).toBe(before);
+      expect(await f.vault.read(f.target)).toBe(targetBefore);
+      expect(f.api.pickNodeForLink).not.toHaveBeenCalled();
       expect(f.vault.trashed).toEqual([]);
       expect(f.probe.dialog).toBe(false);
     },
   );
 
-  it('preserves stale-source checks across the shared picker', async () => {
+  it('preserves stale-source checks across Reader choice and the typed creation callback', async () => {
     const f = await fixture(),
       changed = createDocument({ type: 'article' }, '==new words==');
-    f.api.pickNodeForLink = async (_options, link) => {
+    f.api.createNodeForLink = async (_options, link) => {
       f.vault.bytes.set(f.article, changed);
       await link(f.node);
       return f.node;
     };
-    await expect(menu(f.view, 'Link to note…')).rejects.toThrow();
+    await expect(menu(f.view, 'Add highlight to notes…')).rejects.toThrow();
     expect(await f.vault.read(f.article)).toBe(changed);
     expect(f.vault.trashed).toEqual([]);
   });
 
-  it.each(['Remove link (keeps highlight)', 'Remove highlight'])(
+  it.each(['Remove references (article only)', 'Remove highlight (article only)'])(
     'never removes or rewrites the linked file through %s',
     async (label) => {
       const f = await fixture(linkedBody),
         targetBefore = await f.vault.read(f.target);
       await menu(f.view, label);
       expect((await f.store.read(f.article.path)).body).toBe(
-        label === 'Remove highlight' ? 'words' : '==words==',
+        `${label === 'Remove highlight (article only)' ? 'words' : '==words=='} ^${paragraphAnchors(linkedBody)[0].blockId}`,
       );
       expect(f.vault.file(f.target.path)).toBe(f.target);
       expect(await f.vault.read(f.target)).toBe(targetBefore);
@@ -4756,8 +5080,9 @@ describe('Nodes v2 linked creation', () => {
     async (...classes) => {
       const f = await fixture();
       f.api.getNode = () => ({ ...f.node, type: 'Other', classes });
-      await menu(f.view, 'Link to note…');
-      expect((await f.store.read(f.article.path)).body).toBe(linkedBody);
+      mocks.highlightPicker.mockResolvedValue({ kind: 'existing', node: f.node });
+      await menu(f.view, 'Add highlight to notes…');
+      expect((await f.store.read(f.article.path)).body).toBe(f.linkedBody);
     },
   );
 
@@ -4770,7 +5095,7 @@ describe('Nodes v2 linked creation', () => {
         order: string[] = [];
       if (queue === 'Feed')
         f.probe.snapshot = await f.store.move(await f.store.read(f.article.path), 'Feed');
-      const annotate = vi.spyOn(f.store, 'annotate'),
+      const annotate = vi.spyOn(f.store, 'collectHighlight'),
         process = f.vault.process.bind(f.vault),
         move = f.vault.move.bind(f.vault);
       vi.spyOn(f.vault, 'move').mockImplementation(async (file, path) => {
@@ -4785,7 +5110,7 @@ describe('Nodes v2 linked creation', () => {
         await f.view.changed({ path: file.path, metadataChanged: true });
         return raw;
       });
-      f.api.pickNodeForLink = vi.fn(async (options, link) => {
+      f.api.createNodeForLink = vi.fn(async (options, link) => {
         expect(options).toMatchObject({ suggestedTitle: 'words', sourcePath: f.article.path });
         requestSignal = options.signal!;
         expect(requestSignal.aborted).toBe(false);
@@ -4798,12 +5123,12 @@ describe('Nodes v2 linked creation', () => {
         order.push('required completion');
         return f.node;
       });
-      const creation = menu(f.view, 'Create note…');
+      const creation = menu(f.view, 'Add highlight to notes…');
       await entered.promise;
-      expect((await f.store.read(f.article.path)).body).toBe(linkedBody);
+      expect((await f.store.read(f.article.path)).body).toBe(f.linkedBody);
       expect(order).toEqual(['created', 'linked']);
       expect(f.probe.dialog).toBe(true);
-      expect(f.probe.surface.displayedBody).toBe(linkedBody);
+      expect(f.probe.surface.displayedBody).toBe(f.linkedBody);
       await f.view.changed({ path: f.article.path, metadataChanged: true });
       f.probe.persistPosition('words');
       await f.probe.positionWrite; // Must not wait for itself through the metadata notification.
@@ -4827,7 +5152,7 @@ describe('Nodes v2 linked creation', () => {
         linked = gate(),
         stopped = gate();
       let requestSignal!: AbortSignal;
-      f.api.pickNodeForLink = async (options, link) => {
+      f.api.createNodeForLink = async (options, link) => {
         requestSignal = options.signal!;
         requestSignal.addEventListener('abort', () => stopped.resolve(), { once: true });
         await link(f.node);
@@ -4835,14 +5160,14 @@ describe('Nodes v2 linked creation', () => {
         await stopped.promise;
         return null;
       };
-      const creation = menu(f.view, 'Create note…');
+      const creation = menu(f.view, 'Add highlight to notes…');
       await linked.promise;
       expect(requestSignal.aborted).toBe(false);
       const oldPath = f.article.path;
       if (kind === 'body')
         f.vault.bytes.set(f.article, createDocument({ type: 'article' }, 'External edit'));
       if (kind === 'type')
-        f.vault.bytes.set(f.article, createDocument({ type: 'note' }, linkedBody));
+        f.vault.bytes.set(f.article, createDocument({ type: 'note' }, f.linkedBody));
       if (kind === 'rename') await f.vault.move(f.article, 'Reading/Inbox/Renamed.md');
       if (kind === 'replacement') {
         const replacement = Object.setPrototypeOf({ path: oldPath }, TFile.prototype);
@@ -4868,14 +5193,14 @@ describe('Nodes v2 linked creation', () => {
       entered = gate(),
       stopped = gate();
     let requestSignal!: AbortSignal;
-    f.api.pickNodeForLink = async (options) => {
+    f.api.createNodeForLink = async (options) => {
       requestSignal = options.signal!;
       requestSignal.addEventListener('abort', () => stopped.resolve(), { once: true });
       entered.resolve();
       await stopped.promise;
       return null;
     };
-    const creation = menu(f.view, 'Create note…');
+    const creation = menu(f.view, 'Add highlight to notes…');
     await entered.promise;
     f.vault.bytes.set(f.article, createDocument({ type: 'article' }, 'External edit'));
     await f.view.changed({ path: f.article.path });
@@ -4902,7 +5227,7 @@ describe('Nodes v2 linked creation', () => {
         stopped = gate();
       f.probe.readingQueue.open([f.article.path, next.path], f.article.path);
       let requestSignal!: AbortSignal;
-      f.api.pickNodeForLink = async (options, link) => {
+      f.api.createNodeForLink = async (options, link) => {
         requestSignal = options.signal!;
         requestSignal.addEventListener('abort', () => stopped.resolve(), { once: true });
         if (phase === 'after') await link(f.node);
@@ -4910,7 +5235,7 @@ describe('Nodes v2 linked creation', () => {
         await stopped.promise;
         return null;
       };
-      const creation = menu(f.view, 'Create note…');
+      const creation = menu(f.view, 'Add highlight to notes…');
       await linked.promise;
       let transition: Promise<void> | undefined;
       if (action === 'open') transition = f.view.openArticle(next.path);
@@ -4923,7 +5248,7 @@ describe('Nodes v2 linked creation', () => {
       await creation;
       await transition;
       expect((await f.store.read(f.article.path)).body).toBe(
-        phase === 'after' ? linkedBody : '==words==',
+        phase === 'after' ? f.linkedBody : '==words==',
       );
       expect(f.vault.file(f.target.path)).toBe(f.target);
       expect(f.vault.trashed).toEqual([]);
@@ -4943,9 +5268,9 @@ describe('Nodes v2 linked creation', () => {
         entered = gate(),
         providerRelease = gate();
       f.probe.readingQueue.open([f.article.path, next.path], f.article.path);
-      const annotate = vi.spyOn(f.store, 'annotate');
+      const annotate = vi.spyOn(f.store, 'collectHighlight');
       let requestSignal!: AbortSignal;
-      f.api.pickNodeForLink = vi.fn(async (options, link) => {
+      f.api.createNodeForLink = vi.fn(async (options, link) => {
         requestSignal = options.signal!;
         if (phase === 'after') await link(f.node);
         entered.resolve();
@@ -4953,7 +5278,7 @@ describe('Nodes v2 linked creation', () => {
         await expect(link(f.node)).rejects.toThrow('request has finished');
         return f.node;
       });
-      const creation = menu(f.view, 'Create note…');
+      const creation = menu(f.view, 'Add highlight to notes…');
       await entered.promise;
       const transition =
         action === 'open'
@@ -4965,10 +5290,10 @@ describe('Nodes v2 linked creation', () => {
       await creation;
       await transition; // Must finish while the provider remains suspended.
       providerRelease.resolve();
-      await vi.mocked(f.api.pickNodeForLink).mock.results[0].value;
+      await vi.mocked(f.api.createNodeForLink).mock.results[0].value;
       expect(annotate).toHaveBeenCalledTimes(phase === 'after' ? 1 : 0);
       expect((await f.store.read(f.article.path)).body).toBe(
-        phase === 'after' ? linkedBody : '==words==',
+        phase === 'after' ? f.linkedBody : '==words==',
       );
       expect(f.vault.file(f.target.path)).toBe(f.target);
       expect(f.vault.trashed).toEqual([]);
@@ -4982,9 +5307,9 @@ describe('Nodes v2 linked creation', () => {
       const f = await uiFixture(),
         entered = gate(),
         targetBefore = await f.vault.read(f.target);
-      const annotate = vi.spyOn(f.store, 'annotate');
+      const annotate = vi.spyOn(f.store, 'collectHighlight');
       let requestSignal!: AbortSignal, late!: (node: NodeResult) => Promise<void>;
-      f.api.pickNodeForLink = vi.fn(async (options, link) => {
+      f.api.createNodeForLink = vi.fn(async (options, link) => {
         requestSignal = options.signal!;
         late = link;
         if (phase === 'after') await link(f.node);
@@ -4992,8 +5317,10 @@ describe('Nodes v2 linked creation', () => {
         return new Promise<NodeResult | null>(() => {}); // Never settles, even after abort.
       });
       try {
-        const creation = menu(f.view, 'Create note…');
+        const creation = menu(f.view, 'Add highlight to notes…');
         await entered.promise;
+        const targetExpected =
+          phase === 'after' ? expectedFiledTarget(f, targetBefore) : targetBefore;
         passageButton(f.view, 'Done').click();
         expect(requestSignal.aborted).toBe(true); // No queue or microtask may precede abort.
         expect(f.probe.tapMode).toBe(false);
@@ -5007,9 +5334,9 @@ describe('Nodes v2 linked creation', () => {
         expect(f.probe.dialog).toBe(false);
         expect(annotate).toHaveBeenCalledTimes(phase === 'after' ? 1 : 0);
         expect((await f.store.read(f.article.path)).body).toBe(
-          phase === 'after' ? linkedBody : originalLinkedBody,
+          phase === 'after' ? f.linkedBody : originalLinkedBody,
         );
-        expect(await f.vault.read(f.target)).toBe(targetBefore);
+        expect(await f.vault.read(f.target)).toBe(targetExpected);
         expect(f.vault.trashed).toEqual([]);
         expectNoPassagePopup();
       } finally {
@@ -5021,9 +5348,12 @@ describe('Nodes v2 linked creation', () => {
 
   it.each(
     ['before', 'after'].flatMap((phase) =>
-      ['Change link…', 'Create note…', 'Remove link (keeps highlight)', 'Remove highlight'].map(
-        (label) => ({ phase, label }),
-      ),
+      [
+        'Add highlight to notes…',
+        'Add highlight to notes…',
+        'Remove references (article only)',
+        'Remove highlight (article only)',
+      ].map((label) => ({ phase, label })),
     ),
   )(
     'supersedes a never-settling picker through the actual $label passage button $phase commit',
@@ -5031,11 +5361,12 @@ describe('Nodes v2 linked creation', () => {
       const f = await uiFixture(),
         entered = gate(),
         targetBefore = await f.vault.read(f.target);
-      const annotate = vi.spyOn(f.store, 'annotate');
+      const collect = vi.spyOn(f.store, 'collectHighlight'),
+        annotate = vi.spyOn(f.store, 'annotate');
       let requestSignal!: AbortSignal,
         late!: (node: NodeResult) => Promise<void>,
         calls = 0;
-      f.api.pickNodeForLink = vi.fn(async (options, link) => {
+      f.api.createNodeForLink = vi.fn(async (options, link) => {
         if (++calls > 1) return null;
         requestSignal = options.signal!;
         late = link;
@@ -5044,32 +5375,37 @@ describe('Nodes v2 linked creation', () => {
         return new Promise<NodeResult | null>(() => {});
       });
       try {
-        const creation = menu(f.view, 'Create note…');
+        const creation = menu(f.view, 'Add highlight to notes…');
         await entered.promise;
+        const targetExpected =
+          phase === 'after' ? expectedFiledTarget(f, targetBefore) : targetBefore;
         const superseding = f.click('menu', label);
         expect(requestSignal.aborted).toBe(true);
         await superseding;
         await creation;
         await f.probe.operations;
         await expect(late(f.node)).rejects.toThrow('request has finished');
-        const changesPassage = ['Remove link (keeps highlight)', 'Remove highlight'].includes(
-          label,
-        );
-        expect(annotate).toHaveBeenCalledTimes(
-          (phase === 'after' ? 1 : 0) + (changesPassage ? 1 : 0),
-        );
+        const changesPassage = [
+          'Remove references (article only)',
+          'Remove highlight (article only)',
+        ].includes(label);
+        expect(collect).toHaveBeenCalledTimes(phase === 'after' ? 1 : 0);
+        expect(annotate).toHaveBeenCalledTimes(changesPassage ? 1 : 0);
+
         expect(calls).toBe(changesPassage ? 1 : 2);
+        const expectedSource = phase === 'after' ? f.linkedBody : originalLinkedBody;
         expect((await f.store.read(f.article.path)).body).toBe(
-          label === 'Remove highlight'
-            ? 'words'
-            : label === 'Remove link (keeps highlight)'
-              ? '==words=='
-              : phase === 'after'
-                ? linkedBody
-                : originalLinkedBody,
+          changesPassage
+            ? changePassage(
+                expectedSource,
+                passages(expectedSource)[0],
+                label === 'Remove highlight (article only)' ? 'remove' : 'unlink',
+              )
+            : expectedSource,
         );
+
         expect(f.probe.dialog).toBe(false);
-        expect(await f.vault.read(f.target)).toBe(targetBefore);
+        expect(await f.vault.read(f.target)).toBe(targetExpected);
         expect(f.vault.trashed).toEqual([]);
         expectNoPassagePopup();
       } finally {
@@ -5095,10 +5431,10 @@ describe('Nodes v2 linked creation', () => {
         ['link', 'new-leaf'],
         ['link', 'external'],
         ['menu', 'Open note'],
-        ['menu', 'Change link…'],
-        ['menu', 'Create note…'],
-        ['menu', 'Remove link (keeps highlight)'],
-        ['menu', 'Remove highlight'],
+        ['menu', 'Add highlight to notes…'],
+        ['menu', 'Add highlight to notes…'],
+        ['menu', 'Remove references (article only)'],
+        ['menu', 'Remove highlight (article only)'],
       ].map(([route, label]) => ({ phase, route, label })),
     ),
   )(
@@ -5107,13 +5443,14 @@ describe('Nodes v2 linked creation', () => {
       const f = await uiFixture(),
         entered = gate(),
         providerRelease = gate();
-      const annotate = vi.spyOn(f.store, 'annotate'),
+      const collect = vi.spyOn(f.store, 'collectHighlight'),
+        annotate = vi.spyOn(f.store, 'annotate'),
         targetBytes = await f.vault.read(f.target);
       const sourcePath = f.article.path;
       const neighbour = f.probe.readingQueue.neighbour(label === 'Previous' ? -1 : 1, () => true);
       let requestSignal!: AbortSignal,
         calls = 0;
-      f.api.pickNodeForLink = vi.fn(async (options, link) => {
+      f.api.createNodeForLink = vi.fn(async (options, link) => {
         if (++calls > 1) return null; // A second explicit Create node action is cancelled at its picker.
         requestSignal = options.signal!;
         if (phase === 'after') await link(f.node);
@@ -5123,8 +5460,10 @@ describe('Nodes v2 linked creation', () => {
         return f.node;
       });
       try {
-        const creation = menu(f.view, 'Create note…');
+        const creation = menu(f.view, 'Add highlight to notes…');
         await entered.promise;
+        const targetExpected =
+          phase === 'after' ? expectedFiledTarget(f, targetBytes) : targetBytes;
         const intent = f.click(route, label);
         expect(requestSignal.aborted).toBe(true); // Even before the next microtask.
         await intent;
@@ -5138,14 +5477,20 @@ describe('Nodes v2 linked creation', () => {
           expect((await f.store.read(f.article.path)).properties.status).toBe('later');
           expect(f.view.file).toBe(f.article);
           expect(mocks.choose).not.toHaveBeenCalled();
-          expect(f.api.pickNodeForLink).toHaveBeenCalledTimes(1);
+          expect(f.api.createNodeForLink).toHaveBeenCalledTimes(1);
           expect(f.probe.readingQueue.neighbour(1, () => true)).toBe(neighbour);
         }
         if (label === 'List') expect(f.view.file).toBeUndefined();
         if (label === 'Move…') expect(mocks.choose).toHaveBeenCalled();
-        if (label === 'Topics…') expect(mocks.topics).toHaveBeenCalled();
-        if (label === 'Change link…') expect(f.api.pickNodeForLink).toHaveBeenCalledTimes(2);
-        if (label === 'Create note…') expect(calls).toBe(2);
+        if (label === 'Topics…')
+          expect(mocks.highlightPicker).toHaveBeenCalledWith(
+            f.app,
+            f.api,
+            expect.objectContaining({ title: 'Related notes', multiple: true }),
+          );
+        if (label === 'Add highlight to notes…')
+          expect(f.api.createNodeForLink).toHaveBeenCalledTimes(2);
+        if (label === 'Add highlight to notes…') expect(calls).toBe(2);
         if (label === 'Archive') {
           expect(f.article.path).toBe('Reading/Treasury/A.md');
           expect((await f.store.read(f.article.path)).properties.status).toBe('archive');
@@ -5180,29 +5525,32 @@ describe('Nodes v2 linked creation', () => {
           expect(f.web).not.toHaveBeenCalled();
         }
         providerRelease.resolve();
-        await vi.mocked(f.api.pickNodeForLink).mock.results[0].value;
-        const changesPassage = ['Remove link (keeps highlight)', 'Remove highlight'].includes(
-          label,
-        );
-        expect(annotate).toHaveBeenCalledTimes(
-          (phase === 'after' ? 1 : 0) + (changesPassage ? 1 : 0),
-        );
+        await vi.mocked(f.api.createNodeForLink).mock.results[0].value;
+        const changesPassage = [
+          'Remove references (article only)',
+          'Remove highlight (article only)',
+        ].includes(label);
+        expect(collect).toHaveBeenCalledTimes(phase === 'after' ? 1 : 0);
+        expect(annotate).toHaveBeenCalledTimes(changesPassage ? 1 : 0);
+
+        const expectedSource = phase === 'after' ? f.linkedBody : originalLinkedBody;
         expect((await f.store.read(f.article.path)).body).toBe(
-          label === 'Remove highlight'
-            ? 'words'
-            : label === 'Remove link (keeps highlight)'
-              ? '==words=='
-              : phase === 'after'
-                ? linkedBody
-                : originalLinkedBody,
+          changesPassage
+            ? changePassage(
+                expectedSource,
+                passages(expectedSource)[0],
+                label === 'Remove highlight (article only)' ? 'remove' : 'unlink',
+              )
+            : expectedSource,
         );
+
         expect(f.vault.trashed).toEqual([]);
         if (label === 'Delete') {
           expect(f.article.path).toBe('Reading/Treasury/A.md');
           expect((await f.store.read(f.article.path)).properties.status).toBe('archive');
         }
         expect(f.vault.file(f.target.path)).toBe(f.target);
-        expect(await f.vault.read(f.target)).toBe(targetBytes);
+        expect(await f.vault.read(f.target)).toBe(targetExpected);
         expect(f.api.createNode).not.toHaveBeenCalled();
       } finally {
         providerRelease.resolve();
@@ -5229,13 +5577,13 @@ describe('Nodes v2 linked creation', () => {
         await release.promise;
         return raw;
       });
-      f.api.pickNodeForLink = async (options, link) => {
+      f.api.createNodeForLink = async (options, link) => {
         requestSignal = options.signal!;
         await link(f.node);
         return f.node;
       };
       try {
-        const creation = menu(f.view, 'Create note…');
+        const creation = menu(f.view, 'Add highlight to notes…');
         const rejected = expect(creation).rejects.toThrow(/request.*(finished|cancelled)/);
         await dispatched.promise;
         const intent = f.click(route, label);
@@ -5254,7 +5602,7 @@ describe('Nodes v2 linked creation', () => {
               interval: 1,
             },
           );
-        expect((await f.store.read(f.article.path)).body).toBe(linkedBody);
+        expect((await f.store.read(f.article.path)).body).toBe(f.linkedBody);
         expect(f.vault.file(f.target.path)).toBe(f.target);
         expect(f.vault.trashed).toEqual([]);
       } finally {
@@ -5272,7 +5620,7 @@ describe('Nodes v2 linked creation', () => {
         entered = gate(),
         providerRelease = gate();
       let requestSignal!: AbortSignal;
-      f.api.pickNodeForLink = vi.fn(async (options, link) => {
+      f.api.createNodeForLink = vi.fn(async (options, link) => {
         requestSignal = options.signal!;
         if (phase === 'after') await link(f.node);
         entered.resolve();
@@ -5281,7 +5629,7 @@ describe('Nodes v2 linked creation', () => {
         return f.node;
       });
       try {
-        const creation = menu(f.view, 'Create note…');
+        const creation = menu(f.view, 'Add highlight to notes…');
         await entered.promise;
         const external = createDocument({ type: 'note', custom: 'keep' }, 'External source');
         f.vault.bytes.set(f.article, external);
@@ -5304,7 +5652,7 @@ describe('Nodes v2 linked creation', () => {
           { interval: 1 },
         );
         providerRelease.resolve();
-        await vi.mocked(f.api.pickNodeForLink).mock.results[0].value;
+        await vi.mocked(f.api.createNodeForLink).mock.results[0].value;
         expect(await f.vault.read(f.article)).toBe(external);
         expect(f.vault.file(f.target.path)).toBe(f.target);
         expect(f.vault.trashed).toEqual([]);
@@ -5319,27 +5667,27 @@ describe('Nodes v2 linked creation', () => {
     ['footer', 'Next'],
     ['link', 'internal'],
     ['command', 'Open Markdown'],
-    ['menu', 'Remove highlight'],
+    ['menu', 'Remove highlight (article only)'],
   ])(
     'invalidates queued Nodes creation at the actual %s / %s UI intent',
     async (route, label) => {
       const f = await uiFixture(),
         entered = gate(),
         release = gate();
-      f.api.pickNodeForLink = vi.fn(async () => f.node);
+      f.api.createNodeForLink = vi.fn(async () => f.node);
       try {
         const busy = f.probe.operation(async () => {
           entered.resolve();
           await release.promise;
         });
         await entered.promise;
-        const creation = menu(f.view, 'Create note…');
+        const creation = menu(f.view, 'Add highlight to notes…');
         await f.click(route, label);
         release.resolve();
         await busy;
         await creation;
         await f.probe.operations;
-        expect(f.api.pickNodeForLink).not.toHaveBeenCalled();
+        expect(f.api.createNodeForLink).not.toHaveBeenCalled();
         expect(f.api.createNode).not.toHaveBeenCalled();
         expect(f.vault.file(f.target.path)).toBe(f.target);
         expect(f.vault.trashed).toEqual([]);
@@ -5356,7 +5704,7 @@ describe('Nodes v2 linked creation', () => {
       entered = gate(),
       complete = gate();
     let requestSignal!: AbortSignal;
-    f.api.pickNodeForLink = async (options, link) => {
+    f.api.createNodeForLink = async (options, link) => {
       requestSignal = options.signal!;
       await link(f.node);
       entered.resolve();
@@ -5364,7 +5712,7 @@ describe('Nodes v2 linked creation', () => {
       return f.node;
     };
     try {
-      const creation = menu(f.view, 'Create note…');
+      const creation = menu(f.view, 'Add highlight to notes…');
       await entered.promise;
       // Palette availability checks and in-article scrolling do not cancel completion.
       for (const id of ['move', 'topics', 'open-markdown'])
@@ -5398,19 +5746,19 @@ describe('Nodes v2 linked creation', () => {
     const f = await fixture(),
       entered = gate(),
       release = gate();
-    f.api.pickNodeForLink = vi.fn(async () => f.node);
+    f.api.createNodeForLink = vi.fn(async () => f.node);
     const busy = f.probe.operation(async () => {
       entered.resolve();
       await release.promise;
     });
     await entered.promise;
-    const creation = menu(f.view, 'Create note…'),
+    const creation = menu(f.view, 'Add highlight to notes…'),
       navigation = f.view.readingList();
     release.resolve();
     await busy;
     await creation;
     await navigation;
-    expect(f.api.pickNodeForLink).not.toHaveBeenCalled();
+    expect(f.api.createNodeForLink).not.toHaveBeenCalled();
     expect(f.api.createNode).not.toHaveBeenCalled();
     expect((await f.store.read(f.article.path)).body).toBe('==words==');
     expect(f.vault.trashed).toEqual([]);
@@ -5420,22 +5768,22 @@ describe('Nodes v2 linked creation', () => {
     'retains both committed link and target after completion %s',
     async (kind) => {
       const f = await fixture(),
-        annotate = vi.spyOn(f.store, 'annotate');
+        annotate = vi.spyOn(f.store, 'collectHighlight');
       const rejection = { reason: 'completion failed' },
         targetBytes = await f.vault.read(f.target);
-      f.api.pickNodeForLink = async (_options, link) => {
+      f.api.createNodeForLink = async (_options, link) => {
         await link(f.node);
         if (kind === 'cancel') f.probe.articleLifetime.abort();
         if (kind === 'reject') throw rejection;
         return null;
       };
-      const creation = menu(f.view, 'Create note…');
+      const creation = menu(f.view, 'Add highlight to notes…');
       if (kind === 'reject') await expect(creation).rejects.toBe(rejection);
       else await creation;
-      expect((await f.store.read(f.article.path)).body).toBe(linkedBody);
+      expect((await f.store.read(f.article.path)).body).toBe(f.linkedBody);
       expect(annotate).toHaveBeenCalledOnce();
       expect(f.api.createNode).not.toHaveBeenCalled();
-      expect(await f.vault.read(f.target)).toBe(targetBytes);
+      expect(await f.vault.read(f.target)).toBe(expectedFiledTarget(f, targetBytes));
       expect(f.vault.trashed).toEqual([]);
     },
   );
@@ -5444,13 +5792,13 @@ describe('Nodes v2 linked creation', () => {
     'does not link from a %s return or accept a callback after the request settles',
     async (result) => {
       const f = await fixture(),
-        annotate = vi.spyOn(f.store, 'annotate');
+        annotate = vi.spyOn(f.store, 'collectHighlight');
       let late!: (node: NodeResult) => Promise<void>;
-      f.api.pickNodeForLink = async (_options, link) => {
+      f.api.createNodeForLink = async (_options, link) => {
         late = link;
         return result === 'null' ? null : f.node;
       };
-      await menu(f.view, 'Create note…');
+      await menu(f.view, 'Add highlight to notes…');
       await expect(late(f.node)).rejects.toThrow('request has finished');
       expect((await f.store.read(f.article.path)).body).toBe('==words==');
       expect(annotate).not.toHaveBeenCalled();
@@ -5471,13 +5819,13 @@ describe('Nodes v2 linked creation', () => {
       return process(file, update);
     });
     let pending!: Promise<void>;
-    f.api.pickNodeForLink = async (_options, link) => {
+    f.api.createNodeForLink = async (_options, link) => {
       pending = link(f.node);
       void pending.catch(() => {});
       await entered.promise;
       return null;
     };
-    const creation = menu(f.view, 'Create note…');
+    const creation = menu(f.view, 'Add highlight to notes…');
     const rejectedCreation = expect(creation).rejects.toThrow('request has finished');
     await entered.promise;
     // Reader observes the premature return but drains its dispatched write before
@@ -5494,15 +5842,15 @@ describe('Nodes v2 linked creation', () => {
 
   it('rejects a duplicate callback without attempting a second source write', async () => {
     const f = await fixture(),
-      annotate = vi.spyOn(f.store, 'annotate');
-    f.api.pickNodeForLink = async (_options, link) => {
+      annotate = vi.spyOn(f.store, 'collectHighlight');
+    f.api.createNodeForLink = async (_options, link) => {
       await link(f.node);
       await link(f.node);
       return f.node;
     };
-    await expect(menu(f.view, 'Create note…')).rejects.toThrow('callback already ran');
+    await expect(menu(f.view, 'Add highlight to notes…')).rejects.toThrow('callback already ran');
     expect(annotate).toHaveBeenCalledOnce();
-    expect((await f.store.read(f.article.path)).body).toBe(linkedBody);
+    expect((await f.store.read(f.article.path)).body).toBe(f.linkedBody);
     expect(f.vault.file(f.target.path)).toBe(f.target);
     expect(f.vault.trashed).toEqual([]);
   });
@@ -5525,7 +5873,7 @@ describe('Nodes v2 linked creation', () => {
         completion = vi.fn(),
         targetBytes = await f.vault.read(f.target);
       const replacement = createDocument({ type: 'article' }, 'New source');
-      f.api.pickNodeForLink = async (_options, link) => {
+      f.api.createNodeForLink = async (_options, link) => {
         if (kind === 'disk-source') f.vault.bytes.set(f.article, replacement);
         if (kind === 'snapshot') {
           f.vault.bytes.set(f.article, replacement);
@@ -5547,7 +5895,7 @@ describe('Nodes v2 linked creation', () => {
         completion();
         return f.node;
       };
-      await expect(menu(f.view, 'Create note…')).rejects.toThrow();
+      await expect(menu(f.view, 'Add highlight to notes…')).rejects.toThrow();
       expect(completion).not.toHaveBeenCalled();
       expect(f.api.createNode).not.toHaveBeenCalled();
       expect((await f.store.read(f.article.path)).body).toBe(
@@ -5568,14 +5916,16 @@ describe('Nodes v2 linked creation', () => {
       f.probe.articleLifetime.abort();
       return result;
     });
-    f.api.pickNodeForLink = async (_options, link) => {
+    f.api.createNodeForLink = async (_options, link) => {
       await link(f.node);
       completion();
       return f.node;
     };
-    await expect(menu(f.view, 'Create note…')).rejects.toThrow('Check the saved Markdown');
+    await expect(menu(f.view, 'Add highlight to notes…')).rejects.toThrow(
+      /source annotation was saved.*quotation was not filed/,
+    );
     expect(completion).not.toHaveBeenCalled();
-    expect((await f.store.read(f.article.path)).body).toBe(linkedBody);
+    expect((await f.store.read(f.article.path)).body).toBe(f.linkedBody);
     expect(f.vault.file(f.target.path)).toBe(f.target);
     expect(f.vault.trashed).toEqual([]);
   });
@@ -5584,44 +5934,80 @@ describe('Nodes v2 linked creation', () => {
     const f = await fixture(),
       entered = gate(),
       complete = gate();
-    f.api.pickNodeForLink = async (_options, link) => {
+    f.api.createNodeForLink = async (_options, link) => {
       entered.resolve();
       await complete.promise;
       await link(f.node);
       return f.node;
     };
-    const creation = menu(f.view, 'Create note…');
+    const creation = menu(f.view, 'Add highlight to notes…');
     await entered.promise;
     f.probe.persistPosition('words');
     await f.probe.positionWrite;
     complete.resolve();
     await creation;
     expect((await f.store.read(f.article.path)).properties.bookmark).toBe('words');
-    expect((await f.store.read(f.article.path)).body).toBe(linkedBody);
+    expect((await f.store.read(f.article.path)).body).toBe(f.linkedBody);
   });
 
   it.each(['missing', 'old', 'standalone', 'legacy-id'] as const)(
-    'leaves highlight actions usable without a supported picker (%s)',
+    'keeps legacy actions safe and reports unsupported hosted creation (%s)',
     async (mode) => {
-      const f = await fixture();
+      const original = '==legacy== and new words',
+        f = await fixture(original);
       if (mode === 'missing') (f.app as any).plugins = undefined;
       else if (mode === 'old') (f.api as any).version = 1;
-      else if (mode === 'standalone') delete f.api.pickNodeForLink;
+      else if (mode === 'standalone') delete f.api.createNodeForLink;
       else
         (f.app as any).plugins = {
           getPlugin: (id: string) => (id === 'obsidian-nodes' ? { api: f.api } : undefined),
         };
       await f.view.onOpen();
       await f.view.openArticle(f.article.path, true);
-      f.probe.surface.body.innerHTML = '<mark>words</mark>';
+      const targetBefore = await f.vault.read(f.target);
+      let expected = original,
+        targetExpected = targetBefore;
+      if (mode === 'standalone') {
+        // Linked creation is optional for choosing an existing typed destination.
+        mocks.highlightPicker.mockResolvedValue({ kind: 'existing', node: f.node });
+        await menu(f.view, 'Add highlight to notes…');
+        expected = expectedHosted(original, f.target.path);
+        const blockId = paragraphAnchors(expected)[0].blockId;
+        targetExpected = appendQuotation(
+          targetBefore,
+          'legacy',
+          originLink(f.article.path, blockId, f.article.basename),
+        ).raw;
+        expect((await f.store.read(f.article.path)).body).toBe(expected);
+        expect(await f.vault.read(f.target)).toBe(targetExpected);
+        mocks.highlightPicker.mockResolvedValue({ kind: 'create', title: 'legacy', type: 'topic' });
+        await expect(menu(f.view, 'Add highlight to notes…')).rejects.toThrow(
+          'createNodeForLink support',
+        );
+      } else {
+        f.probe.surface.selectionValue = { quote: 'new words', before: 'legacy and ', after: '' };
+        await expect(f.probe.saveSelection()).rejects.toThrow(/Fileclass Inline.*v2/);
+        f.probe.surface.selectionValue = undefined;
+        expect((await f.store.read(f.article.path)).body).toBe(original);
+        expect(mocks.highlightPicker).not.toHaveBeenCalled();
+      }
+      expect((await f.store.read(f.article.path)).body).toBe(expected);
+      f.probe.surface.body.innerHTML = '<mark>legacy</mark> and new words';
       f.probe.surface.body
         .querySelector('mark')
         .dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
-      expect(passageLabels(f.view)).toEqual(['Remove highlight', 'Done']);
+      expect(passageLabels(f.view)).toEqual(
+        expectedPassageActions({ linked: mode === 'standalone', provider: mode === 'standalone' }),
+      );
       expectNoPassagePopup();
-      await menu(f.view, 'Remove highlight');
-      expect((await f.store.read(f.article.path)).body).toBe('words');
+      await menu(f.view, 'Remove highlight (article only)');
+      expect((await f.store.read(f.article.path)).body).toBe(
+        changePassage(expected, passages(expected)[0], 'remove'),
+      );
+      expect(await f.vault.read(f.target)).toBe(targetExpected);
       expect(f.api.createNode).not.toHaveBeenCalled();
+      expect(f.api.pickNodeForLink).not.toHaveBeenCalled();
+      expect(f.vault.trashed).toEqual([]);
       f.view.stopForUnload();
     },
   );
@@ -5766,7 +6152,7 @@ describe('Reader web-link capture', () => {
       '<mark><a href="https://publisher.test/story">passage</a></mark>';
     f.probe.clicked({ target: f.probe.surface.body.querySelector('a'), preventDefault: vi.fn() });
     expect(mocks.confirmWebLink).not.toHaveBeenCalled();
-    expect(passageLabels(f.view)).toEqual(['Remove highlight', 'Done']);
+    expect(passageLabels(f.view)).toEqual(expectedPassageActions({ provider: false }));
     expectNoPassagePopup();
   });
   it.each(['modal', 'navigation', 'unload', 'source edit', 'source delete'] as const)(
@@ -6288,5 +6674,1615 @@ describe('plugin routing and conservative expiry', () => {
     expect(f.plugin.onunload()).toBeUndefined();
     expect(f.plugin.signal.aborted).toBe(true);
     await expect(f.store.position(article.path, 'words')).rejects.toThrow('stopped');
+  });
+});
+
+describe('hosted highlight UI integration', () => {
+  const views: ReaderView[] = [],
+    renders: (() => void)[] = [];
+  afterEach(() => {
+    renders.splice(0).forEach((dispose) => dispose());
+    views.splice(0).forEach((view) => view.stopForUnload());
+    if (vi.isFakeTimers()) {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+    vi.unstubAllGlobals();
+  });
+  async function fixture(options: { body?: string; defaults?: number[] } = {}) {
+    const f = hostFixture();
+    views.push(f.view);
+    const article = await f.note(
+      'Reading/Inbox/Hosted.md',
+      options.body ?? 'Before first words after.',
+    );
+    const targets = [
+      await f.note('Nodes/Concept.md', 'Authored concept.', 'concept'),
+      await f.note('Nodes/Project.md', 'Authored project.', 'project'),
+    ];
+    const nodes: NodeResult[] = targets.map((file, index) => ({
+      path: file.path,
+      title: index ? 'Project' : 'Concept',
+      type: 'different-primary-type',
+      classes: index ? ['Other', 'Project'] : ['Other', 'Concept'],
+      aliases: [],
+    }));
+    const api = {
+      version: 2 as const,
+      listTypes: vi.fn(() => [
+        { type: 'Concept', label: 'Concept' },
+        { type: 'Project', label: 'Project' },
+      ]),
+      searchNodes: vi.fn(() => nodes),
+      getNode: vi.fn((path: string) => nodes.find((node) => node.path === path) ?? null),
+      createNode: vi.fn(async () => null),
+      pickNodeForLink: vi.fn(async () => null),
+      createNodeForLink: vi.fn<NonNullable<NodesApi['createNodeForLink']>>(async () => null),
+    } satisfies NodesApi;
+    (f.app as any).plugins = { getPlugin: () => ({ api }) };
+    if (options.defaults)
+      f.vault.bytes.set(
+        article,
+        patchProperties(await f.vault.read(article), {
+          topics: options.defaults.map((index) => `[[${nodes[index].path.replace(/\.md$/, '')}]]`),
+        }),
+      );
+    await f.view.onOpen();
+    await f.view.openArticle(article.path);
+    const select = (quote = 'first words', before = 'Before ', after = ' after.') => {
+      f.probe.surface.selectionValue = { quote, before, after };
+      return f.probe.saveSelection() as Promise<void>;
+    };
+    const paint = () =>
+      renders.push(
+        renderBody(
+          f.probe.snapshot.body,
+          f.probe.surface.body,
+          'https://publisher.test',
+          (path, element) => f.probe.paintReferenceIcon(path, element, article),
+        ),
+      );
+    return { ...f, article, targets, nodes, api, select, paint };
+  }
+  function nativeClicks(f: Awaited<ReturnType<typeof fixture>>) {
+    const root = f.probe.surface.body as HTMLElement;
+    let hit: Element = root;
+    const nativeRange = document.createRange.bind(document);
+    vi.spyOn(document, 'createRange').mockImplementation(() => {
+      const range = nativeRange();
+      range.getClientRects = () => [new DOMRect(0, 0, 400, 40)] as unknown as DOMRectList;
+      range.getBoundingClientRect = () => new DOMRect(0, 0, 400, 40);
+      return range;
+    });
+    vi.spyOn(root, 'getBoundingClientRect').mockReturnValue(new DOMRect(0, 0, 400, 40));
+    const descriptors = ['elementFromPoint', 'caretRangeFromPoint'].map(
+      (key) => [key, Object.getOwnPropertyDescriptor(document, key)] as const,
+    );
+    Object.defineProperty(document, 'elementFromPoint', { configurable: true, value: () => hit });
+    Object.defineProperty(document, 'caretRangeFromPoint', {
+      configurable: true,
+      value: () => {
+        const walker = document.createTreeWalker(hit, NodeFilter.SHOW_TEXT),
+          text = walker.nextNode();
+        if (!text) return null;
+        const range = document.createRange();
+        range.setStart(text, 0);
+        range.collapse(true);
+        return range;
+      },
+    });
+    renders.push(() =>
+      descriptors.forEach(([key, descriptor]) => {
+        if (descriptor) Object.defineProperty(document, key, descriptor);
+        else delete (document as unknown as Record<string, unknown>)[key];
+      }),
+    );
+    return (element: Element, init: MouseEventInit = {}) => {
+      hit = element;
+      for (const type of ['pointerdown', 'pointerup']) {
+        const event = new MouseEvent(type, {
+          bubbles: true,
+          cancelable: true,
+          clientX: 10,
+          clientY: 10,
+          ...init,
+        });
+        Object.assign(event, { pointerId: 1, pointerType: 'touch', isPrimary: true });
+        element.dispatchEvent(event);
+      }
+      element.dispatchEvent(
+        new MouseEvent(init.button === 1 ? 'auxclick' : 'click', {
+          bubbles: true,
+          cancelable: true,
+          clientX: 10,
+          clientY: 10,
+          ...init,
+        }),
+      );
+    };
+  }
+  async function initialPartialCollection(mode: 'native selection' | 'tap') {
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
+    vi.setSystemTime(new Date(2026, 9, 20, 12));
+    const actual = await vi.importActual<typeof surfaceModule>('../src/reader/surface');
+    vi.spyOn(surfaceModule, 'ReadingSurface').mockImplementation(function (...args) {
+      return new actual.ReadingSurface(...args);
+    });
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        observe() {}
+        disconnect() {}
+      },
+    );
+    const f = await fixture({ body: 'first words' });
+    f.store.setStatusFolders({ feed: 'Reading/Stream', later: 'Reading/Later' });
+    await f.vault.move(f.article, 'Reading/Stream/Hosted.md');
+    f.vault.bytes.set(
+      f.article,
+      patchProperties(await f.vault.read(f.article), { status: 'feed' }),
+    );
+    f.probe.adoptSnapshot(await f.store.read(f.article.path));
+    const process = f.vault.process.bind(f.vault),
+      calls: string[] = [];
+    let created!: TFile,
+      failed = false;
+    vi.spyOn(f.vault, 'process').mockImplementation(async (file, update) => {
+      calls.push(file.path);
+      if (file === created && !failed) {
+        failed = true;
+        throw new Error('Created destination failed before its process applied');
+      }
+      return process(file, update);
+    });
+    mocks.highlightPicker.mockResolvedValueOnce({
+      kind: 'create',
+      title: 'Created',
+      type: 'Project',
+      existingNodes: [f.nodes[0]],
+    });
+    f.api.createNodeForLink.mockImplementationOnce(async (_options, link) => {
+      created = await f.note('Nodes/Created.md', 'Authored created note.', 'project');
+      const node = {
+        ...f.nodes[1],
+        path: created.path,
+        title: 'Created',
+        classes: ['Concept', 'Project'],
+      };
+      f.nodes.push(node);
+      await link(node);
+      return node;
+    });
+    const click = nativeClicks(f),
+      root = f.probe.surface.body as HTMLElement;
+    const save = vi.spyOn(f.probe, mode === 'tap' ? 'saveTapSelection' : 'saveSelection');
+    if (mode === 'tap') {
+      (
+        f.view.contentEl.querySelector('.reader-tap-highlight-trigger') as HTMLButtonElement
+      ).click();
+      click(root.querySelector('p')!);
+      passageButton(f.view, 'Paragraph').click();
+    } else {
+      const range = document.createRange();
+      range.selectNodeContents(root.querySelector('p')!);
+      document.getSelection()!.removeAllRanges();
+      document.getSelection()!.addRange(range);
+      document.dispatchEvent(new Event('selectionchange'));
+      await vi.advanceTimersByTimeAsync(1000);
+    }
+    await expect(f.probe.operations).rejects.toThrow(/source annotation was saved/i);
+    await f.probe.positionWrite;
+    expect(save).toHaveBeenCalledOnce();
+    expect(mocks.highlightPicker).toHaveBeenCalledWith(
+      f.app,
+      f.api,
+      expect.objectContaining({ query: '' }),
+    );
+    expect(f.api.createNodeForLink).toHaveBeenCalledOnce();
+    expect(f.api.createNodeForLink).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'Project', suggestedTitle: 'Created' }),
+      expect.any(Function),
+    );
+    expect(f.api.createNode).not.toHaveBeenCalled();
+    expect(f.article.path).toBe('Reading/Later/Hosted.md');
+    const source = await f.store.read(f.article.path),
+      first = await f.vault.read(f.targets[0]),
+      pending = await f.vault.read(created);
+    expect(passages(source.body)[0].hosts).toEqual(['Nodes/Concept', 'Nodes/Created']);
+    expect(first).toContain('[[2026-10-20]]');
+    expect(pending).not.toContain('## Highlights');
+    expect(readDocument(pending).properties.origin).toBeUndefined();
+    const retry = passageButton(f.view, 'Retry note updates');
+    expect(retry.isConnected).toBe(true);
+    return { ...f, created, source, first, pending, calls, retry };
+  }
+  it.each(['native selection', 'tap'] as const)(
+    'retries only the unfinished created destination after initial %s filing fails',
+    async (mode) => {
+      const f = await initialPartialCollection(mode),
+        before = f.calls.length;
+      vi.setSystemTime(new Date(2026, 9, 21, 12));
+      f.retry.click();
+      await f.probe.operations;
+      expect(f.calls.slice(before)).toEqual([f.created.path]);
+      expect(await f.vault.read(f.article)).toBe(f.source.raw);
+      expect(await f.vault.read(f.targets[0])).toBe(f.first);
+      const filed = await f.vault.read(f.created),
+        block = paragraphAnchors(f.source.body)[0].blockId;
+      expect(filed).toContain(
+        `> first words (※ ${originLink(f.source.path, block, 'Hosted')} [[2026-10-21]])`,
+      );
+      expect(readDocument(filed).properties.origin).toBe(originLink(f.source.path, block));
+      expect(f.api.createNodeForLink).toHaveBeenCalledOnce();
+      expect(f.vault.trashed).toEqual([]);
+    },
+  );
+  it.each(
+    (['native selection', 'tap'] as const).flatMap((mode) =>
+      (['provider', 'target identity', 'requested class', 'source bytes'] as const).map(
+        (change) => ({ mode, change }),
+      ),
+    ),
+  )(
+    'revalidates original $change authority before retrying initial $mode collection',
+    async ({ mode, change }) => {
+      const f = await initialPartialCollection(mode),
+        before = f.calls.length;
+      let expectedSource = f.source.raw,
+        target = f.created;
+      if (change === 'provider')
+        (f.app as any).plugins = { getPlugin: () => ({ api: { ...f.api } }) };
+      else if (change === 'target identity') {
+        f.vault.files.delete(f.created.path);
+        target = await f.note(f.created.path, 'Replacement must stay untouched.', 'project');
+      } else if (change === 'requested class')
+        f.nodes.find((node) => node.path === f.created.path)!.classes = ['Concept'];
+      else {
+        expectedSource += '\nForeign source edit.';
+        f.vault.bytes.set(f.article, expectedSource);
+      }
+      const targetBytes = await f.vault.read(target);
+      f.retry.click();
+      await f.probe.operations.catch(() => {});
+      expect(f.calls.slice(before)).toEqual([]);
+      expect(await f.vault.read(f.article)).toBe(expectedSource);
+      expect(await f.vault.read(f.targets[0])).toBe(f.first);
+      expect(await f.vault.read(target)).toBe(targetBytes);
+      expect(readDocument(targetBytes).properties.origin).toBeUndefined();
+      expect(f.api.createNodeForLink).toHaveBeenCalledOnce();
+      expect(f.vault.trashed).toEqual([]);
+    },
+  );
+  it('keeps a failed explicit mention origin-only and never offers the quotation retry action', async () => {
+    const initial = hostSelection('first words', { quote: 'first words' }, ['Nodes/Concept.md']);
+    const f = await fixture({ body: initial.body });
+    const first = await f.vault.read(f.targets[0]),
+      process = f.vault.process.bind(f.vault);
+    let created!: TFile, planned: string | undefined;
+    f.api.createNodeForLink.mockImplementationOnce(async (_options, link) => {
+      created = await f.note('Nodes/Created mention.md', 'Authored mention note.', 'project');
+      const node = { ...f.nodes[1], path: created.path, title: 'Created mention' };
+      f.nodes.push(node);
+      await link(node);
+      return node;
+    });
+    vi.spyOn(f.vault, 'process').mockImplementation(async (file, update) => {
+      if (file === created) {
+        planned = update(await f.vault.read(file));
+        throw new Error('Origin-only destination failure');
+      }
+      return process(file, update);
+    });
+    f.paint();
+    nativeClicks(f)(f.probe.surface.body.querySelector('mark'));
+    mocks.highlightPicker.mockResolvedValueOnce({
+      kind: 'create',
+      title: 'Created mention',
+      type: 'Project',
+    });
+    passageButton(f.view, 'Convert to note link…').click();
+    await expect(f.probe.operations).rejects.toThrow(/destination update was not saved/i);
+    const source = await f.store.read(f.article.path);
+    expect(source.body).toContain('[[Nodes/Created mention|first words]]');
+    expect(passages(source.body)).toEqual([]);
+    expect(readDocument(planned!).properties.origin).toBe(originLink(source.path, initial.blockId));
+    expect(planned).not.toContain('## Highlights');
+    expect(await f.vault.read(created)).not.toContain('## Highlights');
+    expect(readDocument(await f.vault.read(created)).properties.origin).toBeUndefined();
+    expect(await f.vault.read(f.targets[0])).toBe(first);
+    expect(
+      [...f.view.contentEl.querySelectorAll('button')].some(
+        (button) => button.getAttribute('aria-label') === 'Retry note updates',
+      ),
+    ).toBe(false);
+    expect(f.api.createNodeForLink).toHaveBeenCalledOnce();
+  });
+  it('retries only the unfinished filing after choosing among another highlight’s many hosts with a staged draft', async () => {
+    const first = hostSelection('First excerpt.', { quote: 'First excerpt.' }, [
+      'Nodes/Concept.md',
+    ]);
+    const second = hostSelection('Second excerpt.', { quote: 'Second excerpt.' }, [
+      'Nodes/Project.md',
+      'Nodes/Other.md',
+    ]);
+    const f = await fixture({ body: first.body + '\n\n' + second.body });
+    const other = await f.note('Nodes/Other.md', 'Other note stays untouched.', 'concept');
+    f.nodes.push({ ...f.nodes[0], path: other.path, title: 'Other' });
+    const otherBytes = await f.vault.read(other),
+      process = f.vault.process.bind(f.vault),
+      calls: string[] = [];
+    let failed = false;
+    vi.spyOn(f.vault, 'process').mockImplementation(async (file, update) => {
+      calls.push(file.path);
+      if (file === f.targets[1] && !failed) {
+        failed = true;
+        throw new Error('Second chosen destination failed before process');
+      }
+      return process(file, update);
+    });
+    f.paint();
+    const root = f.probe.surface.body as HTMLElement,
+      click = nativeClicks(f);
+    click(root.querySelectorAll('mark')[0]);
+    mocks.highlightPicker.mockResolvedValueOnce({ kind: 'pick-in-article', nodes: [f.nodes[0]] });
+    passageButton(f.view, 'Add highlight to notes…').click();
+    await f.probe.operations;
+    expect(f.probe.sendSource?.mode).toBe('explicit');
+    mocks.choose.mockResolvedValueOnce(f.nodes[1]);
+    click(root.querySelectorAll('mark')[1]);
+    await expect(f.probe.operations).rejects.toThrow(/source annotation was saved/i);
+    expect(mocks.choose).toHaveBeenCalledOnce();
+    const source = await f.store.read(f.article.path),
+      copy = await f.vault.read(f.targets[0]),
+      before = calls.length;
+    expect(copy).toContain('> First excerpt.');
+    passageButton(f.view, 'Retry note updates').click();
+    await f.probe.operations;
+    expect(calls.slice(before)).toEqual([f.targets[1].path]);
+    expect(await f.vault.read(f.article)).toBe(source.raw);
+    expect(await f.vault.read(f.targets[0])).toBe(copy);
+    expect(await f.vault.read(f.targets[1])).toContain('> First excerpt.');
+    expect(await f.vault.read(f.targets[1])).not.toContain('> Second excerpt.');
+    expect(await f.vault.read(other)).toBe(otherBytes);
+    expect(f.api.createNodeForLink).not.toHaveBeenCalled();
+  });
+  it('collects one new range into every checked typed note with one guarded source annotation', async () => {
+    const f = await fixture(),
+      collect = vi.spyOn(f.store, 'collectHighlightMany');
+    const process = vi.spyOn(f.vault, 'process');
+    mocks.highlightPicker.mockResolvedValueOnce({ kind: 'existing-many', nodes: f.nodes });
+    await f.select();
+    const saved = await f.store.read(f.article.path);
+    expect(mocks.highlightPicker).toHaveBeenCalledWith(
+      f.app,
+      f.api,
+      expect.objectContaining({ multiple: true, minSelection: 1, actionLabel: 'Add highlight' }),
+    );
+    expect(collect).toHaveBeenCalledOnce();
+    expect(process.mock.calls.filter(([file]) => file === f.article)).toHaveLength(1);
+    expect(passages(saved.body)[0].hosts).toEqual(['Nodes/Concept', 'Nodes/Project']);
+    for (const target of f.targets)
+      expect(await f.vault.read(target)).toContain('> first words (※ [[Reading/Inbox/Hosted#^');
+  });
+  it('collects checked existing notes and one created note inside the durable callback before required completion', async () => {
+    const f = await fixture(),
+      entered = gate(),
+      release = gate();
+    mocks.highlightPicker.mockResolvedValueOnce({
+      kind: 'create',
+      title: 'Project',
+      type: 'Project',
+      existingNodes: [f.nodes[0]],
+    });
+    f.api.createNodeForLink.mockImplementation(async (_options, link) => {
+      await link(f.nodes[1]);
+      entered.resolve();
+      await release.promise;
+      return null;
+    });
+    const pending = f.select();
+    await entered.promise;
+    expect(passages((await f.store.read(f.article.path)).body)[0].hosts).toEqual([
+      'Nodes/Concept',
+      'Nodes/Project',
+    ]);
+    for (const target of f.targets) expect(await f.vault.read(target)).toContain('> first words');
+    expect(readDocument(await f.vault.read(f.targets[0])).properties.origin).toBeUndefined();
+    expect(readDocument(await f.vault.read(f.targets[1])).properties.origin).toContain('#^reader-');
+    release.resolve();
+    await pending;
+    expect(f.api.createNodeForLink).toHaveBeenCalledOnce();
+    expect(f.api.createNode).not.toHaveBeenCalled();
+    expect(f.api.pickNodeForLink).not.toHaveBeenCalled();
+  });
+  it('cancels related-note drafts without writes, then applies metadata once without pruning earlier highlight copies', async () => {
+    const f = await fixture({ defaults: [0] });
+    await f.select();
+    f.probe.surface.selectionValue = undefined;
+    const before = await f.store.read(f.article.path),
+      copy = await f.vault.read(f.targets[0]);
+    const set = vi.spyOn(f.store, 'setRelatedNodes');
+    mocks.highlightPicker.mockResolvedValueOnce(null);
+    await f.probe.topics();
+    expect(f.probe.surface.topics.textContent).toBe('Concept');
+    expect(set).not.toHaveBeenCalled();
+    expect((await f.store.read(f.article.path)).raw).toBe(before.raw);
+    mocks.highlightPicker.mockResolvedValueOnce({ kind: 'existing-many', nodes: [f.nodes[1]] });
+    await f.probe.topics();
+    expect(set).toHaveBeenCalledOnce();
+    const saved = await f.store.read(f.article.path);
+    expect(saved.properties.topics).toEqual(['[[Nodes/Project.md]]']);
+    expect(f.probe.surface.topics.textContent).toBe('Project');
+    expect(saved.body).toBe(before.body);
+    expect(await f.vault.read(f.targets[0])).toBe(copy);
+    expect(await f.vault.read(f.targets[1])).not.toContain('> first words');
+  });
+  it('links a created related note before completion but keeps other edits staged when Cancel follows', async () => {
+    const f = await fixture({ defaults: [0] }),
+      entered = gate(),
+      release = gate();
+    const file = await f.note('Nodes/New.md', 'New authored note.', 'different-primary');
+    const created: NodeResult = {
+      path: file.path,
+      title: 'New',
+      type: 'different-primary',
+      classes: ['Concept'],
+      aliases: [],
+    };
+    f.nodes.push(created);
+    mocks.highlightPicker
+      .mockResolvedValueOnce({
+        kind: 'create',
+        title: 'New',
+        type: 'Concept',
+        existingNodes: [f.nodes[1]],
+      })
+      .mockResolvedValueOnce(null);
+    f.api.createNodeForLink.mockImplementation(async (_options, link) => {
+      await link(created);
+      entered.resolve();
+      await release.promise;
+      return created;
+    });
+    const pending = f.probe.topics();
+    await entered.promise;
+    expect((await f.store.read(f.article.path)).properties.topics).toEqual([
+      '[[Nodes/Concept]]',
+      '[[Nodes/New.md]]',
+    ]);
+    expect(await f.vault.read(file)).toContain('New authored note.');
+    release.resolve();
+    await pending;
+    expect(mocks.highlightPicker).toHaveBeenLastCalledWith(
+      f.app,
+      f.api,
+      expect.objectContaining({
+        selectedPaths: ['Nodes/Project.md', 'Nodes/New.md'],
+        allowCreate: false,
+        actionLabel: 'Apply',
+      }),
+    );
+    expect((await f.store.read(f.article.path)).properties.topics).toEqual([
+      '[[Nodes/Concept]]',
+      '[[Nodes/New.md]]',
+    ]);
+    expect(f.vault.trashed).toEqual([]);
+  });
+  it('opens a plain reference click as that passage multiselect when no highlight is selected', async () => {
+    const body = hostSelection('First excerpt.', { quote: 'First excerpt.' }, [
+      'Nodes/Concept.md',
+    ]).body;
+    const f = await fixture({ body });
+    f.paint();
+    const click = nativeClicks(f);
+    click(f.probe.surface.body.querySelector('.reader-reference-pill'));
+    await f.probe.operations;
+    expect(mocks.highlightPicker).toHaveBeenCalledWith(
+      f.app,
+      f.api,
+      expect.objectContaining({
+        selectedPaths: ['Nodes/Concept.md'],
+        minSelection: 0,
+        multiple: true,
+      }),
+    );
+    expect(f.opened.openFile).not.toHaveBeenCalled();
+    expect((await f.store.read(f.article.path)).body).toBe(body);
+  });
+  it.each(['plain', 'nested internal anchor'] as const)(
+    'clicks the %s source highlight then an exact pill in a many-host passage, without arming Send',
+    async (kind) => {
+      const first =
+        kind === 'plain'
+          ? hostSelection('First excerpt.', { quote: 'First excerpt.' }, ['Nodes/Concept.md']).body
+          : '[==First excerpt.==](Nodes/Concept.md) (※ [[Nodes/Concept]]) ^native-first';
+      const second = hostSelection('Second excerpt.', { quote: 'Second excerpt.' }, [
+        'Nodes/Concept.md',
+        'Nodes/Project.md',
+      ]).body;
+      const f = await fixture({ body: `${first}\n\n${second}` }),
+        conceptBefore = await f.vault.read(f.targets[0]);
+      f.paint();
+      const click = nativeClicks(f),
+        root = f.probe.surface.body as HTMLElement;
+      click(root.querySelector('mark')!);
+      expect(f.probe.sendSource?.mode).toBe('selected');
+      click(
+        root.querySelector(
+          '[data-reader-passage="1"] .reader-reference-pill[href="Nodes/Project"]',
+        )!,
+      );
+      await f.probe.operations;
+      const saved = await f.store.read(f.article.path);
+      expect(passages(saved.body)[0].hosts).toEqual(['Nodes/Concept', 'Nodes/Project']);
+      expect(saved.body).toContain(second);
+      expect(await f.vault.read(f.targets[1])).toContain(
+        kind === 'plain' ? '> First excerpt.' : '> [First excerpt.](Nodes/Concept.md)',
+      );
+      if (kind !== 'plain') expect(saved.body).toContain('[==First excerpt.==](Nodes/Concept.md)');
+      expect(await f.vault.read(f.targets[1])).not.toContain('> Second excerpt.');
+      expect(await f.vault.read(f.targets[0])).toBe(conceptBefore);
+      expect(mocks.highlightPicker).not.toHaveBeenCalled();
+      expect(f.opened.openFile).not.toHaveBeenCalled();
+      expect(f.probe.sendSource?.snapshot.body).toBe(saved.body);
+    },
+  );
+  it.each([false, true])(
+    'routes an actual reference SVG path click with selected source=%s',
+    async (selected) => {
+      const first = hostSelection('First excerpt.', { quote: 'First excerpt.' }, [
+        'Nodes/Concept.md',
+      ]).body;
+      const second = hostSelection('Second excerpt.', { quote: 'Second excerpt.' }, [
+        'Nodes/Concept.md',
+        'Nodes/Project.md',
+      ]).body;
+      const f = await fixture({ body: `${first}\n\n${second}` });
+      f.nodes.forEach((node) => (node.icon = 'tag'));
+      f.paint();
+      const click = nativeClicks(f),
+        root = f.probe.surface.body as HTMLElement,
+        pill = root.querySelector<HTMLAnchorElement>(
+          '[data-reader-passage="1"] .reader-reference-pill[href="Nodes/Project"]',
+        )!;
+      // The SDK shim does not load native Lucide paths. Reproduce its actual SVG
+      // subtree so the dispatched event target is an SVGElement, not HTMLElement.
+      const icon = pill.querySelector('.reader-node-icon') ?? document.createElement('span');
+      icon.classList.add('reader-node-icon', 'reader-reference-icon');
+      icon.setAttribute('data-reader-decoration', 'reference');
+      icon.setAttribute('aria-hidden', 'true');
+      const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg'),
+        path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      path.setAttribute('d', 'M2 2h12v12H2z');
+      svg.append(path);
+      icon.replaceChildren(svg);
+      if (!icon.parentElement) pill.prepend(icon);
+      if (selected) click(root.querySelector('mark')!);
+      click(path);
+      await f.probe.operations;
+      expect(f.opened.openFile).not.toHaveBeenCalled();
+      expect((await f.store.read(f.article.path)).body).toContain(second);
+      if (selected) {
+        expect(await f.vault.read(f.targets[1])).toContain('> First excerpt.');
+        expect(await f.vault.read(f.targets[1])).not.toContain('> Second excerpt.');
+        expect(await f.vault.read(f.targets[0])).not.toContain('> First excerpt.');
+        expect(mocks.highlightPicker).not.toHaveBeenCalled();
+      } else {
+        expect(mocks.highlightPicker).toHaveBeenCalledWith(
+          f.app,
+          f.api,
+          expect.objectContaining({ selectedPaths: ['Nodes/Concept.md', 'Nodes/Project.md'] }),
+        );
+        expect((await f.store.read(f.article.path)).body).toBe(`${first}\n\n${second}`);
+        for (const target of f.targets) expect(await f.vault.read(target)).not.toContain('> ');
+      }
+    },
+  );
+  it('clicking a different mark switches the active source instead of sending the previous excerpt', async () => {
+    const first = hostSelection('First excerpt.', { quote: 'First excerpt.' }, [
+      'Nodes/Concept.md',
+    ]).body;
+    const second = '[==Second excerpt.==](Nodes/Concept.md) (※ [[Nodes/Project]]) ^native-second';
+    const f = await fixture({ body: `${first}\n\n${second}` });
+    f.paint();
+    const click = nativeClicks(f),
+      root = f.probe.surface.body as HTMLElement;
+    click(root.querySelectorAll('mark')[0]);
+    click(root.querySelectorAll('mark')[1]);
+    expect(f.probe.sendSource?.passage.text).toBe('Second excerpt.');
+    for (const file of f.targets)
+      expect(await f.vault.read(file)).not.toContain('> First excerpt.');
+    expect((await f.store.read(f.article.path)).body).toBe(`${first}\n\n${second}`);
+  });
+  it.each(['Done', 'Escape', 'plain text'] as const)(
+    'clears selected-source pill sending on %s',
+    async (clear) => {
+      const body =
+        hostSelection('First excerpt.', { quote: 'First excerpt.' }, ['Nodes/Concept.md']).body +
+        '\n\nBackground prose.';
+      const f = await fixture({ body });
+      f.paint();
+      const click = nativeClicks(f),
+        root = f.probe.surface.body as HTMLElement;
+      click(root.querySelector('mark')!);
+      expect(f.probe.sendSource).toBeDefined();
+      if (clear === 'Done') passageButton(f.view, 'Done').click();
+      else if (clear === 'Escape')
+        document.dispatchEvent(
+          new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }),
+        );
+      else click(root.querySelectorAll('p')[1]);
+      expect(f.probe.sendSource).toBeUndefined();
+      click(root.querySelector('.reader-reference-pill')!);
+      await f.probe.operations;
+      expect(mocks.highlightPicker).toHaveBeenCalledOnce();
+      expect(await f.vault.read(f.targets[0])).not.toContain('> First excerpt.');
+    },
+  );
+  it('shows existing topic aliases, untyped notes and unresolved labels without changing their metadata', async () => {
+    const f = await fixture({ defaults: [0] });
+    const legacy = await f.note('Nodes/Legacy.md', 'Authored legacy content.', 'not-registered');
+    const before = await f.store.read(f.article.path);
+    f.vault.bytes.set(
+      f.article,
+      patchProperties(before.raw, {
+        topics: [
+          '[[Nodes/Project.md|Project alias]]',
+          `[[${legacy.path}|Legacy alias]]`,
+          '[[Missing/Note|Missing alias]]',
+          '[[Nodes/Project.md|Duplicate alias]]',
+        ],
+      }),
+    );
+    await f.view.changed({ path: f.article.path, metadataChanged: true });
+    const source = (await f.store.read(f.article.path)).raw,
+      body = f.probe.surface.body.firstChild;
+    expect(f.probe.surface.topics.textContent).toBe('Project alias Legacy alias Missing alias');
+    expect(f.probe.surface.topics.querySelectorAll('a')).toHaveLength(2);
+    expect(f.probe.surface.topics.querySelector('.reader-reference-prefix')).toBeNull();
+    f.api.getNode.mockImplementation(() => {
+      throw new Error('Provider reloaded');
+    });
+    await f.view.changed({ path: legacy.path, metadataChanged: true });
+    expect(f.probe.surface.topics.textContent).toBe('Project alias Legacy alias Missing alias');
+    expect(f.probe.surface.body.firstChild).toBe(body);
+    expect((await f.store.read(f.article.path)).raw).toBe(source);
+    expect(mocks.highlightPicker).not.toHaveBeenCalled();
+  });
+  it.each([
+    { ctrlKey: false, metaKey: false, button: 0, newLeaf: false },
+    { ctrlKey: true, metaKey: false, button: 0, newLeaf: true },
+    { ctrlKey: false, metaKey: true, button: 0, newLeaf: true },
+    { ctrlKey: false, metaKey: false, button: 1, newLeaf: true },
+  ])(
+    'navigates header topics without invoking highlight filing: %j',
+    async ({ newLeaf, ...options }) => {
+      const f = await fixture({ defaults: [0] }),
+        before = (await f.store.read(f.article.path)).raw,
+        target = await f.vault.read(f.targets[0]),
+        open = vi.spyOn(f.probe, 'openLinked').mockResolvedValue(undefined),
+        bodyClick = vi.spyOn(f.probe, 'targetClicked');
+      const link = f.probe.surface.topics.querySelector('a')!;
+      link.dispatchEvent(
+        new MouseEvent(options.button === 1 ? 'auxclick' : 'click', {
+          ...options,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+      expect(open).toHaveBeenCalledWith(f.targets[0].path, newLeaf);
+      expect(bodyClick).not.toHaveBeenCalled();
+      expect(mocks.highlightPicker).not.toHaveBeenCalled();
+      expect((await f.store.read(f.article.path)).raw).toBe(before);
+      expect(await f.vault.read(f.targets[0])).toBe(target);
+    },
+  );
+  it('unchecks one of two filed notes through Apply, removing only its exact quotation', async () => {
+    const f = await fixture({ defaults: [0, 1] });
+    mocks.highlightPicker.mockResolvedValueOnce({ kind: 'existing-many', nodes: f.nodes });
+    await f.select();
+    f.probe.surface.selectionValue = undefined;
+    f.probe.surface.refresh();
+    const before = await f.store.read(f.article.path),
+      anchor = paragraphAnchors(before.body)[0].blockId,
+      retained = await f.vault.read(f.targets[0]),
+      removed = await f.vault.read(f.targets[1]),
+      expected = removeQuotation(
+        removed,
+        'first words',
+        originLink(before.path, anchor, 'Hosted'),
+      ).raw;
+    mocks.highlightPicker.mockResolvedValueOnce({ kind: 'existing-many', nodes: [f.nodes[0]] });
+    await menu(f.view, 'Add highlight to notes…');
+    expect(mocks.highlightPicker).toHaveBeenLastCalledWith(
+      f.app,
+      f.api,
+      expect.objectContaining({
+        query: '',
+        selectedPaths: f.nodes.map((node) => node.path),
+        minSelection: 0,
+        actionLabel: 'Apply',
+      }),
+    );
+    const saved = await f.store.read(f.article.path);
+    expect(passages(saved.body)[0].hosts).toEqual(['Nodes/Concept']);
+    expect(passages(saved.body)[0].text).toBe('first words');
+    expect(paragraphAnchors(saved.body)[0].blockId).toBe(anchor);
+    expect(saved.properties.topics).toEqual(before.properties.topics);
+    expect(await f.vault.read(f.targets[0])).toBe(retained);
+    expect(await f.vault.read(f.targets[1])).toBe(expected);
+    expect(f.vault.trashed).toEqual([]);
+  });
+  it('clears the last checked host and its exact copy while keeping text, anchors, defaults, and unrelated snapshots', async () => {
+    const f = await fixture({ defaults: [0] });
+    await f.select();
+    f.probe.surface.selectionValue = undefined;
+    f.probe.surface.refresh();
+    const original = await f.store.read(f.article.path),
+      anchor = paragraphAnchors(original.body)[0].blockId;
+    f.vault.bytes.set(
+      f.targets[0],
+      appendQuotation(
+        await f.vault.read(f.targets[0]),
+        'Unrelated owned snapshot.',
+        originLink('Other/Source.md', 'native-other', 'Other'),
+      ).raw,
+    );
+    mocks.highlightPicker.mockResolvedValueOnce({ kind: 'existing-many', nodes: [] });
+    await menu(f.view, 'Add highlight to notes…');
+    const saved = await f.store.read(f.article.path),
+      target = await f.vault.read(f.targets[0]);
+    expect(passages(saved.body)).toEqual([]);
+    expect(saved.body).toContain('Before first words after.');
+    expect(saved.body).toContain(`^${anchor}`);
+    expect(saved.properties.topics).toEqual(original.properties.topics);
+    expect(target).not.toContain('> first words');
+    expect(target).toContain('> Unrelated owned snapshot.');
+    expect(target).toContain('Authored concept.');
+    expect(f.vault.trashed).toEqual([]);
+    expect(f.probe.tapUndo).toBeUndefined();
+  });
+  it('refuses an explicit uncheck before any source mutation when the filed quotation was edited', async () => {
+    const f = await fixture({ defaults: [0] });
+    await f.select();
+    f.probe.surface.selectionValue = undefined;
+    f.probe.surface.refresh();
+    const target = (await f.vault.read(f.targets[0])).replace(
+      '> first words',
+      '> User edited these words',
+    );
+    f.vault.bytes.set(f.targets[0], target);
+    const original = await f.store.read(f.article.path),
+      process = vi.spyOn(f.vault, 'process');
+    mocks.highlightPicker.mockResolvedValueOnce({ kind: 'existing-many', nodes: [] });
+    await expect(menu(f.view, 'Add highlight to notes…')).rejects.toThrow(/quotation/i);
+    expect((await f.store.read(f.article.path)).raw).toBe(original.raw);
+    expect(await f.vault.read(f.targets[0])).toBe(target);
+    expect(process.mock.calls.filter(([file]) => file === f.article)).toHaveLength(0);
+  });
+  it('retries only unfinished explicit removals after a source-first partial failure', async () => {
+    const f = await fixture();
+    mocks.highlightPicker.mockResolvedValueOnce({ kind: 'existing-many', nodes: f.nodes });
+    await f.select();
+    f.probe.surface.selectionValue = undefined;
+    f.probe.surface.refresh();
+    const process = f.vault.process.bind(f.vault);
+    let fail = true;
+    const calls: string[] = [];
+    vi.spyOn(f.vault, 'process').mockImplementation(async (file, update) => {
+      calls.push(file.path);
+      if (file === f.targets[1] && fail) {
+        fail = false;
+        throw new Error('Temporarily blocked destination');
+      }
+      return process(file, update);
+    });
+    mocks.highlightPicker.mockResolvedValueOnce({ kind: 'existing-many', nodes: [] });
+    await expect(menu(f.view, 'Add highlight to notes…')).rejects.toThrow(
+      /source annotation was saved/i,
+    );
+    expect(passages((await f.store.read(f.article.path)).body)).toEqual([]);
+    expect(await f.vault.read(f.targets[0])).not.toContain('> first words');
+    expect(await f.vault.read(f.targets[1])).toContain('> first words');
+    passageButton(f.view, 'Retry note updates').click();
+    await f.probe.operations;
+    for (const file of f.targets) expect(await f.vault.read(file)).not.toContain('> first words');
+    expect(calls.filter((path) => path === f.targets[0].path)).toHaveLength(1);
+    expect(calls.filter((path) => path === f.targets[1].path)).toHaveLength(2);
+    expect(f.vault.trashed).toEqual([]);
+  });
+  it('paints public resolved node icons before listed-class fallback, stripping fragments and tolerating provider failure', async () => {
+    const f = await fixture(),
+      icon = document.createElement('span');
+    f.nodes[0].icon = 'star';
+    f.api.listTypes.mockReturnValue([
+      { type: 'Project', label: 'Project', icon: 'briefcase' },
+      { type: 'Concept', label: 'Concept', icon: 'book' },
+    ] as any);
+    vi.mocked(setIcon).mockClear();
+    f.probe.paintReferenceIcon('Nodes/Concept#Heading', icon, f.article);
+    expect(setIcon).toHaveBeenLastCalledWith(icon, 'star');
+    delete f.nodes[0].icon;
+    f.probe.paintReferenceIcon('Nodes/Concept#^native-existing', icon, f.article);
+    expect(setIcon).toHaveBeenLastCalledWith(icon, 'book');
+    f.nodes[0].classes = ['Concept', 'Project'];
+    f.api.listTypes.mockReturnValue([
+      { type: 'Concept', label: 'Concept' },
+      { type: 'Project', label: 'Project', icon: 'notebook' },
+    ] as any);
+    f.probe.paintReferenceIcon('Nodes/Concept', icon, f.article);
+    expect(setIcon).toHaveBeenLastCalledWith(icon, 'notebook');
+    vi.mocked(setIcon).mockClear();
+    f.nodes[0].icon = '';
+    f.probe.paintReferenceIcon('Nodes/Concept', icon, f.article);
+    expect(setIcon).not.toHaveBeenCalled();
+    delete f.nodes[0].icon;
+    f.nodes[0].classes = ['NotRegistered'];
+    f.probe.paintReferenceIcon('Nodes/Concept', icon, f.article);
+    expect(setIcon).not.toHaveBeenCalled();
+    f.api.getNode.mockImplementationOnce(() => {
+      throw new Error('Provider unavailable');
+    });
+    expect(() => f.probe.paintReferenceIcon('Nodes/Concept', icon, f.article)).not.toThrow();
+  });
+  it.each(['revoked membership', 'replacement file'] as const)(
+    'does not erase an unchecked related-note original after %s at the final source boundary',
+    async (change) => {
+      const f = await fixture({ defaults: [0] }),
+        before = await f.store.read(f.article.path);
+      mocks.highlightPicker.mockResolvedValueOnce({ kind: 'existing-many', nodes: [] });
+      const process = f.vault.process.bind(f.vault);
+      let changed = false;
+      vi.spyOn(f.vault, 'process').mockImplementation(async (file, update) => {
+        if (file === f.article && !changed) {
+          changed = true;
+          if (change === 'revoked membership') f.nodes[0].classes = [];
+          else {
+            const replacement = Object.setPrototypeOf(
+              { ...f.targets[0] },
+              TFile.prototype,
+            ) as TFile;
+            f.vault.files.set(replacement.path, replacement);
+            f.vault.bytes.set(replacement, await f.vault.read(f.targets[0]));
+            f.cache.set(replacement, f.cache.get(f.targets[0]));
+          }
+        }
+        return process(file, update);
+      });
+      await f.probe.topics();
+      expect(changed).toBe(true);
+      expect(mocks.notice).toHaveBeenCalledWith(
+        expect.stringMatching(
+          change === 'replacement file'
+            ? /note changed.*Nothing was overwritten/
+            : /typed destination changed/,
+        ),
+      );
+      expect((await f.store.read(f.article.path)).raw).toBe(before.raw);
+      expect(mocks.highlightPicker).toHaveBeenCalledTimes(2);
+      expect(f.api.createNodeForLink).not.toHaveBeenCalled();
+    },
+  );
+  it.each([{ ctrlKey: true }, { metaKey: true }, { button: 1 }])(
+    'keeps modified reference navigation available with a source highlight active (%j)',
+    async (init) => {
+      const first = hostSelection('First excerpt.', { quote: 'First excerpt.' }, [
+        'Nodes/Concept.md',
+      ]).body;
+      const second = hostSelection('Second excerpt.', { quote: 'Second excerpt.' }, [
+        'Nodes/Project.md',
+      ]).body;
+      const f = await fixture({ body: `${first}\n\n${second}` });
+      f.paint();
+      const click = nativeClicks(f),
+        root = f.probe.surface.body as HTMLElement;
+      click(root.querySelector('mark')!);
+      expect(f.probe.sendSource).toBeDefined();
+      click(root.querySelector('[data-reader-passage="1"] .reader-reference-pill')!, init);
+      for (let i = 0; i < 100 && !f.opened.openFile.mock.calls.length; i++) await Promise.resolve();
+      expect(f.opened.openFile).toHaveBeenCalledOnce();
+      expect(f.opened.openFile).toHaveBeenCalledWith(f.targets[1], { active: true });
+      expect(f.probe.sendSource).toBeUndefined();
+      expect(mocks.highlightPicker).not.toHaveBeenCalled();
+      for (const target of f.targets)
+        expect(await f.vault.read(target)).not.toContain('> First excerpt.');
+      expect((await f.store.read(f.article.path)).body).toBe(`${first}\n\n${second}`);
+    },
+  );
+  it('keeps a fresh source snapshot for repeated exact-pill filings without duplicating quotation copies', async () => {
+    const first = hostSelection('First excerpt.', { quote: 'First excerpt.' }, [
+      'Nodes/Concept.md',
+    ]).body;
+    const second = hostSelection('Second excerpt.', { quote: 'Second excerpt.' }, [
+      'Nodes/Project.md',
+    ]).body;
+    const f = await fixture({ body: `${first}\n\n${second}` });
+    f.paint();
+    const click = nativeClicks(f),
+      root = f.probe.surface.body as HTMLElement;
+    click(root.querySelector('mark')!);
+    click(root.querySelector('[data-reader-passage="1"] .reader-reference-pill')!);
+    await f.probe.operations;
+    const filed = await f.vault.read(f.targets[1]);
+    f.paint();
+    click(root.querySelector('[data-reader-passage="1"] .reader-reference-pill')!);
+    await f.probe.operations;
+    expect(await f.vault.read(f.targets[1])).toBe(filed);
+    expect(filed.match(/> First excerpt\./g)).toHaveLength(1);
+    expect(f.probe.sendSource?.snapshot.body).toBe((await f.store.read(f.article.path)).body);
+    expect(mocks.highlightPicker).not.toHaveBeenCalled();
+  });
+  it('retries an unfinished removal without repeating a completed created-note collection or origin write', async () => {
+    const f = await fixture({ defaults: [0] });
+    await f.select();
+    f.probe.surface.selectionValue = undefined;
+    f.probe.surface.refresh();
+    const process = f.vault.process.bind(f.vault),
+      calls: string[] = [];
+    let fail = true;
+    vi.spyOn(f.vault, 'process').mockImplementation(async (file, update) => {
+      calls.push(file.path);
+      if (file === f.targets[0] && fail) {
+        fail = false;
+        throw new Error('Temporary removal failure');
+      }
+      return process(file, update);
+    });
+    mocks.highlightPicker.mockResolvedValueOnce({
+      kind: 'create',
+      title: 'Project',
+      type: 'Project',
+    });
+    f.api.createNodeForLink.mockImplementationOnce(async (_options, link) => {
+      await link(f.nodes[1]);
+      return f.nodes[1];
+    });
+    await expect(menu(f.view, 'Add highlight to notes…')).rejects.toThrow(
+      /source annotation was saved/i,
+    );
+    const createdCopy = await f.vault.read(f.targets[1]);
+    expect(createdCopy).toContain('> first words');
+    expect(readDocument(createdCopy).properties.origin).toContain('#^reader-');
+    passageButton(f.view, 'Retry note updates').click();
+    await f.probe.operations;
+    expect(await f.vault.read(f.targets[1])).toBe(createdCopy);
+    expect(await f.vault.read(f.targets[0])).not.toContain('> first words');
+    expect(calls.filter((path) => path === f.targets[1].path)).toHaveLength(1);
+    expect(calls.filter((path) => path === f.targets[0].path)).toHaveLength(2);
+    expect(f.api.createNodeForLink).toHaveBeenCalledOnce();
+  });
+  it('converts a hosted highlight to a note link without removing any earlier filed quotation', async () => {
+    const f = await fixture({ defaults: [0] });
+    await f.select();
+    f.probe.surface.selectionValue = undefined;
+    f.probe.surface.refresh();
+    const copy = await f.vault.read(f.targets[0]);
+    mocks.highlightPicker.mockResolvedValueOnce({ kind: 'existing', node: f.nodes[1] });
+    await menu(f.view, 'Convert to note link…');
+    expect((await f.store.read(f.article.path)).body).toContain('[[Nodes/Project|first words]]');
+    expect(await f.vault.read(f.targets[0])).toBe(copy);
+    expect(await f.vault.read(f.targets[1])).not.toContain('> first words');
+  });
+  it('requires a picker when no typed default exists and cancellation writes neither file', async () => {
+    const f = await fixture(),
+      before = await f.store.read(f.article.path),
+      target = await f.vault.read(f.targets[0]);
+    await f.select();
+    expect(mocks.highlightPicker).toHaveBeenCalledOnce();
+    expect(await f.store.read(f.article.path)).toEqual(before);
+    expect(await f.vault.read(f.targets[0])).toBe(target);
+    expect(f.api.pickNodeForLink).not.toHaveBeenCalled();
+    expect(f.api.createNode).not.toHaveBeenCalled();
+  });
+  it.each([0, 1])(
+    'inherits one valid typed destination of any class (destination %i)',
+    async (index) => {
+      const f = await fixture({ defaults: [index] });
+      await f.select();
+      const saved = await f.store.read(f.article.path);
+      expect(mocks.highlightPicker).not.toHaveBeenCalled();
+      expect(passages(saved.body)[0].hosts).toEqual([f.nodes[index].path.replace(/\.md$/, '')]);
+      expect(await f.vault.read(f.targets[index])).toContain(
+        '> first words (※ [[Reading/Inbox/Hosted#^reader-',
+      );
+      expect(saved.properties.topics).toEqual([`[[${f.nodes[index].path.replace(/\.md$/, '')}]]`]);
+    },
+  );
+  it('offers several defaults without silently choosing the first, and remembers an explicit new choice', async () => {
+    const f = await fixture({ defaults: [0, 1] });
+    await f.select();
+    expect((await f.store.read(f.article.path)).body).toBe('Before first words after.');
+    expect(mocks.highlightPicker).toHaveBeenCalledWith(
+      f.app,
+      f.api,
+      expect.objectContaining({ preferredPaths: f.nodes.map((node) => node.path) }),
+    );
+    mocks.highlightPicker.mockResolvedValue({ kind: 'existing', node: f.nodes[1] });
+    f.probe.lastSelection = '';
+    await f.select();
+    expect(passages((await f.store.read(f.article.path)).body)[0].hosts).toEqual(['Nodes/Project']);
+    expect(await f.vault.read(f.targets[0])).not.toContain('## Highlights');
+  });
+  it('ignores invalid/untyped defaults instead of treating arbitrary files as hosts', async () => {
+    const f = await fixture({ defaults: [0] });
+    f.nodes[0].classes = ['NotAFileclass'];
+    await f.select();
+    expect(mocks.highlightPicker).toHaveBeenCalledOnce();
+    expect((await f.store.read(f.article.path)).body).toBe('Before first words after.');
+  });
+  it('shows a clear provider error for new highlights while keeping legacy removal usable', async () => {
+    const f = await fixture();
+    (f.app as any).plugins = undefined;
+    await expect(f.select()).rejects.toThrow(/Fileclass Inline.*v2/);
+    expect((await f.store.read(f.article.path)).body).toBe('Before first words after.');
+    const old = await f.note('Reading/Inbox/Legacy.md', 'Before ==legacy== after.');
+    await f.view.openArticle(old.path);
+    await menu(f.view, 'Remove highlight (article only)');
+    expect((await f.store.read(old.path)).body).toBe('Before legacy after.');
+  });
+  it('uses createNodeForLink before required completion, accepts membership rather than primary type, and never invokes a shared picker', async () => {
+    const f = await fixture();
+    mocks.highlightPicker.mockResolvedValue({
+      kind: 'create',
+      title: 'Typed project',
+      type: 'Project',
+    });
+    f.api.createNodeForLink.mockImplementation(async (options, link) => {
+      expect(options).toMatchObject({
+        type: 'Project',
+        suggestedTitle: 'Typed project',
+        sourcePath: f.article.path,
+      });
+      await link(f.nodes[1]);
+      expect(passages((await f.store.read(f.article.path)).body)[0].hosts).toEqual([
+        'Nodes/Project',
+      ]);
+      expect(await f.vault.read(f.targets[1])).toContain('## Highlights');
+      expect(readDocument(await f.vault.read(f.targets[1])).properties.origin).toMatch(
+        /Hosted#\^reader-/,
+      );
+      return null; // Completion cancellation never rolls back a created node/source.
+    });
+    await f.select();
+    expect(f.api.createNodeForLink).toHaveBeenCalledOnce();
+    expect(f.api.pickNodeForLink).not.toHaveBeenCalled();
+    expect(f.api.createNode).not.toHaveBeenCalled();
+    expect(f.vault.file(f.targets[1].path)).toBe(f.targets[1]);
+  });
+  it('rejects a created node without the selected class and a duplicate callback', async () => {
+    const f = await fixture();
+    mocks.highlightPicker.mockResolvedValue({ kind: 'create', title: 'Project', type: 'Project' });
+    f.api.createNodeForLink.mockImplementation(async (_options, link) => {
+      await link(f.nodes[1]);
+      await expect(link(f.nodes[1])).rejects.toThrow(/already ran/);
+      return f.nodes[1];
+    });
+    await f.select();
+    expect((await f.vault.read(f.targets[1])).match(/> first words/g)).toHaveLength(1);
+    const other = await fixture();
+    mocks.highlightPicker.mockResolvedValue({
+      kind: 'create',
+      title: 'Wrong class',
+      type: 'Project',
+    });
+    other.api.createNodeForLink.mockImplementation(async (_options, link) => {
+      await link(other.nodes[0]);
+      return other.nodes[0];
+    });
+    await expect(other.select()).rejects.toThrow(/chosen Fileclass/);
+    expect((await other.store.read(other.article.path)).body).toBe('Before first words after.');
+  });
+  it.each(['provider', 'classes', 'source'] as const)(
+    'rechecks %s at the callback mutation boundary',
+    async (change) => {
+      const f = await fixture(),
+        targetRaw = await f.vault.read(f.targets[0]);
+      mocks.highlightPicker.mockResolvedValue({
+        kind: 'create',
+        title: 'Concept',
+        type: 'Concept',
+      });
+      f.api.createNodeForLink.mockImplementation(async (_options, link) => {
+        if (change === 'provider')
+          (f.app as any).plugins = { getPlugin: () => ({ api: { ...f.api } }) };
+        else if (change === 'classes') f.nodes[0].classes = ['Other'];
+        else f.vault.bytes.set(f.article, `${await f.vault.read(f.article)}\nExternal edit.`);
+        await link(f.nodes[0]);
+        return f.nodes[0];
+      });
+      await expect(f.select()).rejects.toThrow();
+      expect(await f.vault.read(f.targets[0])).toBe(targetRaw);
+      expect((await f.store.read(f.article.path)).body).not.toContain('==');
+    },
+  );
+  it.each([false, true])(
+    'cancels an uncooperative creation provider without losing dispatched content (committed=%s)',
+    async (committed) => {
+      const f = await fixture({ body: '==first words==' }),
+        entered = gate();
+      mocks.highlightPicker.mockResolvedValue({
+        kind: 'create',
+        title: 'Concept',
+        type: 'Concept',
+      });
+      let callback!: (node: NodeResult) => Promise<void>;
+      f.api.createNodeForLink.mockImplementation(async (_options, link) => {
+        callback = link;
+        if (committed) await link(f.nodes[0]);
+        entered.resolve();
+        return new Promise<never>(() => {});
+      });
+      const pending = menu(f.view, 'Add highlight to notes…');
+      await entered.promise;
+      const leaving = f.view.readingList();
+      await leaving;
+      await pending;
+      await expect(callback(f.nodes[0])).rejects.toThrow(/cancelled/);
+      expect(f.probe.snapshot).toBeUndefined();
+      expect((await f.store.read(f.article.path)).body.includes('(※')).toBe(committed);
+      expect((await f.vault.read(f.targets[0])).includes('## Highlights')).toBe(committed);
+    },
+  );
+  it('drains an already-dispatched target write before navigation and never rolls it back', async () => {
+    const f = await fixture({ body: '==first words==' }),
+      entered = gate(),
+      release = gate();
+    mocks.highlightPicker.mockResolvedValue({ kind: 'existing', node: f.nodes[0] });
+    const process = f.vault.process.bind(f.vault);
+    vi.spyOn(f.vault, 'process').mockImplementation(async (file, update) => {
+      const result = await process(file, update);
+      if (file === f.targets[0]) {
+        entered.resolve();
+        await release.promise;
+      }
+      return result;
+    });
+    const pending = menu(f.view, 'Add highlight to notes…');
+    await entered.promise;
+    let left = false;
+    const leaving = f.view.readingList().then(() => {
+      left = true;
+    });
+    await Promise.resolve();
+    expect(left).toBe(false);
+    expect(await f.vault.read(f.targets[0])).toContain('## Highlights');
+    release.resolve();
+    await leaving;
+    await pending.catch(() => {}); // Cancellation may report an already-dispatched save as uncertain.
+    expect((await f.store.read(f.article.path)).body).toContain('(※ [[Nodes/Concept]])');
+    expect(await f.vault.read(f.targets[0])).toContain('> first words');
+  });
+  it('routes the first excerpt to a second highlight host and leaves the second passage unchanged', async () => {
+    const body = hostSelection('First excerpt.\n\nSecond excerpt.', { quote: 'First excerpt.' }, [
+      'Nodes/Concept.md',
+    ]).body;
+    const second = hostSelection(body, { quote: 'Second excerpt.' }, ['Nodes/Project.md']);
+    const f = await fixture({ body: second.body });
+    f.paint();
+    f.probe.passageMenu(passages(f.probe.snapshot.body)[0]);
+    await menu(f.view, 'Choose from article…');
+    expect(passageButton(f.view, 'Cancel choosing from article')).toBeDefined();
+    f.probe.selectPassageMark(
+      f.probe.surface.body.querySelectorAll('mark')[1],
+      new MouseEvent('click'),
+    );
+    await f.probe.operations;
+    const saved = await f.store.read(f.article.path),
+      found = passages(saved.body);
+    expect(found[0].hosts).toEqual(['Nodes/Concept', 'Nodes/Project']);
+    expect(found[1].hosts).toEqual(['Nodes/Project']);
+    expect(found[1].text).toBe('Second excerpt.');
+    const firstAnchor = /\^(reader-[a-z0-9-]+)/.exec(saved.body)![1];
+    const target = await f.vault.read(f.targets[1]);
+    expect(target).toContain(`> First excerpt. (※ [[Reading/Inbox/Hosted#^${firstAnchor}`);
+    expect(target).not.toContain('> Second excerpt.');
+  });
+  it('sends to the actual highlight host when a mark is inside an internal link with a different target', async () => {
+    const first = hostSelection('First excerpt.', { quote: 'First excerpt.' }, [
+      'Nodes/Concept.md',
+    ]).body;
+    const second = '[==Second excerpt.==](Nodes/Concept.md) (※ [[Nodes/Project]]) ^native-existing';
+    const f = await fixture({ body: `${first}\n\n${second}` });
+    f.vault.bytes.set(
+      f.targets[0],
+      appendQuotation(
+        await f.vault.read(f.targets[0]),
+        'First excerpt.',
+        originLink(f.article.path, paragraphAnchors(first)[0].blockId, 'Hosted'),
+      ).raw,
+    );
+    const conceptBefore = await f.vault.read(f.targets[0]);
+    f.paint();
+    f.probe.passageMenu(passages(f.probe.snapshot.body)[0]);
+    await menu(f.view, 'Choose from article…');
+    const mark = f.probe.surface.body.querySelectorAll('mark')[1] as HTMLElement;
+    expect(mark.parentElement?.matches('a.internal-link')).toBe(true);
+    const click = new MouseEvent('click', { bubbles: true, cancelable: true });
+    Object.defineProperty(click, 'target', { value: mark });
+    // Native caret hit-testing belongs to the TapHighlighter. Verify its two
+    // Reader callbacks separately: the inline-link interceptor must decline the
+    // marked text, then the mapped logical passage supplies the actual host.
+    expect(f.probe.targetClicked(click)).toBe(false);
+    f.probe.selectPassageMark(mark, click);
+    await f.probe.operations;
+    const saved = await f.store.read(f.article.path);
+    expect(passages(saved.body)[0].hosts).toEqual(['Nodes/Concept', 'Nodes/Project']);
+    expect(saved.body).toContain(second);
+    expect(await f.vault.read(f.targets[1])).toContain('> First excerpt.');
+    expect(await f.vault.read(f.targets[1])).not.toContain('> Second excerpt.');
+    expect(await f.vault.read(f.targets[0])).toBe(conceptBefore);
+    expect(mocks.choose).not.toHaveBeenCalled();
+    expect(mocks.highlightPicker).toHaveBeenCalledOnce();
+    expect(mocks.highlightPicker).toHaveBeenCalledWith(
+      f.app,
+      f.api,
+      expect.objectContaining({ allowPickFromArticle: true, multiple: true }),
+    );
+    expect(f.opened.openFile).not.toHaveBeenCalled();
+  });
+  it('still uses an internal link exact target when its unmarked portion is clicked', async () => {
+    const first = hostSelection('First excerpt.', { quote: 'First excerpt.' }, [
+      'Nodes/Concept.md',
+    ]).body;
+    const second =
+      '[Unmarked ==Second excerpt.==](Nodes/Concept.md) (※ [[Nodes/Project]]) ^native-existing';
+    const f = await fixture({ body: `${first}\n\n${second}` });
+    const projectBefore = await f.vault.read(f.targets[1]);
+    f.paint();
+    f.probe.passageMenu(passages(f.probe.snapshot.body)[0]);
+    await menu(f.view, 'Choose from article…');
+    const link = f.probe.surface.body.querySelector(
+      'a.internal-link[href="Nodes/Concept.md"]',
+    ) as HTMLAnchorElement;
+    expect(link.querySelector('mark')).not.toBeNull();
+    for (const type of ['pointerdown', 'pointerup']) {
+      const event = new MouseEvent(type, { bubbles: true, cancelable: true });
+      Object.assign(event, { pointerId: 1, pointerType: 'touch', isPrimary: true });
+      link.dispatchEvent(event);
+    }
+    link.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+    await f.probe.operations;
+    expect((await f.store.read(f.article.path)).body).toContain(second);
+    expect(await f.vault.read(f.targets[0])).toContain('> First excerpt.');
+    expect(await f.vault.read(f.targets[1])).toBe(projectBefore);
+    expect(f.opened.openFile).not.toHaveBeenCalled();
+  });
+  it('requires an explicit choice among multiple second-highlight hosts and supports Cancel choosing from article', async () => {
+    let body = hostSelection('First excerpt.\n\nSecond excerpt.', { quote: 'First excerpt.' }, [
+      'Nodes/Concept.md',
+    ]).body;
+    body = hostSelection(body, { quote: 'Second excerpt.' }, [
+      'Nodes/Concept.md',
+      'Nodes/Project.md',
+    ]).body;
+    const f = await fixture({ body });
+    f.paint();
+    f.probe.passageMenu(passages(f.probe.snapshot.body)[0]);
+    await menu(f.view, 'Choose from article…');
+    passageButton(f.view, 'Cancel choosing from article').click();
+    expect(f.probe.sendSource).toBeUndefined();
+    expect((await f.store.read(f.article.path)).body).toBe(body);
+    await menu(f.view, 'Choose from article…');
+    mocks.choose.mockResolvedValue(null);
+    f.probe.selectPassageMark(
+      f.probe.surface.body.querySelectorAll('mark')[1],
+      new MouseEvent('click'),
+    );
+    await f.probe.operations;
+    expect(mocks.choose).toHaveBeenCalledWith(
+      f.app,
+      'Add highlight to notes',
+      f.nodes,
+      expect.any(Function),
+      expect.any(AbortSignal),
+    );
+    expect((await f.store.read(f.article.path)).body).toBe(body);
+  });
+  it.each(['inline', 'reference'] as const)(
+    'routes to the exact typed %s link rather than opening it',
+    async (kind) => {
+      const base = hostSelection('First excerpt.\n\nSecond excerpt.', { quote: 'First excerpt.' }, [
+        'Nodes/Concept.md',
+      ]).body;
+      const body =
+        kind === 'reference'
+          ? hostSelection(base, { quote: 'Second excerpt.' }, ['Nodes/Project.md']).body
+          : `${base}\n\n[[Nodes/Project.md|Project link]]`;
+      const f = await fixture({ body });
+      f.paint();
+      f.probe.passageMenu(passages(f.probe.snapshot.body)[0]);
+      await menu(f.view, 'Choose from article…');
+      const links = [
+        ...(f.probe.surface.body as HTMLElement).querySelectorAll<HTMLAnchorElement>(
+          'a.internal-link',
+        ),
+      ];
+      const link = links.find(
+        (link) => link.getAttribute('href')?.replace(/\.md$/, '') === 'Nodes/Project',
+      )!;
+      for (const type of ['pointerdown', 'pointerup']) {
+        const event = new MouseEvent(type, { bubbles: true, cancelable: true });
+        Object.assign(event, { pointerId: 1, pointerType: 'touch', isPrimary: true });
+        link.dispatchEvent(event);
+      }
+      link.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+      await f.probe.operations;
+      expect(passages((await f.store.read(f.article.path)).body)[0].hosts).toEqual([
+        'Nodes/Concept',
+        'Nodes/Project',
+      ]);
+      expect(f.opened.openFile).not.toHaveBeenCalled();
+    },
+  );
+  it('Undo removes only the source mark/references, retaining anchors, defaults, and user-owned destination snapshots', async () => {
+    const f = await fixture({ defaults: [0] });
+    f.paint();
+    const range = document.createRange(),
+      node = f.probe.surface.body.querySelector('p').firstChild;
+    range.setStart(node, 7);
+    range.setEnd(node, 18);
+    await f.probe.saveTapSelection(f.probe.surface.body, range);
+    const target = await f.vault.read(f.targets[0]),
+      saved = await f.store.read(f.article.path);
+    const anchor = /\^reader-[a-z0-9-]+/.exec(saved.body)![0];
+    passageButton(f.view, 'Undo').click();
+    await f.probe.operations;
+    const undone = await f.store.read(f.article.path);
+    expect(undone.body).toBe(`Before first words after. ${anchor}`);
+    expect(undone.properties.topics).toEqual(saved.properties.topics);
+    expect(await f.vault.read(f.targets[0])).toBe(target);
+  });
+  it('explicitly unchecks a destination by removing its exact filed quotation while retaining defaults and the new destination', async () => {
+    const f = await fixture({ body: '==first words==' });
+    mocks.highlightPicker.mockResolvedValue({ kind: 'existing', node: f.nodes[0] });
+    await menu(f.view, 'Add highlight to notes…');
+    const firstSnapshot = await f.vault.read(f.targets[0]);
+    mocks.highlightPicker.mockResolvedValue({ kind: 'existing', node: f.nodes[1] });
+    await menu(f.view, 'Add highlight to notes…');
+    const source = await f.store.read(f.article.path);
+    expect(passages(source.body)[0].hosts).toEqual(['Nodes/Project']);
+    expect(firstSnapshot).toContain('> first words');
+    expect(await f.vault.read(f.targets[0])).not.toContain('> first words');
+    expect(await f.vault.read(f.targets[0])).toContain('Authored concept.');
+    expect(await f.vault.read(f.targets[1])).toContain('> first words');
+    expect(source.properties.topics).toEqual(['[[Nodes/Concept]]', '[[Nodes/Project]]']);
+  });
+  it('converts only on explicit intent into an ordinary node alias without a redundant pill or quotation', async () => {
+    const initial = hostSelection('first words', { quote: 'first words' }, ['Nodes/Concept.md']);
+    const f = await fixture({ body: initial.body }),
+      target = await f.vault.read(f.targets[1]);
+    mocks.highlightPicker.mockResolvedValue({ kind: 'existing', node: f.nodes[1] });
+    await menu(f.view, 'Convert to note link…');
+    expect(mocks.highlightPicker).toHaveBeenCalledWith(
+      f.app,
+      f.api,
+      expect.objectContaining({ query: 'first words' }),
+    );
+    const saved = await f.store.read(f.article.path);
+    expect(saved.body).toBe(`[[Nodes/Project|first words]] ^${initial.blockId}`);
+    expect(await f.vault.read(f.targets[1])).toBe(target);
+    expect(passages(saved.body)).toEqual([]);
+  });
+  it('never converts automatically when a selected excerpt equals the node title', async () => {
+    const f = await fixture({ defaults: [0] });
+    f.nodes[0].title = 'first words';
+    await f.select();
+    expect(passages((await f.store.read(f.article.path)).body)).toHaveLength(1);
+    expect(await f.vault.read(f.targets[0])).toContain('> first words');
+  });
+  it('preserves a Reader position write while a creation callback is pending', async () => {
+    const f = await fixture({ body: '==first words==' });
+    mocks.highlightPicker.mockResolvedValue({ kind: 'create', title: 'Concept', type: 'Concept' });
+    f.api.createNodeForLink.mockImplementation(async (_options, link) => {
+      f.probe.persistPosition('first words');
+      await f.probe.positionWrite;
+      await link(f.nodes[0]);
+      return f.nodes[0];
+    });
+    await menu(f.view, 'Add highlight to notes…');
+    const saved = await f.store.read(f.article.path);
+    expect(saved.properties.bookmark).toBe('first words');
+    expect(passages(saved.body)[0].hosts).toEqual(['Nodes/Concept']);
+  });
+  it('preserves other typed remembered destinations through existing topic assignment without reclassifying them', async () => {
+    const f = await fixture({ defaults: [0, 1] });
+    const topic = await f.note('Topics/Real.md', 'A topic.', 'topic');
+    f.nodes.push({
+      path: topic.path,
+      title: 'Real',
+      type: 'different-primary',
+      classes: ['Concept'],
+      aliases: [],
+    });
+    mocks.highlightPicker.mockResolvedValueOnce({ kind: 'existing-many', nodes: f.nodes });
+    await f.probe.topics();
+    const saved = await f.store.read(f.article.path);
+    expect(saved.properties.topics).toEqual([
+      '[[Nodes/Concept]]',
+      '[[Nodes/Project]]',
+      '[[Topics/Real.md]]',
+    ]);
+    expect(readDocument(await f.vault.read(f.targets[1])).properties.type).toBe('project');
+  });
+  it('offers only public Fileclass destinations in article assignment and preserves ineligible legacy YAML', async () => {
+    const f = await fixture();
+    const untyped = await f.note('Topics/Untyped.md', 'An old untyped topic.', 'topic');
+    const legacy = ['[[Topics/Untyped.md]]', 'unrecognized authored value', { custom: 'preserve' }];
+    f.vault.bytes.set(
+      f.article,
+      patchProperties(await f.vault.read(f.article), { topics: legacy }),
+    );
+    await f.view.openArticle(f.article.path);
+    mocks.highlightPicker.mockImplementationOnce(async (_app, api, options) => {
+      expect(api).toBe(f.api);
+      expect(options).toEqual(
+        expect.objectContaining({
+          multiple: true,
+          selectedPaths: [],
+          minSelection: 0,
+          actionLabel: 'Apply',
+          title: 'Related notes',
+        }),
+      );
+      expect(api.getNode(untyped.path)).toBeNull();
+      return { kind: 'existing-many', nodes: [f.nodes[1]] };
+    });
+    await f.probe.topics();
+    expect((await f.store.read(f.article.path)).properties.topics).toEqual([
+      ...legacy,
+      '[[Nodes/Project.md]]',
+    ]);
+    expect(readDocument(await f.vault.read(untyped)).properties.type).toBe('topic');
+  });
+  it('blocks assignment without the public provider but retains read-only legacy topic filtering', async () => {
+    const f = await fixture();
+    const legacy = await f.note('Topics/Legacy.md', 'An ordinary legacy topic.', 'topic');
+    (f.app as any).plugins = undefined;
+    await expect(f.probe.topics()).rejects.toThrow(/Fileclass Inline.*v2/);
+    expect(mocks.topics).not.toHaveBeenCalled();
+    await f.view.readingList();
+    const { chooseTopicFilter } = await import('../src/host/topic-filter-dialog');
+    vi.mocked(chooseTopicFilter).mockResolvedValueOnce(null);
+    await f.probe.selectTopicFilter();
+    expect(chooseTopicFilter).toHaveBeenCalledWith(
+      f.app,
+      expect.arrayContaining([expect.objectContaining({ path: legacy.path })]),
+      undefined,
+      expect.any(AbortSignal),
+    );
+  });
+  it('rechecks assigned Fileclass membership inside the final source transform', async () => {
+    const f = await fixture(),
+      original = await f.store.read(f.article.path);
+    mocks.highlightPicker.mockResolvedValueOnce({ kind: 'existing-many', nodes: [f.nodes[0]] });
+    const process = f.vault.process.bind(f.vault);
+    vi.spyOn(f.vault, 'process').mockImplementation(async (file, transform) => {
+      f.nodes[0].classes = ['NotRegistered'];
+      return process(file, transform);
+    });
+    await f.probe.topics();
+    expect(mocks.notice).toHaveBeenCalledWith(expect.stringMatching(/typed destination changed/));
+    expect(mocks.highlightPicker).toHaveBeenLastCalledWith(
+      f.app,
+      f.api,
+      expect.objectContaining({ selectedPaths: [f.nodes[0].path] }),
+    );
+    expect((await f.store.read(f.article.path)).raw).toBe(original.raw);
+  });
+  it('does not revive a queued picker after a newer explicit navigation intent', async () => {
+    const f = await fixture({ body: '==first words==' }),
+      entered = gate(),
+      release = gate();
+    const blocked = f.probe.operation(async () => {
+      entered.resolve();
+      await release.promise;
+    });
+    await entered.promise;
+    const pending = menu(f.view, 'Add highlight to notes…');
+    const leaving = f.view.readingList();
+    release.resolve();
+    await blocked;
+    await pending;
+    await leaving;
+    expect(mocks.highlightPicker).not.toHaveBeenCalled();
+  });
+  it('captures and drains a sole-default native selection on normal close even after the native range disappears', async () => {
+    const f = await fixture({ defaults: [0] });
+    f.probe.surface.selectionValue = { quote: 'first words', before: 'Before ', after: ' after.' };
+    const closing = f.view.onClose();
+    f.probe.surface.selectionValue = undefined;
+    await closing;
+    expect(passages((await f.store.read(f.article.path)).body)[0].hosts).toEqual(['Nodes/Concept']);
+    expect(await f.vault.read(f.targets[0])).toContain('> first words');
+    expect(mocks.highlightPicker).not.toHaveBeenCalled();
+  });
+  it('finishes a sole-default pending native selection before navigation without starting a picker', async () => {
+    const f = await fixture({ defaults: [1] });
+    f.probe.surface.selectionValue = { quote: 'first words', before: 'Before ', after: ' after.' };
+    await f.view.readingList();
+    expect(passages((await f.store.read(f.article.path)).body)[0].hosts).toEqual(['Nodes/Project']);
+    expect(f.probe.snapshot).toBeUndefined();
+    expect(mocks.highlightPicker).not.toHaveBeenCalled();
+  });
+  it.each([{ defaults: [] }, { defaults: [0, 1] }])(
+    'does not open a newly required picker after navigation intent (defaults=$defaults)',
+    async ({ defaults }) => {
+      const f = await fixture({ defaults });
+      f.probe.surface.selectionValue = {
+        quote: 'first words',
+        before: 'Before ',
+        after: ' after.',
+      };
+      await f.view.readingList();
+      expect((await f.store.read(f.article.path)).body).toBe('Before first words after.');
+      expect(mocks.highlightPicker).not.toHaveBeenCalled();
+    },
+  );
+  it.each([false, true])(
+    'uses an incoming native paragraph only when explicitly requested, after bookmark restore (fragment=%s)',
+    async (fragment) => {
+      const actual = await vi.importActual<typeof surfaceModule>('../src/reader/surface');
+      vi.spyOn(surfaceModule, 'ReadingSurface').mockImplementation(function (...args) {
+        return new actual.ReadingSurface(...args);
+      });
+      vi.stubGlobal(
+        'ResizeObserver',
+        class {
+          observe() {}
+          disconnect() {}
+        },
+      );
+      const createRange = document.createRange.bind(document);
+      vi.spyOn(document, 'createRange').mockImplementation(() => {
+        const range = createRange();
+        range.getClientRects = () => [] as unknown as DOMRectList;
+        range.getBoundingClientRect = () => new DOMRect();
+        return range;
+      });
+      const restore = vi.spyOn(actual.ReadingSurface.prototype, 'restore'),
+        reveal = vi.spyOn(actual.ReadingSurface.prototype, 'reveal');
+      const f = await fixture({
+        body: 'First saved paragraph.\n\nExplicit destination paragraph. ^native-existing',
+      });
+      f.vault.bytes.set(
+        f.article,
+        patchProperties(await f.vault.read(f.article), { bookmark: 'First saved paragraph.' }),
+      );
+      restore.mockClear();
+      reveal.mockClear();
+      await f.view.setState(
+        { file: f.article.path, ...(fragment ? { subpath: '#^native-existing' } : {}) },
+        {} as any,
+      );
+      expect(restore).toHaveBeenCalledWith('First saved paragraph.');
+      if (fragment) {
+        expect(reveal).toHaveBeenCalledOnce();
+        expect(reveal.mock.calls[0][0].dataset.readerParagraph).toBe('native-existing');
+        expect(reveal.mock.invocationCallOrder[0]).toBeGreaterThan(
+          restore.mock.invocationCallOrder[0],
+        );
+      } else expect(reveal).not.toHaveBeenCalled();
+      expect(f.view.getState()).not.toHaveProperty('subpath');
+      expect((await f.store.read(f.article.path)).properties).not.toHaveProperty('subpath');
+    },
+  );
+  it('passes an existing native paragraph subpath through the public new-pane opener', async () => {
+    const f = await fixture({ body: 'Destination paragraph. ^native-existing' });
+    await openExistingNote(f.app, `${f.article.path}#^native-existing`, 'Nodes/Concept.md', true);
+    expect(f.app.workspace.getLeaf).toHaveBeenCalledWith(true);
+    expect(f.opened.openFile).toHaveBeenCalledWith(f.article, {
+      active: true,
+      eState: { subpath: '#^native-existing' },
+    });
+  });
+  it('does not also capture or open a URL when its click ends a native selection', async () => {
+    const f = await fixture({ body: '[first words](https://publisher.test/report)' });
+    f.paint();
+    f.probe.surface.selectionValue = { quote: 'first words', before: '', after: '' };
+    const event = new MouseEvent('click', { bubbles: true, cancelable: true });
+    f.probe.surface.body.querySelector('a').dispatchEvent(event);
+    expect(event.defaultPrevented).toBe(true);
+    expect(mocks.confirmWebLink).not.toHaveBeenCalled();
+    expect(f.opened.openFile).not.toHaveBeenCalled();
   });
 });
