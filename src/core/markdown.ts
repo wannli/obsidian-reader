@@ -56,6 +56,8 @@ type MappedBlock = { text: string; offset: (at: number) => number };
 export interface InlineBlock {
   text: string;
   offset: (at: number) => number;
+  /** Inline tokens resolve references against this document, not a detached label. */
+  tokens: Token[];
 }
 
 /** Follow Marked's actual block containers, mapping their stripped lines to original
@@ -218,6 +220,7 @@ export function blockSpans(body: string): {
         result.inlineBlocks.push({
           text: prose.text,
           offset: prose.offset,
+          tokens: lexInline(prose.text),
         });
       } else if (token.type === 'code' || token.type === 'html') {
         result.protected.push(span);
@@ -256,7 +259,11 @@ export function blockSpans(body: string): {
             inline(cell.tokens, slice(mappedCell, at, at + cell.text.length));
             const leading = rawCell.text.length - rawCell.text.trimStart().length;
             const prose = slice(rawCell, leading, rawCell.text.trimEnd().length);
-            result.inlineBlocks.push({ text: prose.text, offset: prose.offset });
+            result.inlineBlocks.push({
+              text: prose.text,
+              offset: prose.offset,
+              tokens: lexInline(prose.text),
+            });
           }
         }
       } else if (token.type === 'blockquote') {

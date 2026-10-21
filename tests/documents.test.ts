@@ -214,10 +214,12 @@ describe('localized inline annotations', () => {
       expect(addHighlight(body, range.from, range.to)).toBe(expected);
     },
   );
-  it('rejects selections crossing only part of an emphasis span', () => {
-    expect(() =>
-      locateSelection('Before **important words** after.', 'Before important'),
-    ).toThrow();
+  it('maps crossing partial emphasis through localized native fragments', () => {
+    const body = 'Before **important words** after.';
+    const range = locateSelection(body, 'Before important');
+    const saved = addHighlight(body, range.from, range.to);
+    expect(saved).toBe('==Before ==**==important== words** after.');
+    expect(changePassage(saved, passages(saved)[0], 'remove')).toBe(body);
   });
   it('rejects ambiguous repeated quotations without usable context', () => {
     expect(() => locateSelection('same words here; same words there', 'same words')).toThrow(
@@ -237,9 +239,9 @@ describe('localized inline annotations', () => {
     '```md\nliteral text\n```',
     '    literal text',
     '<!-- literal text -->',
-    '[literal text](https://example.com)',
+    '[[Notes/Literal.md|literal text]]',
     '==literal text==',
-  ])('does not edit code, comments, existing links or highlights', (body) => {
+  ])('does not edit code, comments, existing vault links or highlights', (body) => {
     expect(() => locateSelection(body, 'literal text')).toThrow();
   });
   it('links, changes, unlinks and removes a highlight without losing words', () => {

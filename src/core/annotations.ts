@@ -2,7 +2,7 @@ import { Lexer } from 'marked';
 import { blockSpans, markdownSource, renderedHighlight, type Span } from './markdown';
 import { ChangedNote } from './document';
 import { vaultLink, type Properties } from './model';
-import { blockProjection, inlineProjection } from './projection';
+import { blockProjection, inlineProjection, selectionPlan } from './projection';
 
 /** Expected selection rejection, distinct from source/write failures and parser defects. */
 export class UnmappableSelection extends Error {}
@@ -27,7 +27,18 @@ export interface Passage {
   to: number;
   text: string;
   target?: string;
+  /** Several native marks can describe one continuous selection across inline syntax. */
+  fragments?: readonly Span[];
+  hosts?: readonly string[];
+  /** Includes the single separator space inserted before a native host citation. */
+  citation?: Span;
 }
+export interface HostCitation extends Span {
+  hosts: string[];
+}
+const citationPattern =
+  /\(※[ \t]+(\[\[[^\[\]\r\n]+\]\](?:[ \t]*,[ \t]*\[\[[^\[\]\r\n]+\]\])*)[ \t]*\)/g;
+const publisherLink = (target: string): boolean => /^(?:https?:|mailto:|\/\/|#)/i.test(target);
 const normalized = (text: string): string =>
   text
     .replace(/\u00a0/g, ' ')
@@ -39,6 +50,7 @@ function eligibleSource(
   body: string,
   maskEscapes = true,
   parsed?: ReturnType<typeof blockSpans>,
+  decorations = true,
 ): string {
   const chars = body.split('');
   const hide = (from: number, to: number) => {
@@ -73,16 +85,33 @@ function eligibleSource(
   for (const span of protectedSource.code.concat(protectedSource.comments))
     hide(span.from, span.to);
   const masked = chars.join('');
-  for (const match of masked.matchAll(/<!--[^]*?(?:-->|$)|<[^>\n]+>/g))
+  for (const match of masked.matchAll(/<!--[^]*?(?:-->|$)|<[^>\n]+>/g)) {
+    if (
+      parsed?.links.some(
+        (span) => span.from === match.index! && span.to === match.index! + match[0].length,
+      )
+    )
+      continue;
     hide(match.index!, match.index! + match[0].length);
+  }
   if (maskEscapes)
     for (const match of body.matchAll(/\\[\\`*_[\]~=]/g))
       hide(match.index!, match.index! + match[0].length);
+  // Native reference controls and paragraph identifiers are not publisher prose.
+  // Keep columns/line boundaries while excluding their visible labels from context.
+  if (decorations) {
+    for (const match of body.matchAll(citationPattern))
+      for (let at = match.index!; at < match.index! + match[0].length; at++)
+        if (chars[at] !== '\0') chars[at] = ' ';
+    for (const match of body.matchAll(/[ \t]+\^[a-zA-Z0-9-]+(?=[ \t]*(?:\r?$))/gm))
+      for (let at = match.index!; at < match.index! + match[0].length; at++)
+        if (chars[at] !== '\0') chars[at] = ' ';
+  }
   return chars.join('');
 }
 /** Publisher prose is not an instruction to create Obsidian annotations or vault links. */
 export function importedMarkdown(body: string): string {
-  const source = eligibleSource(body);
+  const source = eligibleSource(body, true, undefined, false);
   const matches = [...source.matchAll(/==|\[\[/g)].reverse();
   for (const match of matches) {
     const at = match.index!;
@@ -96,13 +125,132 @@ export function importedMarkdown(body: string): string {
   }
   return body;
 }
-export function passages(body: string): Passage[] {
-  return scanHighlights(body, false);
+export function nativeCitations(body: string, blocks = blockSpans(body)): HostCitation[] {
+  const protectedSource = markdownSource(body, blocks);
+  const protectedSpans = blocks.protected.concat(protectedSource.code, protectedSource.comments);
+  const result: HostCitation[] = [];
+  for (const match of body.matchAll(citationPattern)) {
+    const from = match.index!,
+      to = from + match[0].length;
+    let escapes = 0;
+    for (let at = from - 1; at >= 0 && body[at] === '\\'; at--) escapes++;
+    if (escapes % 2) continue;
+    if (protectedSpans.some((span) => from < span.to && to > span.from)) continue;
+    // A citation inside a publisher anchor would nest note links in its label.
+    if (blocks.links.some((span) => from > span.from && to < span.to)) continue;
+    const hosts = [...match[1].matchAll(/\[\[([^\[\]\r\n]+)\]\]/g)].map(
+      (link) => link[1].split('|', 1)[0],
+    );
+    if (hosts.some((path) => !path || /[#^]|^(?:[a-z][\w+.-]*:|\/\/)/i.test(path))) continue;
+    result.push({ from: from > 0 && body[from - 1] === ' ' ? from - 1 : from, to, hosts });
+  }
+  return result;
 }
 
-function scanHighlights(body: string, retentionOnly: boolean): Passage[] {
+export function passageFragments(passage: Passage): readonly Span[] {
+  return passage.fragments ?? [{ from: passage.from, to: passage.to }];
+}
+
+export function passages(body: string): Passage[] {
   if (!body.includes('==')) return [];
-  const blocks = blockSpans(body),
+  const blocks = blockSpans(body);
+  const marks = scanHighlights(body, false, blocks);
+  if (!marks.length) return marks;
+  const projection = blockProjection(body, blocks.inlineBlocks),
+    citations = nativeCitations(body, blocks);
+  const visible = (from: number, to: number): string => {
+    let low = 0,
+      high = projection.starts.length;
+    while (low < high) {
+      const middle = (low + high) >>> 1;
+      if (projection.starts[middle] < from) low = middle + 1;
+      else high = middle;
+    }
+    let text = '';
+    for (let at = low; at < projection.text.length && projection.starts[at] < to; at++)
+      if (projection.ends[at] <= to) text += projection.text[at];
+    return text;
+  };
+  const sameBlock = (from: number, to: number) =>
+    blocks.inlineBlocks.some(
+      (block) =>
+        block.text && from >= block.offset(0) && to <= block.offset(block.text.length - 1) + 1,
+    );
+  const result: Passage[] = [];
+  for (const mark of marks) {
+    const previous = result[result.length - 1];
+    if (
+      previous &&
+      !previous.target &&
+      !mark.target &&
+      !previous.citation &&
+      sameBlock(previous.from, mark.to) &&
+      !blocks.comments
+        .concat(blocks.code)
+        .some((span) => previous.to < span.to && mark.from > span.from) &&
+      (visible(previous.to, mark.from) === '' ||
+        (!visible(previous.to, mark.from).trim() && /\S/u.test(body.slice(previous.to, mark.from))))
+    ) {
+      previous.fragments = [...passageFragments(previous), { from: mark.from, to: mark.to }];
+      previous.to = mark.to;
+      previous.text = selectionPlan(
+        body,
+        previous.from,
+        previous.to,
+        'quote',
+        blocks.inlineBlocks,
+      ).quoteMarkdown;
+    } else result.push({ ...mark });
+    const current = result[result.length - 1];
+    const citation = citations.find((item) => {
+      if (item.from < current.to || !sameBlock(current.from, item.to)) return false;
+      if (!visible(current.to, item.from).trim()) return true;
+      // A partial publisher label must close its original link before the citation.
+      const enclosing = blocks.links.find((span) => span.from < current.to && span.to > current.to);
+      return !!enclosing && enclosing.to <= item.from && !visible(enclosing.to, item.from).trim();
+    });
+    if (citation && !marks.some((other) => other.from >= current.to && other.to <= citation.from)) {
+      current.hosts = citation.hosts;
+      current.citation = { from: citation.from, to: citation.to };
+    }
+  }
+  // Several excerpts can share one publisher anchor. Their separate native
+  // citations follow that anchor in source order, so no note link is nested in
+  // its label. A count mismatch is ambiguous and must not reassign a host to the
+  // nearest mark merely because a native edit inserted another highlight.
+  for (const link of blocks.links) {
+    const inside = result.filter((passage) => passage.from > link.from && passage.to < link.to);
+    if (!inside.length) continue;
+    const stack: HostCitation[] = [];
+    let cursor = link.to;
+    for (const citation of citations) {
+      if (citation.from < cursor) continue;
+      if (!sameBlock(link.from, citation.to) || visible(cursor, citation.from).trim()) break;
+      stack.push(citation);
+      cursor = citation.to;
+    }
+    if (!stack.length) continue;
+    for (const passage of inside) {
+      delete passage.hosts;
+      delete passage.citation;
+    }
+    if (stack.length !== inside.length) continue;
+    inside.forEach((passage, index) => {
+      const citation = stack[index];
+      passage.hosts = citation.hosts;
+      passage.citation = { from: citation.from, to: citation.to };
+    });
+  }
+  return result;
+}
+
+function scanHighlights(
+  body: string,
+  retentionOnly: boolean,
+  parsed?: ReturnType<typeof blockSpans>,
+): Passage[] {
+  if (!body.includes('==')) return [];
+  const blocks = parsed ?? blockSpans(body),
     source = eligibleSource(body, false, blocks),
     result: Passage[] = [];
   const escaped = (at: number) => {
@@ -222,8 +370,8 @@ export function hasAnnotations(body: string, properties: Properties): boolean {
     hasPropertyAnnotations(properties) ||
     scanHighlights(body, true).length > 0 ||
     renderedHighlight(body) ||
-    /\[\[[^\]\n]+\]\]/.test(eligibleSource(body)) ||
-    inlineProjection(eligibleSource(body, false)).links.some(
+    /\[\[[^\]\n]+\]\]/.test(eligibleSource(body, true, undefined, false)) ||
+    inlineProjection(eligibleSource(body, false, undefined, false)).links.some(
       (link) => !/^[a-z][\w+.-]*:|^\/\/|^#/i.test(link.target),
     )
   );
@@ -243,11 +391,12 @@ export function locateSelection(
     plain = projection.text;
   const blocked = [
     ...passages(body),
-    ...blocks.links,
-    ...projection.links,
-    ...[...source.matchAll(/!?\[[^\]\n]*\](?:\([^\n]*?\)|\[[^\]\n]*\])|!?\[\[[^\]\n]*\]\]/g)].map(
-      (match) => ({ from: match.index!, to: match.index! + match[0].length }),
-    ),
+    ...blocks.links.filter((span) => body[span.from] === '!'),
+    ...projection.links.filter((link) => !publisherLink(link.target)),
+    ...[...source.matchAll(/!?\[\[[^\]\n]*\]\]/g)].map((match) => ({
+      from: match.index!,
+      to: match.index! + match[0].length,
+    })),
   ];
   const candidates: { from: number; to: number; score: number }[] = [];
   const withinParagraph = paragraphGuard(body);
@@ -264,28 +413,42 @@ export function locateSelection(
     if (score < bestScore) continue;
     const starts = [projection.starts[at], ...(projection.openings.get(at) ?? [])];
     const ends = [projection.ends[end - 1], ...(projection.closings.get(end) ?? [])];
-    let found = false;
-    for (const from of starts) {
-      for (const to of ends) {
-        const raw = projection.slice(from, to);
+    const variants = starts.flatMap((from) =>
+      ends.map((to) => ({ from, to, raw: projection.slice(from, to) })),
+    );
+    // Preserve the existing single native mark whenever complete inline syntax fits.
+    // Only crossing partial boundaries need multiple marks inside their containers.
+    variants.sort(
+      (a, b) =>
+        Number(normalized(inlineProjection(a.raw ?? '').text) !== wanted) -
+        Number(normalized(inlineProjection(b.raw ?? '').text) !== wanted),
+    );
+    for (const { from, to, raw } of variants) {
+      if (
+        raw === undefined ||
+        /\n\s*\n|[\0`]|==/.test(raw) ||
+        !withinParagraph(from, to) ||
+        blocked.some((span) => from < span.to && to > span.from)
+      )
+        continue;
+      // Partial inline boundaries are split into native marks in their original
+      // containers; the independent quote closes emphasis and publisher links.
+      try {
+        const plan = selectionPlan(body, from, to);
         if (
-          raw === undefined ||
-          /\n\s*\n|[\0\[\]`<>]|==/.test(raw) ||
-          !withinParagraph(from, to) ||
-          blocked.some((span) => from < span.to && to > span.from)
+          !plan.fragments.length ||
+          normalized(inlineProjection(plan.quoteMarkdown).text) !== wanted
         )
           continue;
-        // A crossing/partial emphasis delimiter would change the visible words; reject it.
-        if (normalized(inlineProjection(raw).text) !== wanted) continue;
-        if (score > bestScore) {
-          bestScore = score;
-          candidates.length = 0;
-        }
-        if (candidates.length < 2) candidates.push({ from, to, score });
-        found = true;
-        break;
+      } catch {
+        continue;
       }
-      if (found) break;
+      if (score > bestScore) {
+        bestScore = score;
+        candidates.length = 0;
+      }
+      if (candidates.length < 2) candidates.push({ from, to, score });
+      break;
     }
     if (bestScore === maximumScore && candidates.length === 2) break;
   }
@@ -311,9 +474,9 @@ export function addHighlight(body: string, from: number, to: number): string {
   const projection = blockProjection(body),
     raw = projection.slice(from, to);
   if (raw === undefined) throw new ChangedNote();
-  const quote = inlineProjection(raw).text;
   const start = projection.starts.findIndex((at) => at >= from),
     end = projection.starts.findIndex((at) => at >= to);
+  const quote = projection.text.slice(start, end < 0 ? undefined : end);
   const match = locateSelection(
     body,
     quote,
@@ -321,7 +484,25 @@ export function addHighlight(body: string, from: number, to: number): string {
     end < 0 ? '' : projection.text.slice(end, end + 120),
   );
   if (match.from !== from || match.to !== to) throw new ChangedNote();
-  return `${body.slice(0, from)}==${body.slice(from, to)}==${body.slice(to)}`;
+  const plan = selectionPlan(body, from, to);
+  if (
+    !plan.insertions.length &&
+    !plan.replacements.length &&
+    normalized(inlineProjection(raw).text) === normalized(quote)
+  )
+    return `${body.slice(0, from)}==${body.slice(from, to)}==${body.slice(to)}`;
+  const edits = plan.insertions.concat(
+    plan.fragments.flatMap((span) => [
+      { at: span.from, text: '==', order: 1 },
+      { at: span.to, text: '==', order: 1 },
+    ]),
+  );
+  const changes = edits
+    .map((edit) => ({ from: edit.at, to: edit.at, text: edit.text, order: edit.order }))
+    .concat(plan.replacements.map((edit) => ({ ...edit, order: 2 })));
+  for (const edit of changes.sort((a, b) => b.from - a.from || (b.order ?? 2) - (a.order ?? 2)))
+    body = body.slice(0, edit.from) + edit.text + body.slice(edit.to);
+  return body;
 }
 export function changePassage(
   body: string,
@@ -332,8 +513,38 @@ export function changePassage(
   const current = passages(body).find(
     (passage) => passage.from === expected.from && passage.to === expected.to,
   );
-  if (!current || current.text !== expected.text || current.target !== expected.target)
+  if (
+    !current ||
+    current.text !== expected.text ||
+    current.target !== expected.target ||
+    JSON.stringify(current.hosts ?? []) !== JSON.stringify(expected.hosts ?? []) ||
+    JSON.stringify(current.citation) !== JSON.stringify(expected.citation) ||
+    JSON.stringify(passageFragments(current)) !== JSON.stringify(passageFragments(expected))
+  )
     throw new ChangedNote();
+  if (action === 'link' && !target) throw new Error('Choose a note target first.');
+  if (current.citation || current.fragments) {
+    const spans = passageFragments(current);
+    const edits: (Span & { text: string })[] = [];
+    if (current.citation)
+      edits.push({
+        ...current.citation,
+        text: action === 'link' && target ? ` (※ ${vaultLink(target)})` : '',
+      });
+    if (action === 'remove') {
+      for (const span of spans) {
+        edits.push({ from: span.from, to: span.from + 2, text: '' });
+        edits.push({ from: span.to - 2, to: span.to, text: '' });
+      }
+    } else if (action === 'link' && !current.citation) {
+      if (!target) throw new Error('Choose a note target first.');
+      const at = selectionPlan(body, current.from, current.to).citationAt;
+      edits.push({ from: at, to: at, text: ` (※ ${vaultLink(target)})` });
+    }
+    for (const edit of edits.sort((a, b) => b.from - a.from))
+      body = body.slice(0, edit.from) + edit.text + body.slice(edit.to);
+    return body;
+  }
   let replacement = current.text;
   if (action === 'link') {
     if (!target || /[\[\]|\r\n]/.test(current.text))
