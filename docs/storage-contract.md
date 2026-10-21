@@ -1,6 +1,6 @@
 # Reader storage contract
 
-Approved by Wannes: articles and subscriptions are identified by YAML outside Templates and .trash; folder membership determines article queue, while YAML status remains a mirror for Reader status actions. Four configurable queue folders determine article placement. Article statuses, automatic expiry, missing-status protection and `bookmark` were approved on 15 October. This is not authorization to convert existing Markdown or install the plugin into a vault.
+Approved by Wannes: articles and subscriptions are identified by YAML outside Templates and .trash; folder membership determines article queue, while YAML status remains a mirror for Reader status actions. Four configurable queue folders determine article placement. Article statuses, automatic expiry, missing-status protection and `bookmark` were approved on 15 October. The later [hosted-highlight contract](hosted-highlights.md) authorizes typed destinations, native paragraph references, quotation snapshots and new-note `origin`. No automatic migration or personal-vault installation.
 
 ## Article
 
@@ -22,9 +22,11 @@ dog_ear: true
 
 The article is ordinary Markdown.
 
-An ==important passage== stays readable without Reader.
-A ==[[Nodes/Example.md|linked passage]]== preserves its words.
-A ==[**formatted** passage](/Nodes/Example.md)== preserves its formatting.
+An ==important passage== (※ [[Topics/Example topic]]) stays readable without Reader. ^reader-k7m2
+
+==Clear **rules** build [trust](https://example.com/report).== (※ [[Governance]], [[Institutional trust]]) ^reader-t9b3
+
+Institutions build [[Institutional trust|institutional trust]]. ^reader-n8c4
 ```
 
 - Identification: exact `type: article`, except in Templates or .trash at any depth. Typed articles outside the four queue folders remain readable but unqueued. A source URL is needed for capture/acquisition, not for reading an existing local article.
@@ -43,7 +45,11 @@ A ==[**formatted** passage](/Nodes/Example.md)== preserves its formatting.
 - Externally created articles qualify only through a live native vault `create` event after layout readiness, with a finite `file.stat.ctime` between that readiness boundary and event observation. Reader freezes its local minute then, waits for exact `type: article`, and adds `published` only when the property is absent. Nonempty/offline bodies are preserved. Dirty or racing notes can retry on metadata/editor-layout changes. Every existing publication value, including empty, null or invalid values, stays untouched.
 - This is conservative create-time evidence, not sharesheet provenance: ordinary URL-only shares are not converted to articles. Startup indexing/replayed creates, cold-launch shares before readiness, older synced ctimes and unknown/future ctimes do not authorize writes. Sync can regenerate ctime; a live imported file with a fresh ctime cannot be distinguished from a genuinely new note. No original share timestamp is claimed without trustworthy host ctime. Native cold-launch/sharesheet and cross-device behavior remain unverified; stronger coverage requires a dedicated provenance source, not a date backfill.
 - `error` describes acquisition failure and is cleared by successful acquisition.
-- No article IDs, acquisition hashes/stamps, annotation arrays, sidecars, or synchronized copies. Unknown properties, comments, authored text and existing links are preserved.
+- Article `topics` remembers only typed destination links, of any Fileclass, without retroactively reassigning old highlights. Every new highlight needs a typed host; inherit one valid default, otherwise choose. Unknown/legacy values are preserved, not silently accepted as typed defaults.
+- Inline references use `(※ [[Destination]], [[Other]])`. One native paragraph block ID serves all highlights in its paragraph. Node-only conversion uses an ordinary wikilink, without `==` or a redundant group. Existing highlights/links remain readable; no automatic conversion.
+- Explicit multiselect collection appends blockquotes under each selected note’s `## Highlights`, grouped by `### [[Article|Article title]]`, ending with `(※ [[Article#^paragraph|Article title]] [[YYYY-MM-DD]])`. Capture one local collection day per operation; retries preserve existing dates/legacy undated copies. New notes receive `origin: "[[Article#^paragraph]]"`; never overwrite an origin or assign one on reuse.
+- Explicitly removing a destination from a particular highlight may remove its uniquely matching unedited quotation and source reference together; missing/edited/ambiguous copies block removal before source mutation. Do not delete notes, other quotations, origin or authored sections. Article Related notes changes, source edits/conversion and source-local Undo never prune stored copies. Clearing all highlight destinations removes its marks/references, not words or shared anchors.
+- No article/highlight IDs, acquisition hashes/stamps, annotation arrays, sidecars, synchronized copies or persisted recovery queues. Native block IDs identify paragraphs, not excerpts. New grouping/date formatting does not bulk-migrate old quotations. Preserve unknown properties/comments/text/links; report non-atomic added/removed target progress honestly.
 
 ## Subscription
 
@@ -88,7 +94,7 @@ Articles deleted outside Reader or before suppression was recorded can return wh
 - Filenames use the original publication instant's UTC date before local-minute formatting, otherwise the local capture day. Feed ordering and age filtering use the full-precision incoming publication value before writing. Names contain `YYMMDD`, a safe UTF-8-bounded title, optional feed prefix, and collision suffix; never overwrite. A receipt retitle reuses its capture instant.
 - Writes serialize by file identity and compare current bytes. Dirty native editors, uncertain buffers and source revisions are protected.
 - Publisher content is sanitized and bounded. Executable fence labels are removed; default Dataview/Templater expressions fail capture, including in titles. Reader is not a sandbox for arbitrary third-party processors.
-- Promotion must succeed before annotation commit. Status is saved first, annotation second, optional relocation last in the same file lane, so native relative-link rewriting never invalidates selection offsets. Failure can leave a retained Later note (with a saved annotation), never an annotation committed to stale Feed bytes. Browsing context and bookmark survive status changes.
+- Promotion must succeed before annotation commit. Status is saved first, annotation second, guarded relocation to the Later queue folder last in the same file lane, so native relative-link rewriting never invalidates selection offsets. Failure can leave a retained Later note (with a saved annotation), never an annotation committed to stale Feed bytes. Browsing context and bookmark survive status changes.
 - Native/synced annotations and authored vault links must also be protected before expiry. Publisher web/section links do not protect feed articles.
 - Unprotected deletions and expiry use recoverable Obsidian trash only. Reader archives articles with topics, highlights or other annotations instead of deleting them. No bulk note rewrites or migration. Reader status moves and retitling use guarded link-aware native rename; Obsidian's link-update setting is respected, not changed.
 
@@ -106,4 +112,4 @@ Articles deleted outside Reader or before suppression was recorded can return wh
 
 ## Acceptance
 
-Fast unit/component tests and guarded tooling tests; native synthetic-vault/device checks are separate. No automated E2E suite. DOM tests do not prove native desktop, iOS, Boox or Sync behavior. No personal-vault access, installed-vault update, release, or existing-note conversion is authorized by this implementation.
+Fast unit/component tests and guarded tooling tests; native synthetic-vault/device checks are separate. No automated E2E suite. DOM tests do not prove native desktop, iOS, Boox or Sync behavior. Wannes separately authorized a backed-up replacement E2E corpus for manual hosted-highlight testing; preserve ownership/settings and native holds. No personal-vault access, release, or existing-note migration.

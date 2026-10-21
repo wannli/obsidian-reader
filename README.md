@@ -17,8 +17,8 @@ Your articles are ordinary Markdown notes. Your highlights stay in the text. You
 - **Save now, read when you have time.** Add a URL to your Inbox. Offline? Reader saves the URL immediately and can fetch the article when Obsidian is active and online again. Saving the same URL opens the existing article instead of making a duplicate.
 - **Make room for focused reading.** A simple, titles-only list and a full-width article view keep the interface out of the way. Reader uses Obsidian’s typography and themes, with touch-friendly controls and a paged mode for e-ink reading.
 - **Pick up where you left off.** Each article remembers your place, including when you move between articles. List indicators help you spot articles you’ve opened or highlighted.
-- **Keep the good parts in context.** Select a passage to highlight it directly in the article. With the optional Fileclass Inline integration, connect passages to existing notes or create a note from an idea.
-- **Keep your library yours.** No separate article database, copied highlight collection, or custom sync service. Read and edit your Markdown even without Reader.
+- **Keep the good parts in context.** Highlight a passage and collect an attributed quotation in one or several typed notes—or create one for a new idea. Fileclass Inline supplies types and icons; Reader supplies the focused multiselect.
+- **Keep your library yours.** Articles, references and collected quotations are ordinary Markdown. No separate annotation database or custom sync service. Read and edit them even without Reader.
 
 Reader targets Obsidian desktop, iPhone/iPad, and Android/e-ink. Physical-device and cross-device acceptance checks are tracked separately in the [mobile smoke plan](docs/mobile-smoke.md); automated tests are not device certification.
 
@@ -62,7 +62,7 @@ Only notes in the Feed folder with explicit `status: feed` can expire, one calen
 - Use **Previous / Next** to browse articles and **List** to return to where you started.
 - Use native **Obsidian search** for general search, or filter a reading list by a **topic or phrase**. Topic filters include aliases, explicit topic assignments, and case-insensitive whole-word/phrase matches in article titles and saved bodies. Free text works without creating a topic note.
 - An active topic filter uses Obsidian's accent colour and displays **Reading list: topic** in the list and above articles opened from it. Click the active filter button to clear it; click it when inactive to open the picker. From an article, return to **List** first. Switching queues retains the filter; Previous/Next follows the filtered list.
-- Use **Open Markdown** to edit an article, or the bottom-bar **Topics** multiselect to assign existing topics. Tap a topic row to select it; selected topics stay visible while searching. Save confirms the write before closing and keeps your choices if it fails. **Add topic** creates a note through compatible Fileclass Inline; see below. Filtering is read-only; assigning topics to a Feed article retains it in Later.
+- Use **Open Markdown** to edit an article, or the bottom-bar **Related notes** multiselect to edit remembered typed destinations. Checked notes stay visible while searching; Apply confirms before closing. Creating a note delegates to compatible Fileclass Inline. Filtering is read-only; assigning related notes to a Feed article retains it in Later.
 - On desktop, **j / k** navigate articles. At article boundaries, **Up / PageUp** and **Down / PageDown** move to the previous or next article, resuming its saved position.
 - On Boox/e-ink, enable **pagination (this device)** in Reader settings to use single-chevron touch page buttons or hardware Up/Down and PageUp/PageDown. A separate Reader-wide **Show article navigation in paged mode** setting, off by default and shown only when pagination is on, adds double-chevron Previous/Next article buttons. Non-paged article arrows are unchanged.
 - On iPhone, **Copy reading-list link** opens the library. **Copy dog-ear link** opens the last article you opened in Reader, or the first (newest) Inbox article if none is marked. Each gives you a vault-aware link for a Shortcuts **URL → Open URLs → Add to Home Screen** shortcut. You can also use **Open dog-eared article** from the command palette.
@@ -79,24 +79,29 @@ Run **Add feed** with an RSS or Atom URL. Reader saves the subscription first, g
 - **Delete once through Reader.** The subscription remembers explicitly deleted article URLs so later refreshes skip them. This is per subscription: another feed or a device that hasn’t synced the deletion record can still import the URL. It does not cover external deletions or automatic expiry, and you can still save the URL manually.
 - **Unsubscribe without losing saved articles.** Removing a subscription leaves its articles alone.
 
-## Highlight now, connect ideas later
+## Highlight and collect ideas
 
-Highlights live where they belong: alongside the words you were reading, as ordinary `==Markdown highlights==`.
+Every new highlight has at least one **typed host note**. Reader inherits one remembered destination automatically; with none or several, its initially empty native-style title/type/icon search lets you check several notes and **Add highlight** once. Creation is explicit with a Fileclass type. Untyped files are excluded.
 
-Tap the **highlighter** in the bottom article bar. The same bar switches to icon-only actions: **Sentence** (text selection), **Paragraph** (¶), and **Done** (checkmark), with brief **Undo** (back arrow) after saving. Tooltips and accessibility labels identify each icon; there is no explainer above the bar.
+Highlights preserve selected words, formatting and publisher URLs:
 
-- Tap the **first word**, then the **last word** to save that range. Tap the same word twice for a one-word highlight.
-- Or tap any word, then **Sentence** or **Paragraph** to highlight its containing text.
-- **Done** exits without saving an unfinished selection. **Escape** clears the first word; press it again to exit.
-- After saving, the same bar shows highlight actions: **Link / Create note**, **Remove highlight**, brief **Undo**, and **Done**. Linked highlights also offer **Open note**, **Change link**, and **Remove link**. Tap an unhighlighted word to start the next selection. Undo lasts six seconds and never reverses Feed → Later promotion.
+```markdown
+==Clear **rules** build [trust](https://example.com/report).== (※ [[Governance]]) ^reader-k7m2
+```
 
-Scrolling and device paging still work in Highlight mode, but article-navigation shortcuts pause until you exit. Tap an existing highlight to show its actions in the same bar when no endpoint is pending; exit to open ordinary links or images. Native drag-to-highlight remains available outside the mode. Reader leaves protected or unmappable Markdown unchanged rather than guessing.
+Each selected note receives a quotation under `## Highlights`, grouped by `### [[Article title]]`, with a precise paragraph citation and local collection-date link such as `[[2026-10-20]]`. Editing the source never silently changes the snapshot; an explicit removal from that highlight's notes can remove its uniquely matching, unedited copy.
 
-For **Link to note / Change link** and **Create note**, install a compatible Fileclass Inline integration. These actions use its shared note picker and require **Obsidian 1.12.7+** and public **Nodes API v2** (`fileclass-inline.api`) with `pickNodeForLink` support.
+- Drag to select text, or enter **Highlight** mode and tap the **first** and **last word**. Tap the same word twice for one word.
+- Or tap a word, then **Sentence** or **Paragraph**. **Done** cancels an unfinished selection; **Escape** clears the first word, then exits.
+- The passage bar offers **Add highlight to notes…** and explicit **Convert to note link**. With no highlight selected, clicking its reference edits that highlight’s checked notes. Unchecking removes the reference and exact saved copy; edited/ambiguous copies block removal. Source-only removal/brief Undo never deletes stored copies or reverses Feed → Later retention.
+- **Convert to note link** makes an ordinary `[[Node|original words]]` mention, without highlighting or redundant references. Only a newly created note receives `origin: "[[Article#^paragraph]]"`; existing origins are preserved. No quotation of the node's own name is added.
+- For direct collection, click a highlight and then a note reference: file the **first** quotation in that exact note without changing the destination-selecting text. **Choose from article…** remains a secondary shortcut for other targets; the first passage supplies the citation.
 
-Without that integration, you can still highlight, open existing passage links, and remove links. Reader does not provide a separate note-creation fallback. Cancelling a linking or creation flow may leave a newly created note; Reader never deletes it for you.
+Scrolling and paging still work in Highlight mode; article-navigation shortcuts pause until exit. Each highlight’s references share one native-sized pill containing each note’s Fileclass icon and name, without a generic marker. Destinations remain independently clickable; ordinary typed-note links keep their icons. Existing article topics appear in the top reading header with the same styling. Decorations are not quotation text. Cancel before saving leaves no new highlight; provider cancellation can leave a created note, which Reader never deletes.
 
-The compact **Topics** multiselect keeps search, selected topics and one action footer outside the vertically scrolling results, without explanatory paragraphs. It can **Add topic** through optional API v2 `createNodeForLink`. Configure a Fileclass named `topic` with binding property `type`, so it creates ordinary `type: topic` notes. Fileclass Inline owns the name, destination and required fields. Creation immediately links the new topic to the article; Cancel keeps that note/link but discards other unsaved multiselect changes. Without compatible creation support, selecting existing topics still works.
+New hosted highlights require **Obsidian 1.12.7+** and public **Nodes API v2** at `fileclass-inline.api`; typed creation additionally needs `createNodeForLink`. Fileclass Inline owns schemas and required-field completion, not Reader's picker. Without it, existing articles/highlights/links remain readable, but new hosted highlights are unavailable.
+
+The article’s **Related notes** multiselect manages future defaults, not previous quotations. Source/target saves are guarded but not atomic: partial failures report saved source and verified target progress. Filing retries deduplicate quote + paragraph citation without changing its date; completed removals are never blindly retried. Dirty/uncertain editors remain protected. See the [full contract](docs/hosted-highlights.md).
 
 ## Offline reading and capture
 
@@ -132,9 +137,9 @@ bookmark: An important passage remains ordinary Markdown
 dog_ear: true
 ---
 
-An ==important passage== remains ordinary Markdown.
+An ==important passage== (※ [[Topics/Reading]]) remains ordinary Markdown. ^reader-k7m2
 
-A ==[[Notes/A useful idea.md|linked passage]]== links directly to a note.
+A node-only [[Notes/A useful idea|useful idea]] is an ordinary link.
 ```
 
 `title`, `published`, `feed`, `topics`, `bookmark`, and `dog_ear` are optional. Local articles do not need a URL to be read. The bookmark is a text anchor, not a page number, completion flag, or reading history. Reader moves `dog_ear: true` when it opens another article; it does not replace any article's bookmark. Pagination preferences stay device-local.
@@ -155,7 +160,7 @@ deleted_urls:
 
 Subscriptions need only `type: feed` and `url`; `enabled` defaults to true. Optional `deleted_urls` records Reader deletions; remove an entry to allow that URL to be imported again. An optional `error` property on either note type can describe a failed fetch.
 
-Reader preserves unknown properties and user-authored content during normal updates. It adds no note IDs, sidecars, or copied highlight collections, and does not migrate legacy settings or reading positions. New publication dates use Obsidian’s local `YYYY-MM-DDTHH:mm` format; existing dates are not rewritten. For exact capture, date, folder-move, and retention behavior, see the [storage contract](docs/storage-contract.md).
+Reader preserves unknown properties and user-authored content during normal updates. It adds no article/highlight IDs or sidecars, and does not migrate legacy settings or reading positions. Explicit quotation snapshots belong to you; they are not synchronized copies. New publication dates use Obsidian’s local `YYYY-MM-DDTHH:mm` format; existing dates are not rewritten. For exact capture, date, folder-move, and retention behavior, see the [storage contract](docs/storage-contract.md).
 
 ## Development
 
