@@ -1,9 +1,12 @@
+import { READER_DECORATION } from './text';
+
 const blocks =
   'p,li,dt,dd,h1,h2,h3,h4,h5,h6,blockquote,figcaption,td,th,div,section,article,' +
   'address,aside,details,summary,footer,header,hr,main,nav,ol,ul,dl,table,thead,tbody,tfoot,tr,figure';
 const excluded =
   'button,input,textarea,select,option,form,img,picture,svg,canvas,audio,video,iframe,object,embed,' +
-  'pre,code,script,style,template,noscript,[hidden],[aria-hidden="true"],[contenteditable]:not([contenteditable="false"])';
+  'pre,code,script,style,template,noscript,[hidden],[aria-hidden="true"],[contenteditable]:not([contenteditable="false"]),' +
+  READER_DECORATION;
 const maximumNodes = 4096,
   maximumText = 100_000;
 interface Span {
@@ -91,7 +94,13 @@ export class TapText {
         }
       } else if (node.nodeType === 1) {
         const element = node as Element;
-        if (element.matches(excluded) || element.matches(blocks) || element.tagName === 'BR') {
+        if (element.matches(READER_DECORATION)) {
+          // References are zero-width article metadata, not a prose/block boundary.
+        } else if (
+          element.matches(excluded) ||
+          element.matches(blocks) ||
+          element.tagName === 'BR'
+        ) {
           parts.push('\0');
           length++;
         } else if (node.firstChild) {

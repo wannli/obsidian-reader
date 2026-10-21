@@ -13,6 +13,7 @@ import {
   passages,
   UnmappableSelection,
 } from '../src/core/annotations';
+import { VisibleText } from '../src/reader/text';
 
 const disposers: (() => void)[] = [];
 function renderBody(...args: Parameters<typeof renderMarkdown>): () => void {
@@ -55,6 +56,61 @@ it('renders ordinary Markdown, inline highlights and wiki-links', () => {
   expect(root.querySelector('a')?.getAttribute('href')).toBe('Nodes/Example.md');
   expect(root.querySelector('strong')?.textContent).toBe('emphasis');
   dispose();
+});
+
+it('keeps decorative per-pill prefixes and public icons out of source ranges and bookmarks', () => {
+  const source =
+    'Before ==rich **words**== (※ [[Notes/A|Alpha]], [[Notes/B|Beta]]) after. ^reader-visual\n\nLater paragraph.';
+  const plain = document.createElement('article'),
+    root = document.createElement('article');
+  document.body.append(plain, root);
+  renderBody(source, plain, '');
+  renderBody(source, root, '', (_target, icon) => {
+    icon.textContent = 'Public icon metadata';
+  });
+  const quoteRange = (article: HTMLElement) => {
+    const range = document.createRange();
+    range.selectNodeContents(article.querySelector('mark')!);
+    return range;
+  };
+  const before = selectedPassage(plain, quoteRange(plain))!,
+    after = selectedPassage(root, quoteRange(root))!;
+  expect(after).toMatchObject({ quote: 'rich words', before: before.before, after: before.after });
+  expect(after.before).toBe('Before ');
+  expect(after.after).not.toMatch(/※|Alpha|Beta|Public/);
+  const laterRange = document.createRange();
+  laterRange.selectNodeContents(root.querySelector('p:last-child')!);
+  const later = selectedPassage(root, laterRange)!;
+  expect(locateSelection(source, later.quote, later.before, later.after)).toMatchObject({
+    from: source.indexOf('Later paragraph.'),
+    to: source.length,
+  });
+  const expected = new VisibleText(plain),
+    decorated = new VisibleText(root);
+  expect(decorated.text).toBe(expected.text);
+  const bookmark = expected.marker(plain.querySelector('mark')!.firstChild!, 0);
+  expect(bookmark).toBeTruthy();
+  expect(decorated.marker(root.querySelector('mark')!.firstChild!, 0)).toBe(bookmark);
+  expect(root.querySelector('.reader-reference-prefix')).toBeNull();
+  for (const icon of root.querySelectorAll('.reader-reference-icon')) {
+    const range = document.createRange();
+    range.selectNodeContents(icon);
+    expect(selectedPassage(root, range)).toBeUndefined();
+    expect(decorated.marker(icon.firstChild!, 0)).toBeFalsy();
+  }
+  const betweenTags = root.querySelector('.reader-reference-pill')!.nextSibling!;
+  expect(betweenTags.nodeType).toBe(Node.TEXT_NODE);
+  expect(betweenTags.textContent).toBe(' ');
+  const spaceRange = document.createRange();
+  spaceRange.selectNodeContents(betweenTags);
+  expect(selectedPassage(root, spaceRange)).toBeUndefined();
+  expect(decorated.marker(betweenTags, 0)).toBeFalsy();
+  const paragraph = document.createRange();
+  paragraph.selectNodeContents(root.querySelector('p')!);
+  expect(selectedPassage(root, paragraph)?.quote.trim().replace(/\s+/g, ' ')).toBe(
+    'Before rich words after.',
+  );
+  expect(root.querySelector('.reader-reference-marker')).toBeNull();
 });
 
 it.each([

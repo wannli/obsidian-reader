@@ -1,7 +1,9 @@
 import type { Token } from 'marked';
 import { readerMarkdown, visibleMarkdown } from '../core/markdown';
+import { nativeCitations, passageFragments, passages } from '../core/annotations';
+import { paragraphAnchors } from '../core/hosted-highlights';
 import { fragment } from '../content/html';
-import { VisibleText } from './text';
+import { readerDecoration, readerRangeText, VisibleText } from './text';
 import { imageViewer } from './images';
 
 const escape = (value: string): string =>
@@ -10,6 +12,8 @@ const escape = (value: string): string =>
     (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]!,
   );
 type Inline = Token & { target: string; label: string; tokens: Token[] };
+let decorationPrefix = '';
+let decorationHtml: readonly string[] = [];
 const markdown = readerMarkdown();
 markdown.use({
   renderer: {
@@ -20,6 +24,24 @@ markdown.use({
     },
   },
   extensions: [
+    {
+      name: 'readerDecoration',
+      level: 'inline',
+      start: (source) => (decorationPrefix ? source.indexOf(decorationPrefix) : -1),
+      tokenizer(source) {
+        if (!decorationPrefix || !source.startsWith(decorationPrefix)) return;
+        const match = /^(\d+)\uE001/.exec(source.slice(decorationPrefix.length));
+        if (match && decorationHtml[Number(match[1])] !== undefined)
+          return {
+            type: 'readerDecoration',
+            raw: decorationPrefix + match[0],
+            index: Number(match[1]),
+          };
+      },
+      renderer(token) {
+        return decorationHtml[(token as Token & { index: number }).index];
+      },
+    },
     {
       name: 'readerWiki',
       renderer(token) {
@@ -36,10 +58,133 @@ markdown.use({
   ],
 });
 
+function hideParagraphAnchors(root: HTMLElement): void {
+  for (const marker of root.querySelectorAll<HTMLElement>('.reader-paragraph-anchor')) {
+    const id = marker.textContent!.slice(1);
+    marker.dataset.readerDecoration = 'paragraph-anchor';
+    marker.hidden = true;
+    const block = marker.closest<HTMLElement>('p,li,blockquote,h1,h2,h3,h4,h5,h6');
+    if (!block) continue;
+    if (/^H[1-6]$/.test(block.tagName)) marker.id = `^${id}`;
+    else block.id = `^${id}`;
+    block.dataset.readerParagraph = id;
+  }
+}
+
+/** Host-owned public Fileclass icon painting; the Markdown renderer stays platform-neutral. */
+export type ReferenceIcon = (target: string, element: HTMLElement) => void;
+
 const imageFailures = new Map<string, number>();
-export function renderBody(body: string, root: HTMLElement, base: string): () => void {
-  const html = markdown.parse(visibleMarkdown(body), { async: false });
+export function renderBody(
+  body: string,
+  root: HTMLElement,
+  base: string,
+  referenceIcon?: ReferenceIcon,
+): () => void {
+  const citations = nativeCitations(body);
+  // Replace only parser-proven source spans with render-local tokens. Matching
+  // rendered strings would also hide an escaped/code literal identical to a real ID.
+  // The collision-free tokens never enter Markdown storage or source-selection maps.
+  const decorations = citations
+    .map(({ from, to }) => {
+      const links = [
+        ...body.slice(from, to).matchAll(/\[\[([^\[\]|\r\n]+)(?:\|([^\[\]\r\n]+))?\]\]/g),
+      ]
+        .map((match) => {
+          const label = match[2] ?? match[1].replace(/\.md$/, '').split('/').pop()!;
+          return `<a class="internal-link" href="${escape(encodeURI(match[1]))}">${escape(label)}</a>`;
+        })
+        .join(' ');
+      return {
+        from,
+        to,
+        html: `<span class="reader-reference-group">${links}</span>`,
+      };
+    })
+    .concat(
+      paragraphAnchors(body).map(({ anchor, blockId }) => ({
+        ...anchor,
+        html: `<span class="reader-paragraph-anchor">^${escape(blockId)}</span>`,
+      })),
+    );
+  let prefix = '\uE000reader-decoration:';
+  while (body.includes(prefix)) prefix += ':';
+  decorationPrefix = prefix;
+  decorationHtml = decorations.map((item) => item.html);
+  let display = body;
+  for (const { from, to, index } of decorations
+    .map((item, index) => ({ ...item, index }))
+    .sort((a, b) => b.from - a.from))
+    display =
+      display.slice(0, from) +
+      (/^[ \t]+/.exec(body.slice(from, to))?.[0] ?? '') +
+      `${prefix}${index}\uE001` +
+      display.slice(to);
+  let html: string;
+  try {
+    html = markdown.parse(visibleMarkdown(display), { async: false });
+  } finally {
+    decorationPrefix = '';
+    decorationHtml = [];
+  }
   root.replaceChildren(fragment(html, base || 'https://example.invalid/', true));
+  const references = [...root.querySelectorAll<HTMLElement>('.reader-reference-group')];
+  for (const reference of references) {
+    // Data attributes are installed only after sanitization, never accepted from Markdown.
+    reference.dataset.readerDecoration = 'reference';
+    reference.setAttribute('aria-label', 'Highlight notes');
+    for (const link of reference.querySelectorAll<HTMLAnchorElement>('a')) {
+      link.classList.add('reader-reference-pill');
+      const name = link.textContent ?? 'note';
+      link.title = `Edit highlight notes · ${name}`;
+      const label = root.ownerDocument.createElement('span');
+      label.className = 'reader-reference-label';
+      label.append(...link.childNodes);
+      link.append(label);
+    }
+    // Keep real spaces between independently clickable destinations inside the
+    // one shared reference pill. Its citation marker stays in Markdown only.
+  }
+  if (referenceIcon)
+    for (const link of root.querySelectorAll<HTMLAnchorElement>('a.internal-link')) {
+      const icon = root.ownerDocument.createElement('span');
+      icon.className = 'reader-node-icon';
+      if (link.classList.contains('reader-reference-pill'))
+        icon.classList.add('reader-reference-icon');
+      icon.setAttribute('aria-hidden', 'true');
+      // Only the icon is decoration: an ordinary note link's authored label remains prose.
+      icon.dataset.readerDecoration = 'reference';
+      try {
+        referenceIcon(decodeURI(link.getAttribute('href') ?? ''), icon);
+        if (icon.hasChildNodes()) {
+          const label = link.querySelector('.reader-reference-label');
+          if (label) label.before(icon);
+          else link.prepend(icon);
+          link.classList.add('reader-typed-link');
+        }
+      } catch {
+        // A reloaded/unavailable provider must not hide the native reference or article.
+      }
+    }
+  const source = passages(body),
+    marks = [...root.querySelectorAll<HTMLElement>('mark')].filter(
+      (mark) => !readerDecoration(mark),
+    );
+  if (
+    source.reduce((count, passage) => count + passageFragments(passage).length, 0) === marks.length
+  ) {
+    let index = 0;
+    source.forEach((passage, passageIndex) => {
+      for (const _fragment of passageFragments(passage))
+        marks[index++].dataset.readerPassage = String(passageIndex);
+      const citation = citations.findIndex(
+        (item) => item.from === passage.citation?.from && item.to === passage.citation.to,
+      );
+      if (citation >= 0 && references.length === citations.length)
+        references[citation].dataset.readerPassage = String(passageIndex);
+    });
+  }
+  hideParagraphAnchors(root);
   // A defined-but-empty CSS custom property does NOT use var()'s fallback.
   // Scope this fallback to Reader; leave a usable theme highlight color intact.
   const highlight = root.ownerDocument.defaultView
@@ -49,7 +194,7 @@ export function renderBody(body: string, root: HTMLElement, base: string): () =>
   root.classList.toggle('reader-highlight-fallback', !highlight);
   const headings = new Map<string, number>();
   for (const heading of root.querySelectorAll<HTMLElement>('h1,h2,h3,h4,h5,h6')) {
-    const slug = (heading.textContent ?? '')
+    const slug = new VisibleText(heading).text
       .trim()
       .toLowerCase()
       .replace(/[^\p{L}\p{N}\s-]/gu, '')
@@ -121,7 +266,13 @@ export function selectionRange(root: HTMLElement): Range | undefined {
   const selection = root.ownerDocument.getSelection();
   if (!selection?.rangeCount || selection.isCollapsed) return;
   const range = selection.getRangeAt(0);
-  if (root.contains(range.startContainer) && root.contains(range.endContainer)) return range;
+  if (
+    root.contains(range.startContainer) &&
+    root.contains(range.endContainer) &&
+    !readerDecoration(range.startContainer) &&
+    !readerDecoration(range.endContainer)
+  )
+    return range;
 }
 
 /** Read only the adjacent 120 UTF-16 units, preserving Range.toString() text semantics. */
@@ -133,7 +284,8 @@ function selectionContext(
 ): string {
   const descend = (node: Node): Node => {
     let child: ChildNode | null;
-    while ((child = before ? node.lastChild : node.firstChild)) node = child;
+    while (!readerDecoration(node) && (child = before ? node.lastChild : node.firstChild))
+      node = child;
     return node;
   };
   const adjacent = (node: Node): Node | undefined => {
@@ -146,7 +298,7 @@ function selectionContext(
   };
   let value = '',
     node: Node | undefined;
-  if (container.nodeType === Node.TEXT_NODE) {
+  if (container.nodeType === Node.TEXT_NODE && !readerDecoration(container)) {
     const text = container.nodeValue ?? '';
     value = before
       ? text.slice(Math.max(0, offset - 120), offset)
@@ -157,7 +309,7 @@ function selectionContext(
     node = child ? descend(child) : adjacent(container);
   }
   while (node && value.length < 120) {
-    if (node.nodeType === Node.TEXT_NODE) {
+    if (node.nodeType === Node.TEXT_NODE && !readerDecoration(node)) {
       const text = node.nodeValue ?? '',
         remaining = 120 - value.length;
       value = before ? text.slice(-remaining) + value : value + text.slice(0, remaining);
@@ -173,7 +325,8 @@ export function selectedPassage(
 ): { range: Range; quote: string; before: string; after: string } | undefined {
   const range = explicitRange ?? selectionRange(root);
   if (!range) return;
-  const quote = range.toString();
+  if (readerDecoration(range.startContainer) || readerDecoration(range.endContainer)) return;
+  const quote = readerRangeText(range);
   if (
     explicitRange &&
     (range.collapsed ||
@@ -214,7 +367,7 @@ export function textBookmark(
   const nodes = root.ownerDocument.createTreeWalker(root, NodeFilter.SHOW_TEXT);
   let node: Node | null;
   while ((node = nodes.nextNode())) {
-    if (!node.textContent?.trim()) continue;
+    if (!node.textContent?.trim() || readerDecoration(node)) continue;
     const range = root.ownerDocument.createRange();
     range.selectNodeContents(node);
     if (

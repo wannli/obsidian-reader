@@ -31,8 +31,12 @@ function rangeRect(range: Range): DOMRect {
     20,
   );
 }
-function fixture(paged = true, renderError?: (error: unknown) => void): ReadingSurface {
-  surface = new ReadingSurface(document.body, paged, position, renderError);
+function fixture(
+  paged = true,
+  renderError?: (error: unknown) => void,
+  referenceIcon?: render.ReferenceIcon,
+): ReadingSurface {
+  surface = new ReadingSurface(document.body, paged, position, renderError, referenceIcon);
   Object.defineProperties(surface.viewport, {
     clientWidth: { get: () => width },
     clientHeight: { get: () => height },
@@ -289,6 +293,65 @@ it.each([
   );
   expect([...surface.flow.children]).toEqual([surface.title, surface.body]);
   expect(surface.viewport.querySelector('button,.reader-finish')).toBeNull();
+});
+
+it('shows topic metadata outside the source body while leaving authored headings and bookmarks untouched', () => {
+  fixture(false).setBody('# Title\n\nAlpha words.', '');
+  surface.setTitle('Title');
+  const body = surface.body.innerHTML;
+  surface.setTopics([{ target: 'Topics/Rules.md', label: 'Rules' }]);
+  expect([...surface.flow.children]).toEqual([surface.title, surface.topics, surface.body]);
+  expect(surface.title.hidden).toBe(true);
+  expect(surface.body.querySelector('h1')!.hidden).toBe(false);
+  expect(surface.body.innerHTML).toBe(body);
+  expect(new VisibleText(surface.body).text).not.toContain('Rules');
+  expect(render.bookmarkRange(surface.body, 'Alpha words')?.toString()).toBe('Alpha words');
+  expect(surface.topics.querySelectorAll('.reader-reference-group')).toHaveLength(1);
+  expect(surface.topics.textContent).toBe('Rules');
+  expect(surface.topics.querySelector('.reader-reference-prefix')).toBeNull();
+  const group = surface.topics.firstChild;
+  surface.setTopics([{ target: 'Topics/Rules.md', label: 'Rules' }]);
+  expect(surface.topics.firstChild).toBe(group);
+  surface.setTopics([]);
+  expect([...surface.flow.children]).toEqual([surface.title, surface.body]);
+  expect(render.renderBody).toHaveBeenCalledOnce();
+});
+
+it('queues the latest topics and their reflow until a native selection releases', () => {
+  fixture().setBody(markdown, '');
+  surface.setTopics([{ target: 'Topics/Old.md', label: 'Old' }]);
+  const range = select(),
+    node = range.startContainer;
+  width = 450;
+  surface.setTopics([{ target: 'Topics/Superseded.md', label: 'Superseded' }]);
+  surface.setTopics([{ target: 'Topics/Current.md', label: 'Current' }]);
+  expect(surface.topics.textContent).toBe('Old');
+  expect(surface.flow.style.columnWidth).toBe('300px');
+  expect(range.startContainer).toBe(node);
+  expect(surface.selection()?.quote).toBe('Alpha');
+  deselect();
+  expect(surface.topics.textContent).toBe('Current');
+  expect(surface.flow.style.columnWidth).toBe('450px');
+  expect(surface.body.querySelector('p')!.firstChild).toBe(node);
+  expect(render.renderBody).toHaveBeenCalledOnce();
+});
+
+it('repaints only current optional topic icons and safely retains unresolved labels', () => {
+  let available = true;
+  fixture(false, undefined, (_target, element) => {
+    if (!available) throw new Error('Provider reloaded');
+    element.append(document.createElementNS('http://www.w3.org/2000/svg', 'svg'));
+  }).setBody(markdown, '');
+  const topics = [{ target: 'Topics/Rules.md', label: 'Rules' }, { label: 'Missing note' }];
+  surface.setTopics(topics);
+  expect(surface.topics.querySelectorAll('a')).toHaveLength(1);
+  expect(surface.topics.querySelectorAll('.reader-node-icon svg')).toHaveLength(1);
+  available = false;
+  surface.setTopics(topics);
+  expect(surface.topics.querySelector('.reader-node-icon')).toBeNull();
+  expect(surface.topics.textContent).toBe('Rules Missing note');
+  expect(new VisibleText(surface.body).text).not.toContain('Missing note');
+  expect(render.renderBody).toHaveBeenCalledOnce();
 });
 
 it('updates title deduplication with deferred rendering without replacing selected authored nodes', () => {

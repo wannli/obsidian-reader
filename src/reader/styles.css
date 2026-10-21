@@ -578,3 +578,313 @@ dialog.reader-image-viewer,
 .reader-highlight-feedback[hidden] {
   display: none;
 }
+
+.reader-article-topics {
+  max-width: 100%;
+  margin-block: 0.5em 1em;
+  font-size: var(--font-text-size);
+}
+/* One native-sized pill per reference group; its destinations stay separate links. */
+.reader-reference-group {
+  display: inline-block;
+  max-width: 100%;
+  box-sizing: border-box;
+  background-color: var(--tag-background);
+  border: var(--tag-border-width) solid var(--tag-border-color);
+  border-radius: var(--tag-radius);
+  corner-shape: var(--tag-corner-shape);
+  color: var(--tag-color);
+  font-size: var(--tag-size);
+  font-weight: var(--tag-weight);
+  text-decoration: var(--tag-decoration);
+  padding: var(--tag-padding-y) var(--tag-padding-x);
+  line-height: 1;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  user-select: none !important;
+  -webkit-user-select: none !important;
+}
+.reader-view :is(.reader-document, .reader-article-topics) a.reader-reference-pill {
+  display: inline-block;
+  max-width: 100%;
+  box-sizing: border-box;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  color: inherit;
+  font-size: inherit;
+  font-weight: inherit;
+  text-decoration: var(--tag-decoration);
+  line-height: 1;
+  white-space: nowrap;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+}
+.reader-view
+  :is(.reader-document, .reader-article-topics)
+  a.reader-reference-pill
+  + a.reader-reference-pill {
+  padding-inline-start: 0.35em;
+}
+@media (hover: hover) {
+  .reader-reference-group:hover {
+    background-color: var(--tag-background-hover);
+    border-color: var(--tag-border-color-hover);
+    color: var(--tag-color-hover);
+  }
+  .reader-view :is(.reader-document, .reader-article-topics) a.reader-reference-pill:hover {
+    text-decoration: var(--tag-decoration-hover);
+  }
+}
+.reader-reference-label {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.reader-node-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1em;
+  height: 1em;
+  margin-inline-end: 0.25em;
+  vertical-align: -0.125em;
+  color: inherit;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.reader-node-icon svg {
+  width: 1em;
+  height: 1em;
+}
+.reader-reference-icon {
+  margin-inline-end: 0.2em;
+}
+.reader-view :is(.reader-document, .reader-article-topics) a.reader-reference-pill:focus-visible,
+.reader-view .reader-document mark.reader-send-source {
+  outline: 2px solid var(--interactive-accent, Highlight);
+  outline-offset: 2px;
+}
+.reader-document.reader-send-active mark,
+.reader-document.reader-send-active a.internal-link {
+  cursor: crosshair;
+}
+
+.reader-highlight-picker-modal {
+  width: min(560px, calc(100vw - 24px));
+}
+/* This is a native Modal, not the absolutely positioned command prompt. */
+.reader-highlight-picker-modal.prompt {
+  position: relative;
+  top: auto;
+  max-width: calc(100vw - 24px);
+  max-height: var(--dialog-max-height);
+}
+.reader-highlight-picker {
+  display: flex;
+  flex-direction: column;
+  gap: var(--size-4-2);
+  min-height: 0;
+  max-height: calc(100dvh - 160px);
+  overflow: hidden;
+}
+.reader-highlight-picker-controls {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--size-4-2);
+}
+.reader-highlight-picker-search-wrap {
+  width: 100%;
+  min-width: 0;
+}
+.reader-highlight-picker .reader-highlight-picker-search {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  height: var(--prompt-input-height);
+  padding: var(--size-4-6);
+  padding-inline-end: var(--size-4-12);
+  background-color: transparent;
+  font-size: var(--font-ui-medium);
+  border: 0;
+  border-radius: 0;
+  border-bottom: var(--border-width) solid var(--background-secondary);
+}
+.reader-highlight-picker .reader-highlight-picker-search:hover,
+.reader-highlight-picker .reader-highlight-picker-search:focus,
+.reader-highlight-picker .reader-highlight-picker-search:focus-visible {
+  background-color: transparent;
+  box-shadow: none;
+}
+.reader-highlight-picker .reader-highlight-picker-type-filter {
+  align-self: flex-start;
+  width: auto;
+  max-width: 100%;
+  font-size: var(--font-ui-small);
+}
+.reader-highlight-picker-controls,
+.reader-highlight-picker-footer {
+  flex-shrink: 0;
+}
+.reader-highlight-picker-results {
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+  margin: 0;
+  padding: var(--size-4-3);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+/* Suggestion classes alone do not reset Obsidian's native button fill/height. */
+.reader-highlight-picker button.reader-highlight-picker-result {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--size-4-2);
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 44px;
+  height: auto;
+  margin: 0 0 1px;
+  padding: var(--size-2-3) var(--size-4-3);
+  border: 0;
+  border-radius: var(--radius-s);
+  corner-shape: var(--corner-shape);
+  background: transparent;
+  box-shadow: none;
+  color: var(--text-normal);
+  font-size: var(--font-ui-medium);
+  font-weight: var(--font-normal);
+  font-family: inherit;
+  line-height: inherit;
+  text-align: start;
+  white-space: pre-wrap;
+  cursor: var(--cursor);
+}
+.reader-highlight-picker button.reader-highlight-picker-result:not(:disabled):hover,
+.reader-highlight-picker button.reader-highlight-picker-result:focus-visible,
+.reader-highlight-picker button.reader-highlight-picker-result.is-checked,
+.reader-highlight-picker button.reader-highlight-picker-result[aria-checked='true'] {
+  background: var(--background-modifier-hover);
+  box-shadow: none;
+}
+.reader-highlight-picker button.reader-highlight-picker-result:focus-visible {
+  outline: 2px solid var(--interactive-accent, Highlight);
+  outline-offset: -2px;
+}
+.reader-highlight-picker button.reader-highlight-picker-result:disabled {
+  color: var(--text-faint);
+  cursor: default;
+}
+.reader-highlight-picker-result[aria-checked='true'] .reader-highlight-picker-result-title {
+  color: var(--text-accent);
+}
+.reader-highlight-picker .reader-highlight-picker-result-content {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: var(--size-2-1);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-inline-end: auto;
+}
+.reader-highlight-picker .reader-highlight-picker-result-title {
+  display: block;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.reader-highlight-picker .reader-highlight-picker-result-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--size-2-1) var(--size-4-2);
+  min-width: 0;
+  font-size: 0.8em;
+  color: var(--text-muted);
+}
+.reader-highlight-picker-type-badge {
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.reader-highlight-picker-result-path {
+  flex: 1 1 12ch;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.reader-highlight-picker
+  button.reader-highlight-picker-create-row
+  .reader-highlight-picker-result-content {
+  flex-direction: row;
+  align-items: baseline;
+  gap: var(--size-4-2);
+}
+.reader-highlight-picker
+  button.reader-highlight-picker-create-row
+  .reader-highlight-picker-result-title {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.reader-highlight-picker
+  button.reader-highlight-picker-create-row
+  .reader-highlight-picker-result-meta {
+  flex: 0 0 auto;
+  width: auto;
+  max-width: none;
+}
+.reader-highlight-picker
+  button.reader-highlight-picker-create-row
+  .reader-highlight-picker-type-badge {
+  flex: none;
+  max-width: none;
+  overflow: visible;
+  text-overflow: clip;
+}
+.reader-highlight-picker-icon,
+.reader-highlight-picker-check {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  align-self: center;
+  flex: 0 0 1em;
+  width: 1em;
+  height: 1em;
+  color: var(--text-muted);
+}
+.reader-highlight-picker-icon svg,
+.reader-highlight-picker-check svg {
+  width: 1em;
+  height: 1em;
+}
+.reader-highlight-picker-check {
+  margin-inline-start: auto;
+  color: var(--text-accent);
+}
+.reader-highlight-picker-message {
+  font-size: var(--font-ui-small);
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+.reader-highlight-picker-footer {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--size-4-2);
+}
+.reader-highlight-picker-footer button {
+  min-height: 44px;
+}
+.reader-highlight-picker-article-choice {
+  margin-inline-end: auto;
+  color: var(--text-muted);
+}
+.reader-highlight-picker [hidden] {
+  display: none !important;
+}

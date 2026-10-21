@@ -87,11 +87,20 @@ it.each([
 });
 
 it.each(['Before important', 'words after.'])(
-  'continues rejecting a crossing partial emphasis boundary: %s',
+  'preserves crossing partial emphasis as one logical passage: %s',
   (quote) => {
-    expect(() => locateSelection('Before **important words** after.', quote)).toThrow(
-      UnmappableSelection,
-    );
+    const body = 'Before **important words** after.';
+    const root = render(body),
+      html = root.innerHTML;
+    const range = locateSelection(body, quote);
+    const saved = addHighlight(body, range.from, range.to);
+    const painted = render(saved);
+    const marks = [...painted.querySelectorAll('mark')];
+    expect(marks.map((mark) => mark.textContent).join('')).toBe(quote);
+    marks.forEach((mark) => mark.replaceWith(...mark.childNodes));
+    expect(painted.innerHTML).toBe(html);
+    expect(passages(saved)).toHaveLength(1);
+    expect(changePassage(saved, passages(saved)[0], 'remove')).toBe(body);
   },
 );
 
@@ -115,24 +124,38 @@ it.each([
   ['> ```\n> first second\n> ```', 'first second'],
   ['>     first second', 'first second'],
   ['> first `second`', 'first second'],
-  ['> first [second](https://example.com)', 'first second'],
   ['> first [[Notes/Second.md|second]]', 'first second'],
   ['> first %%hidden%% second', 'first second'],
   ['> ==first second==', 'first second'],
-  ['[literal text]\n\n[literal text]: https://example.com', 'literal text'],
-  ['[literal text][]\n\n[literal text]: https://example.com', 'literal text'],
-  ['[literal text][ref]\n\n[ref]: https://example.com', 'literal text'],
-  ['**[literal text]**\n\n[literal text]: https://example.com', 'literal text'],
   ['![literal text]\n\n[literal text]: https://example.com/image.png', 'literal text'],
   ['**![literal text]**\n\n[literal text]: https://example.com/image.png', 'literal text'],
   ['![literal text][]\n\n[literal text]: https://example.com/image.png', 'literal text'],
   ['| first | second |\n| --- | --- |', 'first second'],
+])('does not make protected or cross-block content editable: %j', (body, quote) => {
+  expect(() => locateSelection(body, quote)).toThrow(UnmappableSelection);
+});
+
+it.each([
+  ['> first [second](https://example.com)', 'first second'],
+  ['[literal text]\n\n[literal text]: https://example.com', 'literal text'],
+  ['[literal text][]\n\n[literal text]: https://example.com', 'literal text'],
+  ['[literal text][ref]\n\n[ref]: https://example.com', 'literal text'],
+  ['**[literal text]**\n\n[literal text]: https://example.com', 'literal text'],
   [
     '| [literal text] | other |\n| --- | --- |\n\n[literal text]: https://example.com',
     'literal text',
   ],
-])('does not make protected or cross-block content editable: %j', (body, quote) => {
-  expect(() => locateSelection(body, quote)).toThrow(UnmappableSelection);
+])('preserves publisher links and reference definitions in exact selections: %j', (body, quote) => {
+  const root = render(body),
+    html = root.innerHTML;
+  const range = locateSelection(body, quote);
+  const saved = addHighlight(body, range.from, range.to);
+  const painted = render(saved);
+  const marks = [...painted.querySelectorAll('mark')];
+  expect(marks.map((mark) => mark.textContent).join('')).toBe(quote);
+  marks.forEach((mark) => mark.replaceWith(...mark.childNodes));
+  expect(painted.innerHTML).toBe(html);
+  expect(changePassage(saved, passages(saved)[0], 'remove')).toBe(body);
 });
 
 it('keeps formatted linking, change, unlink and removal on the existing passage path', () => {

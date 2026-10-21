@@ -1,3 +1,25 @@
+/** Reader-owned references/anchors are controls, not article or bookmark text. */
+export const READER_DECORATION = '[data-reader-decoration]';
+export function readerDecoration(node: Node): boolean {
+  const element = node.nodeType === Node.ELEMENT_NODE ? (node as Element) : node.parentElement;
+  return !!element?.closest(READER_DECORATION);
+}
+
+/** Preserve Range text semantics while omitting Reader-owned reference controls. */
+export function readerRangeText(range: Range): string {
+  const container = range.commonAncestorContainer;
+  const root =
+    container.nodeType === Node.ELEMENT_NODE ? (container as Element) : container.parentElement;
+  if (
+    !root ||
+    ![...root.querySelectorAll(READER_DECORATION)].some((node) => range.intersectsNode(node))
+  )
+    return range.toString();
+  const fragment = range.cloneContents();
+  for (const node of fragment.querySelectorAll(READER_DECORATION)) node.remove();
+  return fragment.textContent ?? '';
+}
+
 interface Segment {
   node: Text;
   start: number;
@@ -18,7 +40,7 @@ export class VisibleText {
       length = 0;
     while ((node = walker.nextNode())) {
       const value = node.textContent ?? '';
-      if (!value) continue;
+      if (!value || readerDecoration(node)) continue;
       const segment = { node: node as Text, start: length, end: length + value.length };
       this.segments.push(segment);
       this.byNode.set(node, segment);

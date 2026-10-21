@@ -1,6 +1,8 @@
 import { bookmarkRange, renderBody, selectedPassage, textBookmark } from './render';
+import type { ReferenceIcon } from './render';
 import { VisibleText } from './text';
 import { HighlightFeedback } from './highlight-feedback';
+import { articleTopicPill, type ArticleTopic } from './topic-pills';
 
 const GAP = 32;
 
@@ -10,6 +12,9 @@ export class ReadingSurface {
   readonly flow: HTMLDivElement;
   readonly body: HTMLElement;
   readonly title: HTMLHeadingElement;
+  readonly topics: HTMLDivElement;
+  private topicsKey = '';
+  private nextTopics?: { key: string; node?: HTMLElement };
   private readonly feedback: HighlightFeedback;
   private titleText = '';
   private disposeBody?: () => void;
@@ -39,6 +44,7 @@ export class ReadingSurface {
     readonly paged: boolean,
     private position: (marker: string) => void,
     private renderError?: (error: unknown) => void,
+    private referenceIcon?: ReferenceIcon,
   ) {
     const document = parent.ownerDocument,
       view = document.defaultView;
@@ -54,6 +60,10 @@ export class ReadingSurface {
     this.title = document.createElement('h1');
     this.title.className = 'reader-article-title';
     this.title.hidden = true;
+    this.topics = document.createElement('div');
+    this.topics.className = 'reader-article-topics';
+    this.topics.setAttribute('role', 'group');
+    this.topics.setAttribute('aria-label', 'Article topics');
     this.flow.append(this.title, this.body);
     this.viewport.append(this.flow);
     parent.append(this.viewport);
@@ -131,6 +141,15 @@ export class ReadingSurface {
     this.reflow();
   }
 
+  setTopics(topics: readonly ArticleTopic[]): void {
+    if (this.dead) return;
+    const node = articleTopicPill(this.body.ownerDocument, topics, this.referenceIcon),
+      key = node?.outerHTML ?? '';
+    if (key === (this.nextTopics?.key ?? this.topicsKey)) return;
+    this.nextTopics = key === this.topicsKey ? undefined : { key, node };
+    this.reflow();
+  }
+
   setBody(body: string, url: string): void {
     if (this.dead) return;
     // A newer snapshot can revert a queued change, or change only the URL base.
@@ -162,6 +181,15 @@ export class ReadingSurface {
     // Don't restore an older anchor if an update overtakes the scroll debounce.
     if (this.next && this.saveTimer !== undefined && !this.restorePending) this.flush();
     if (this.dead || this.nativeSelection()) return;
+    if (this.nextTopics) {
+      const { key, node } = this.nextTopics;
+      this.nextTopics = undefined;
+      this.topics.replaceChildren(...(node ? [node] : []));
+      if (node) this.body.before(this.topics);
+      else this.topics.remove();
+      this.topicsKey = key;
+      this.layoutPending = this.restorePending = true;
+    }
     if (this.next) {
       const next = this.next;
       this.next = undefined;
@@ -169,7 +197,7 @@ export class ReadingSurface {
       this.disposeBody = undefined;
       dispose?.();
       if (this.dead) return;
-      this.disposeBody = renderBody(next.body, this.body, next.url);
+      this.disposeBody = renderBody(next.body, this.body, next.url, this.referenceIcon);
       this.index = new VisibleText(this.body);
       this.content = next.body;
       this.url = next.url;

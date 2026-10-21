@@ -5,6 +5,7 @@ export interface TapToolbarAction {
   id: string;
   label: string;
   icon: string;
+  disabled?: boolean;
   run(): void | Promise<unknown>;
 }
 
@@ -17,6 +18,7 @@ interface TapHighlightOptions {
   notify(error: unknown): void;
   passageActions?(): readonly TapToolbarAction[] | undefined;
   onPassage?(word: Range, event: MouseEvent): boolean;
+  onTarget?(event: MouseEvent): boolean;
   clearPassage?(intent: boolean): void;
 }
 
@@ -174,6 +176,7 @@ export class TapHighlighter {
         )
           return;
         if (this.down && this.down.root !== this.body.firstChild) return;
+        if (options.onTarget?.(event)) return;
         const word = this.picker.wordAt(event.clientX, event.clientY);
         if (!word) return;
         if (!this.first) {
@@ -265,7 +268,7 @@ export class TapHighlighter {
 
   setActive(active: boolean, notify = true): void {
     if (this.dead || this.busy) return;
-    if (!active) this.options.clearPassage?.(true);
+    if (!active) this.options.clearPassage?.(notify);
     this.enabled = active;
     this.first = undefined;
     this.down = undefined;
@@ -335,6 +338,7 @@ export class TapHighlighter {
             // A detached button must never revive a superseded passage's intent.
             if (
               this.busy ||
+              action.disabled ||
               this.actionSet !== actionSet ||
               this.options.passageActions?.() !== actionSet
             )
@@ -358,7 +362,8 @@ export class TapHighlighter {
         this.hint,
       );
     }
-    for (const button of this.actionButtons) button.disabled = this.busy;
+    for (const [index, button] of this.actionButtons.entries())
+      button.disabled = this.busy || !!this.actionSet?.[index].disabled;
     this.sentence.disabled = this.paragraph.disabled = this.busy || !this.first;
     this.done.disabled = this.busy;
     this.undo.hidden = !this.undoAvailable;
