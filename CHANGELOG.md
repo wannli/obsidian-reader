@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.14.0](https://github.com/wannli/obsidian-reader/compare/0.13.1...0.14.0) (2026-10-21)
+
+
+### Added
+
+* **highlights:** model native hosted highlights and quotation snapshots ([81894dd](https://github.com/wannli/obsidian-reader/commit/81894dd7aa44399c585c465319872cf8491dd666))
+* **picker:** add Fileclass destination multiselect and creation ([f921d38](https://github.com/wannli/obsidian-reader/commit/f921d3817505b7ade16b739ac2cbf190606554b5))
+* **reader:** add native reference and topic-pill presentation ([d6ebd29](https://github.com/wannli/obsidian-reader/commit/d6ebd291589a304fa3500adeea7bba54776f8d73))
+* **reader:** collect highlights across notes with guarded retries ([a66ad57](https://github.com/wannli/obsidian-reader/commit/a66ad575be540de836b67674244ac1bf3627f79f))
+
 ## [0.13.1](https://github.com/wannli/obsidian-reader/compare/0.13.0...0.13.1) (2026-10-20)
 
 
