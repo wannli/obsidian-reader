@@ -141,6 +141,11 @@ export default class ReaderPlugin extends Plugin {
     });
     this.addCommand({ id: 'add-url', name: 'Add URL', callback: () => this.capture() });
     this.addCommand({
+      id: 'add-articles-from-csv',
+      name: 'Add articles from CSV',
+      callback: () => this.importCsv(),
+    });
+    this.addCommand({
       id: 'redownload-article',
       name: 'Run Defuddle again (replace article content)',
       checkCallback: (checking) => {
@@ -913,6 +918,30 @@ export default class ReaderPlugin extends Plugin {
     if (signal.aborted) throw new Error('Reader settings changed.');
     this.syncMobileNavigation();
     return leaf.view as ReaderView;
+  }
+  async importCsv(): Promise<void> {
+    const signal = this.signal;
+    const store = this.store;
+    if (signal.aborted) return;
+    const { importCsvDialog } = await import('./host/csv-import-dialog');
+    if (signal.aborted) return;
+    importCsvDialog(
+      this.app,
+      async (urls, guard) => {
+        let completed = 0;
+        try {
+          for (const url of urls) {
+            guard();
+            await store.capture({ url }, new Date(), guard);
+            completed++;
+          }
+        } finally {
+          if (completed && !signal.aborted)
+            new Notice(`Reader: saved ${completed} of ${urls.length} article URLs.`);
+        }
+      },
+      signal,
+    );
   }
   capture(): void {
     const signal = this.signal,

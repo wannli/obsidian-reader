@@ -39,6 +39,8 @@ This README describes the current source. An installed release may not include e
 2. Paste an article URL. Reader saves it to **Inbox** and extracts readable text when online.
 3. Use **Open reading list** to return to your library. Select text in an article to highlight it, choose **Read later** to keep it on your list, or **Archive** to set it aside.
 
+To save several articles, run **Add articles from CSV** and choose a CSV file or paste URL-only rows separated by commas, semicolons or newlines. CSV with a `url` column header also works: quoted fields are supported and other columns are ignored. Reader checks all URLs before saving, deduplicates them and reuses existing articles. Cancelling or failing partway through leaves already saved articles in place.
+
 Manual and browser-link captures go to `Reading/Inbox`; imported feed articles go to `Reading/Stream`. New native/QuickAdd notes with `type: article` and `status: inbox` are placed in Inbox when Reader observes their live creation. Configure the native capture tool to target Inbox too, especially for captures made while Reader is not running. Subscription notes default to `Reading/Feeds` (configurable). Reader can still read typed articles elsewhere, but they are not in a reading list.
 
 ## A place for every article
