@@ -9,18 +9,15 @@ export function importCsvDialog(
   const lifetime = new AbortController();
   class CsvImport extends Modal {
     onOpen(): void {
-      this.setTitle('Add articles from CSV');
+      this.setTitle('Add articles from URLs');
       this.contentEl.createEl('p', {
-        text: 'Choose a CSV file or paste URLs separated by commas, semicolons or lines. A URL column header is supported. Existing URLs are reused.',
-      });
-      const file = this.contentEl.createEl('input', {
-        attr: { type: 'file', accept: '.csv,text/csv', 'aria-label': 'Choose CSV file' },
+        text: 'Enter URLs separated by commas, semicolons or new lines. Links starting with www. use HTTPS. Existing URLs are reused.',
       });
       let field!: HTMLTextAreaElement;
-      new Setting(this.contentEl).setName('Or paste CSV').addTextArea((control) => {
+      new Setting(this.contentEl).setName('Article URLs').addTextArea((control) => {
         field = control.inputEl;
         field.rows = 8;
-        field.placeholder = 'url;title\nhttps://example.com/article;Example';
+        field.placeholder = 'www.google.com,www.bing.com;www.brave.com';
       });
       const error = this.contentEl.createEl('p', { attr: { role: 'alert' } });
       new Setting(this.contentEl)
@@ -34,14 +31,12 @@ export function importCsvDialog(
                 if (signal.aborted || lifetime.signal.aborted) return;
                 button.setDisabled(true);
                 field.disabled = true;
-                file.disabled = true;
                 error.textContent = '';
                 try {
-                  const source = file.files?.[0] ? await file.files[0].text() : field.value;
-                  const urls = csvUrls(source);
+                  const urls = csvUrls(field.value);
                   await capture(urls, () => {
                     if (signal.aborted || lifetime.signal.aborted)
-                      throw new Error('Reader CSV import was cancelled.');
+                      throw new Error('Reader URL import was cancelled.');
                   });
                   this.close();
                 } catch (failure) {
@@ -49,7 +44,6 @@ export function importCsvDialog(
                   error.textContent = failure instanceof Error ? failure.message : String(failure);
                   button.setDisabled(false);
                   field.disabled = false;
-                  file.disabled = false;
                 }
               };
               void run();
