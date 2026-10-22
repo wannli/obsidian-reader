@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.15.1](https://github.com/wannli/obsidian-reader/compare/0.15.0...0.15.1) (2026-10-22)
+
+
+### Fixed
+
+* **capture:** use multiline URL input for bulk articles ([#46](https://github.com/wannli/obsidian-reader/issues/46)) ([7c57556](https://github.com/wannli/obsidian-reader/commit/7c57556e67a2ecd0e9dd9be1461e8962e0ef87ed))
+
 ## [0.15.0](https://github.com/wannli/obsidian-reader/compare/0.14.0...0.15.0) (2026-10-22)
 
 
