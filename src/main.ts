@@ -142,7 +142,7 @@ export default class ReaderPlugin extends Plugin {
     this.addCommand({ id: 'add-url', name: 'Add URL', callback: () => this.capture() });
     this.addCommand({
       id: 'add-articles-from-csv',
-      name: 'Add articles from CSV',
+      name: 'Add articles from URLs',
       callback: () => this.importCsv(),
     });
     this.addCommand({
