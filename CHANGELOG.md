@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.15.0](https://github.com/wannli/obsidian-reader/compare/0.14.0...0.15.0) (2026-10-22)
+
+
+### Added
+
+* **capture:** add bulk CSV article import command ([#44](https://github.com/wannli/obsidian-reader/issues/44)) ([e87c67b](https://github.com/wannli/obsidian-reader/commit/e87c67b81ba12b07e9006bef33e6e8e82a199536))
+
 ## [0.14.0](https://github.com/wannli/obsidian-reader/compare/0.13.1...0.14.0) (2026-10-21)
 
 
