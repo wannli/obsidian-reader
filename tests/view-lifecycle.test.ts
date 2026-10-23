@@ -820,6 +820,7 @@ describe('automatic selection event ownership', () => {
       'Delete',
       'List',
       'Highlight mode',
+      'Create node',
     ]);
     expect(actions.parentElement).toBe(f.surface.viewport.parentElement);
     expect(f.surface.viewport.contains(actions)).toBe(false);
@@ -958,7 +959,7 @@ describe('automatic selection event ownership', () => {
       expectedHosted('==Alpha== phrase.\n\nBeta phrase.'),
     );
     tapAction('Done').click();
-    expect(f.view.contentEl.querySelectorAll('.reader-actions > button')).toHaveLength(8);
+    expect(f.view.contentEl.querySelectorAll('.reader-actions > button')).toHaveLength(9);
     expect(f.view.contentEl.querySelector('.reader-tap-highlight-actions')).toBeNull();
     expect(f.probe.tapMode).toBe(false);
     expect(f.surface.body.classList.contains('reader-tap-highlight-mode')).toBe(false);
@@ -2552,6 +2553,7 @@ describe('article keyboard boundaries', () => {
       'Delete',
       'List',
       'Highlight mode',
+      'Create node',
     ]);
     expect(column.classList.contains('reader-has-page-actions')).toBe(false);
     expect(actions.classList.contains('reader-paged-actions')).toBe(false);
@@ -2566,7 +2568,7 @@ describe('article keyboard boundaries', () => {
     expect(f.probe.surface).toBe(surface);
     f.host.showPagedArticleButtons = false;
     f.view.refreshArticleControls();
-    expect(names()).toHaveLength(8);
+    expect(names()).toHaveLength(9);
     expect(f.view.file).toBe(a);
     expect(f.probe.surface).toBe(surface);
   });
@@ -3581,6 +3583,7 @@ describe('bounded Reader UI', () => {
         'trash-2',
         'list',
         'highlighter',
+        'file-plus-2',
       ]);
       expect(buttons.map((button) => button.getAttribute('aria-label'))).toEqual([
         'Previous article',
@@ -3591,6 +3594,7 @@ describe('bounded Reader UI', () => {
         'Trash article and advance',
         'List',
         'Highlight mode',
+        'Create node',
       ]);
       expect(setTooltip).toHaveBeenCalledWith(buttons[2], 'Related notes');
       expect(setTooltip).toHaveBeenCalledWith(buttons[3], 'Read later');
@@ -3722,7 +3726,7 @@ describe('Reader mobile control styling', () => {
       await f.view.openArticle(article.path, true);
       const actions =
         f.view.contentEl.querySelectorAll<HTMLButtonElement>('.reader-actions button');
-      expect(actions).toHaveLength(8);
+      expect(actions).toHaveLength(9);
       for (const button of actions) checkIcon(button, '100%');
       expect(actions[0].disabled).toBe(true);
       expect(window.getComputedStyle(actions[0]).opacity).toBe('0.45');
@@ -3791,7 +3795,7 @@ describe('leaf-scoped floating Reader layout', () => {
         const column = f.view.contentEl.querySelector('.reader-article')!;
         const actions = column.querySelector('.reader-bottom-controls')!;
         const expanded = paged && showPagedArticleButtons;
-        expect(actions.querySelectorAll('button')).toHaveLength(expanded ? 10 : 8);
+        expect(actions.querySelectorAll('button')).toHaveLength(expanded ? 11 : 9);
         expect(column.classList.contains('reader-has-page-actions')).toBe(expanded);
         expect(actions.classList.contains('reader-paged-actions')).toBe(expanded);
         expect(actions.parentElement).toBe(column);
@@ -8062,6 +8066,54 @@ describe('hosted highlight UI integration', () => {
     expect(saved.body).toBe(`[[Nodes/Project|first words]] ^${initial.blockId}`);
     expect(await f.vault.read(f.targets[1])).toBe(target);
     expect(passages(saved.body)).toEqual([]);
+  });
+  it('links a fresh tap range to an explicitly chosen typed note without saving a highlight or quotation', async () => {
+    const f = await fixture({ defaults: [0] });
+    f.paint();
+    const range = document.createRange(),
+      node = f.probe.surface.body.querySelector('p').firstChild;
+    range.setStart(node, 7);
+    range.setEnd(node, 18);
+    const originalTarget = await f.vault.read(f.targets[1]);
+    mocks.highlightPicker.mockResolvedValue({ kind: 'existing', node: f.nodes[1] });
+    await f.probe.saveTapNode(f.probe.surface.body, range);
+    expect(mocks.highlightPicker).toHaveBeenCalledWith(
+      f.app,
+      f.api,
+      expect.objectContaining({ query: 'first words', multiple: false }),
+    );
+    const saved = await f.store.read(f.article.path);
+    expect(saved.body).toMatch(/Before \[\[Nodes\/Project\|first words\]\] after\. \^reader-/);
+    expect(saved.body).not.toContain('==');
+    expect(await f.vault.read(f.targets[1])).toBe(originalTarget);
+    expect(f.api.createNodeForLink).not.toHaveBeenCalled();
+  });
+  it('commits the source link and birth origin through public typed creation before required completion', async () => {
+    const f = await fixture();
+    f.paint();
+    const range = document.createRange(),
+      node = f.probe.surface.body.querySelector('p').firstChild;
+    range.setStart(node, 7);
+    range.setEnd(node, 18);
+    mocks.highlightPicker.mockResolvedValue({
+      kind: 'create',
+      title: 'First words',
+      type: 'Concept',
+    });
+    f.api.createNodeForLink.mockImplementation(async (_options, link) => {
+      await link(f.nodes[0]);
+      const saved = await f.store.read(f.article.path);
+      expect(saved.body).toContain('[[Nodes/Concept|first words]]');
+      expect(saved.body).not.toContain('==');
+      return f.nodes[0];
+    });
+    await f.probe.saveTapNode(f.probe.surface.body, range);
+    const saved = await f.store.read(f.article.path);
+    const anchor = /\^reader-[a-z0-9-]+/.exec(saved.body)![0];
+    expect(await f.vault.read(f.targets[0])).toContain(
+      `origin: "[[${saved.path.replace(/\.md$/, '')}#${anchor}]]"`,
+    );
+    expect(await f.vault.read(f.targets[0])).not.toContain('## Highlights');
   });
   it('never converts automatically when a selected excerpt equals the node title', async () => {
     const f = await fixture({ defaults: [0] });

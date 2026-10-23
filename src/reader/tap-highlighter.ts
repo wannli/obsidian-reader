@@ -11,9 +11,10 @@ export interface TapToolbarAction {
 
 interface TapHighlightOptions {
   active: boolean;
+  mode?: 'highlight' | 'node';
   canUndo: boolean;
-  modeChanged(active: boolean): void;
-  save(range: Range): Promise<void>;
+  modeChanged(active: boolean, mode?: 'node'): void;
+  save(range: Range, mode?: 'node'): Promise<void>;
   undo(): Promise<void>;
   notify(error: unknown): void;
   passageActions?(): readonly TapToolbarAction[] | undefined;
@@ -29,6 +30,8 @@ export class TapHighlighter {
   private readonly original: Node[];
   private readonly normal: Node[];
   private readonly trigger: HTMLButtonElement;
+  private readonly nodeTrigger: HTMLButtonElement;
+  private mode: 'highlight' | 'node' = 'highlight';
   private readonly layout: HTMLElement;
   private readonly normalClearance: string;
   private readonly normalClearancePriority: string;
@@ -76,8 +79,18 @@ export class TapHighlighter {
     trigger.title = 'Highlight mode';
     setIcon(trigger, 'highlighter');
     trigger.querySelector('svg')?.setAttribute('aria-hidden', 'true');
-    trigger.addEventListener('click', () => this.setActive(true), events);
+    trigger.addEventListener('click', () => this.setActive(true, true, 'highlight'), events);
     toolbar.append(trigger);
+    this.nodeTrigger = doc.createElement('button');
+    this.nodeTrigger.type = 'button';
+    this.nodeTrigger.className = 'reader-icon-button reader-tap-node-trigger';
+    this.nodeTrigger.setAttribute('aria-label', 'Create node');
+    this.nodeTrigger.title = 'Create node';
+    setTooltip(this.nodeTrigger, 'Create node');
+    setIcon(this.nodeTrigger, 'file-plus-2');
+    this.nodeTrigger.querySelector('svg')?.setAttribute('aria-hidden', 'true');
+    this.nodeTrigger.addEventListener('click', () => this.setActive(true, true, 'node'), events);
+    toolbar.append(this.nodeTrigger);
     this.normal = [...toolbar.childNodes];
     this.normalGrid = toolbar.style.getPropertyValue('grid-template-columns');
     this.normalGridPriority = toolbar.style.getPropertyPriority('grid-template-columns');
@@ -176,11 +189,11 @@ export class TapHighlighter {
         )
           return;
         if (this.down && this.down.root !== this.body.firstChild) return;
-        if (options.onTarget?.(event)) return;
+        if (this.mode === 'highlight' && options.onTarget?.(event)) return;
         const word = this.picker.wordAt(event.clientX, event.clientY);
         if (!word) return;
         if (!this.first) {
-          if (options.onPassage?.(word, event)) {
+          if (this.mode === 'highlight' && options.onPassage?.(word, event)) {
             if (!this.dead) this.update();
             return;
           }
@@ -197,7 +210,7 @@ export class TapHighlighter {
           options.notify(new Error(message));
           return;
         }
-        void this.run(() => options.save(range));
+        this.save(range);
       },
       { ...events, capture: true },
     );
@@ -241,7 +254,7 @@ export class TapHighlighter {
       },
       { ...events, capture: true },
     );
-    this.setActive(options.active, false);
+    this.setActive(options.active, false, options.mode);
   }
 
   get active(): boolean {
@@ -266,9 +279,10 @@ export class TapHighlighter {
     if (!this.dead) this.update();
   }
 
-  setActive(active: boolean, notify = true): void {
+  setActive(active: boolean, notify = true, mode: 'highlight' | 'node' = 'highlight'): void {
     if (this.dead || this.busy) return;
     if (!active) this.options.clearPassage?.(notify);
+    this.mode = mode;
     this.enabled = active;
     this.first = undefined;
     this.down = undefined;
@@ -277,7 +291,9 @@ export class TapHighlighter {
     this.toolbar.classList.toggle('reader-tap-highlight-toolbar', active);
     this.toolbar.replaceChildren(...(active ? [this.panel] : this.normal));
     this.update();
-    if (notify) this.options.modeChanged(active);
+    if (notify)
+      if (mode === 'node' && active) this.options.modeChanged(active, 'node');
+      else this.options.modeChanged(active);
   }
 
   private button(label: string, icon: string, action: () => void): HTMLButtonElement {
@@ -309,7 +325,21 @@ export class TapHighlighter {
   private choose(kind: 'sentence' | 'paragraph'): void {
     if (!this.first || this.busy || this.actionSet) return;
     const range = this.picker[kind](this.first);
-    if (range) void this.run(() => this.options.save(range));
+    if (range) this.save(range);
+  }
+
+  private save(range: Range): void {
+    if (this.mode === 'highlight') {
+      void this.run(() => this.options.save(range));
+      return;
+    }
+    // The provider's picker may never settle. Keep Done/Escape and navigation
+    // available; a new intent or exit cancels the source-bound request.
+    this.first = undefined;
+    this.update();
+    void this.options.save(range, 'node').catch((error: unknown) => {
+      if (!this.dead) this.options.notify(error);
+    });
   }
 
   private async run(action: () => Promise<void>): Promise<void> {
@@ -328,7 +358,7 @@ export class TapHighlighter {
   }
 
   private update(): void {
-    const actions = this.options.passageActions?.();
+    const actions = this.mode === 'highlight' ? this.options.passageActions?.() : undefined;
     const actionSet = actions?.length ? actions : undefined;
     if (actionSet !== this.actionSet) {
       this.actionSet = actionSet;
@@ -366,16 +396,20 @@ export class TapHighlighter {
       button.disabled = this.busy || !!this.actionSet?.[index].disabled;
     this.sentence.disabled = this.paragraph.disabled = this.busy || !this.first;
     this.done.disabled = this.busy;
-    this.undo.hidden = !this.undoAvailable;
+    this.undo.hidden = this.mode === 'node' || !this.undoAvailable;
     this.undo.disabled = this.busy;
     this.hint.hidden = !this.enabled;
     this.hint.textContent = this.busy
-      ? 'Saving…'
+      ? this.mode === 'node'
+        ? 'Creating…'
+        : 'Saving…'
       : this.first
         ? 'Tap the last word, or choose below'
         : this.actionSet
           ? 'Highlight selected'
-          : 'Tap the first word';
+          : this.mode === 'node'
+            ? 'Tap the first word to create a note'
+            : 'Tap the first word';
     this.paint();
   }
 
@@ -383,7 +417,10 @@ export class TapHighlighter {
     if (!this.dead && this.enabled) {
       const width = this.viewport.parentElement?.clientWidth ?? 0;
       if (width > 0) {
-        const count = (this.actionSet?.length ?? 2) + 1 + Number(this.undoAvailable);
+        const count =
+          (this.actionSet?.length ?? 2) +
+          1 +
+          Number(this.mode === 'highlight' && this.undoAvailable);
         // Leave room for the bar's padding and edge clearance, then balance rows.
         const capacity = Math.max(1, Math.floor((width - 28) / 48));
         const columns = Math.ceil(count / Math.ceil(count / capacity));
@@ -446,6 +483,7 @@ export class TapHighlighter {
     this.preview.remove();
     this.hint.remove();
     this.trigger.remove();
+    this.nodeTrigger.remove();
     if (ownsToolbar) {
       this.toolbar.replaceChildren(...this.original);
       this.body.classList.remove('reader-tap-highlight-mode');

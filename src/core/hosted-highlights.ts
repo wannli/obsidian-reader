@@ -323,6 +323,28 @@ export function replacePassageHosts(
   return { ...hosted, removed: false };
 }
 
+/** Convert a fresh selection without ever persisting highlight marks or a quotation.
+ * Reuse the same guarded passage conversion as explicit highlight conversion. */
+export function mentionSelection(
+  body: string,
+  selection: HighlightSelection,
+  nodePath: string,
+): { body: string; blockId: string } {
+  const range = locateSelection(body, selection.quote, selection.before, selection.after);
+  const previous = passages(body);
+  const marked = addHighlight(body, range.from, range.to);
+  const created = passages(marked);
+  const passage = created[previous.filter((item) => item.to <= range.from).length];
+  if (
+    !passage ||
+    created.length !== previous.length + 1 ||
+    inlineProjection(passageQuote(marked, passage)).text.replace(/\s+/gu, ' ').trim() !==
+      selection.quote.replace(/\s+/gu, ' ').trim()
+  )
+    throw new ChangedNote('The selected passage could not be mapped safely.');
+  return convertPassage(marked, passage, nodePath);
+}
+
 /** Convert mark text to ordinary native node mentions, keeping its surrounding
  * emphasis. Publisher links cannot acquire a second destination: refuse their
  * conversion rather than replacing/nesting a URL or inventing another reference. */

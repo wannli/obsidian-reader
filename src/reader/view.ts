@@ -32,6 +32,7 @@ import {
 import {
   convertPassage,
   hostSelection,
+  mentionSelection,
   hostPassage,
   passageHosts,
   replacePassageHosts,
@@ -131,6 +132,7 @@ export class ReaderView extends ItemView {
     mode: 'selected' | 'explicit';
   };
   private tapMode = false;
+  private tapKind: 'highlight' | 'node' = 'highlight';
   private tapUndo?: { snapshot: Snapshot<TFile>; before: string; passage: Passage };
   private tapUndoUntil = 0;
   private tapUndoTimer?: ReturnType<typeof setTimeout>;
@@ -1138,9 +1140,11 @@ export class ReaderView extends ItemView {
     const surface = this.surface;
     this.tapHighlighter = new TapHighlighter(surface.viewport, surface.body, this.actions, {
       active: this.tapMode,
+      mode: this.tapKind,
       canUndo: !!this.tapUndo && Date.now() <= this.tapUndoUntil,
-      modeChanged: (active) => {
+      modeChanged: (active, mode) => {
         this.tapMode = active;
+        if (active) this.tapKind = mode === 'node' ? 'node' : 'highlight';
         this.invalidateSelection();
         this.automatic = undefined;
         this.lastSelection = '';
@@ -1167,7 +1171,10 @@ export class ReaderView extends ItemView {
           this.cancelNodeCreation();
         }
       },
-      save: (range) => this.saveTapSelection(surface.body, range),
+      save: (range, mode) =>
+        mode === 'node'
+          ? this.saveTapNode(surface.body, range)
+          : this.saveTapSelection(surface.body, range),
       undo: () => this.undoTapHighlight(),
       notify: (error) => this.error(error),
     });
@@ -1402,6 +1409,69 @@ export class ReaderView extends ItemView {
     } finally {
       if (this.writing === promise) this.writing = undefined;
     }
+  }
+  private saveTapNode(root: HTMLElement, range: Range): Promise<void> {
+    // Capture exactly the same rendered, block-scoped tap range as Highlight mode.
+    const selection = selectedPassage(root, range),
+      snapshot = this.snapshot,
+      displayed = this.surface?.displayedBody,
+      generation = this.generation,
+      signal = this.articleLifetime.signal;
+    if (!selection || !snapshot)
+      return Promise.reject(new Error('Tap a word in the current article first.'));
+    return this.operation(async () => {
+      await this.positionWrite;
+      const base = this.snapshot;
+      if (
+        signal.aborted ||
+        this.stopping ||
+        !this.current(snapshot, generation) ||
+        !base ||
+        base.body !== snapshot.body ||
+        displayed !== base.body
+      )
+        throw new Error('The article changed. Tap the first word again.');
+      this.assertDisplayed(base);
+      locateSelection(base.body, selection.quote, selection.before, selection.after);
+      const promise = this.withHighlightHost(
+        base,
+        selection.quote,
+        {
+          title: 'Create node from passage',
+          actionLabel: 'Link passage',
+          multiple: false,
+          // No inherited highlight host: choosing an existing typed note is explicit.
+        },
+        async (source, nodes, createdPaths, validate) => {
+          const guard = () => {
+            if (signal.aborted || this.stopping || !this.current(base, generation))
+              throw new Error('The article changed before the note link could be saved.');
+            this.assertDisplayed(source);
+            validate();
+          };
+          guard();
+          const edit = {
+            ...mentionSelection(source.body, selection, nodes[0].path),
+            quoteMarkdown: '',
+          };
+          return this.collectHosted(source, edit, nodes, createdPaths, guard, 'mention');
+        },
+      );
+      this.writing = promise;
+      try {
+        const saved = await promise;
+        if (!saved || signal.aborted || !this.current(base, generation) || this.stopping) return;
+        this.automatic = undefined;
+        this.lastSelection = '';
+        this.ownDeferred = undefined;
+        this.clearTapUndo();
+        this.surface?.setBody(saved.body, text(saved.properties.url));
+        this.tapHighlighter?.reset();
+        this.controls();
+      } finally {
+        if (this.writing === promise) this.writing = undefined;
+      }
+    });
   }
   private saveTapSelection(root: HTMLElement, range: Range): Promise<void> {
     // Capture text and source synchronously, before another operation or repaint can run.

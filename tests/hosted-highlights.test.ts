@@ -11,6 +11,7 @@ import {
   convertPassage,
   hostPassage,
   hostSelection,
+  mentionSelection,
   paragraphAnchors,
   paragraphPassages,
   passageHosts,
@@ -21,6 +22,28 @@ import { inlineProjection, selectionPlan } from '../src/core/projection';
 
 const host = 'Concepts/Trust.md';
 const withoutAnchor = (body: string) => body.replace(/ \^[a-zA-Z0-9-]+(?=\s*$)/, '');
+
+describe('node creation from a fresh selection', () => {
+  it('writes an ordinary aliased link and paragraph anchor without saving highlight or citation marks', () => {
+    const body = 'Institutions build trust in public decisions.';
+    const result = mentionSelection(body, { quote: 'build trust' }, 'Nodes/Trust.md');
+    expect(result.body).toContain('[[Nodes/Trust|build trust]]');
+    expect(result.body).toContain(`^${result.blockId}`);
+    expect(result.body).not.toContain('==');
+    expect(result.body).not.toContain('(※');
+  });
+
+  it('refuses publisher links and ambiguous selections without mutating their original body', () => {
+    const body = 'Read [the report](https://example.com) before the meeting.';
+    expect(() => mentionSelection(body, { quote: 'the report' }, 'Nodes/Report')).toThrow(
+      /publisher link/i,
+    );
+    expect(() =>
+      mentionSelection('Same words. Same words.', { quote: 'Same words' }, 'Nodes/Same'),
+    ).toThrow();
+    expect(body).toBe('Read [the report](https://example.com) before the meeting.');
+  });
+});
 
 describe('native hosted highlights', () => {
   it('keeps an ordinary mark, native hosts and one shared paragraph anchor', () => {

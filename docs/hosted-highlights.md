@@ -39,6 +39,7 @@ All destinations for one highlight share a single pill using Obsidian’s native
 - The article’s existing `topics` also appear in the top reading header with the same compact pill styling and Fileclass icons. A matching authored title remains untouched in the body, below that metadata row. This is metadata presentation, not a new tag field or a filing gesture.
 - The article-level **Related notes** action separately edits remembered defaults. It does not reassign earlier highlights or erase previously filed quotes.
 - Explicit **Convert to note link** still chooses one note, since one source phrase becomes one ordinary wikilink rather than a collection.
+- The separate **Create node** article control uses the same first/last word or Sentence/Paragraph tap range as Highlight mode, but does not save a highlight first. It opens typed destination choice (including explicit public creation), without inheriting a highlight default. The article receives an ordinary aliased note link and paragraph anchor, no `==` or quotation snapshot. A newly created destination receives `origin` for that paragraph; reuse never changes an existing origin. Publisher-link conflicts and unmappable selections fail without altering the source.
 
 ## Typed destination selection
 

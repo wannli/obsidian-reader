@@ -240,6 +240,45 @@ it('switches the same toolbar contextually and restores the exact original actio
   expect(f.options.save).not.toHaveBeenCalled();
 });
 
+it('creates a node through the same two-tap and sentence ranges without invoking highlight actions', async () => {
+  const action = passageAction();
+  const f = fixture({ active: false, canUndo: true, passageActions: () => [action] });
+  button(f.toolbar, 'Create node').click();
+  expect(f.controller.active).toBe(true);
+  expect(f.toolbar.querySelector('[data-action="link"]')).toBeNull();
+  expect(button(f.toolbar, 'Undo').hidden).toBe(true);
+  tap(f);
+  tap(f, 80);
+  await Promise.resolve();
+  expect(f.options.save).toHaveBeenCalledExactlyOnceWith(f.inclusive, 'node');
+  tap(f);
+  button(f.toolbar, 'Sentence').click();
+  await Promise.resolve();
+  expect(f.options.save).toHaveBeenLastCalledWith(f.sentence, 'node');
+  expect(action.run).not.toHaveBeenCalled();
+  expect(f.body.querySelector('mark')).toBeNull();
+  button(f.toolbar, 'Done').click();
+  expect(button(f.toolbar, 'Highlight mode')).toBeDefined();
+});
+
+it('keeps Done responsive while node creation is waiting on an uncooperative picker', async () => {
+  const f = fixture({ active: false, canUndo: false });
+  let resolve!: () => void;
+  const pending = new Promise<void>((settle) => {
+    resolve = settle;
+  });
+  f.options.save.mockReturnValueOnce(pending);
+  button(f.toolbar, 'Create node').click();
+  tap(f);
+  tap(f, 80);
+  expect(f.options.save).toHaveBeenCalledExactlyOnceWith(f.inclusive, 'node');
+  expect(button(f.toolbar, 'Done').disabled).toBe(false);
+  button(f.toolbar, 'Done').click();
+  expect(f.controller.active).toBe(false);
+  resolve();
+  await pending;
+});
+
 it('balances seven passage actions into narrow rows without stranding Done', () => {
   const layout = document.createElement('div');
   const viewport = document.createElement('div');
@@ -855,12 +894,12 @@ it('updates Undo availability in place without losing a pending endpoint', async
 });
 
 it.each([
-  [320, 7, 4],
-  [390, 7, 4],
-  [1280, 7, 8],
-  [320, 9, 5],
-  [390, 9, 5],
-  [1280, 9, 10],
+  [320, 7, 5],
+  [390, 7, 5],
+  [1280, 7, 9],
+  [320, 9, 6],
+  [390, 9, 6],
+  [1280, 9, 11],
 ])(
   'balances the normal toolbar at pane width %i with %i existing actions',
   (width, existing, columns) => {
@@ -881,7 +920,7 @@ it.each([
       notify: vi.fn(),
     });
     try {
-      expect(toolbar.querySelectorAll('button')).toHaveLength(existing + 1);
+      expect(toolbar.querySelectorAll('button')).toHaveLength(existing + 2);
       expect(toolbar.style.gridTemplateColumns).toBe(`repeat(${columns}, 44px)`);
     } finally {
       controller.dispose();
