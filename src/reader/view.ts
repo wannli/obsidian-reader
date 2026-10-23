@@ -1,6 +1,7 @@
 import {
   ItemView,
   Notice,
+  Platform,
   parseLinktext,
   setIcon,
   setTooltip,
@@ -485,6 +486,7 @@ export class ReaderView extends ItemView {
     label: string,
     action: () => void | Promise<void>,
     icon?: string,
+    shortcut?: string,
   ): HTMLButtonElement {
     const button = parent.createEl(
       'button',
@@ -492,9 +494,13 @@ export class ReaderView extends ItemView {
     );
     if (icon) {
       setIcon(button, icon);
-      setTooltip(button, label);
+      setTooltip(button, shortcut ? `${label} (${shortcut.toUpperCase()})` : label);
       button.setAttribute('aria-label', label);
       button.querySelector('svg')?.setAttribute('aria-hidden', 'true');
+    }
+    if (shortcut) {
+      button.dataset.readerKey = shortcut;
+      button.setAttribute('aria-keyshortcuts', shortcut.toUpperCase());
     }
     button.addEventListener('click', () => {
       // Let the action register navigation intent synchronously, before yielding.
@@ -546,9 +552,21 @@ export class ReaderView extends ItemView {
     this.contentEl.createEl('p', {
       text: 'Reader will not edit this file in its current state. Open Markdown to inspect it.',
     });
-    this.button(this.contentEl, 'Open Markdown', () => this.openMarkdown(file), 'file-pen-line');
-    this.button(this.contentEl, 'Retry Reader', () => this.openArticle(file.path), 'refresh-cw');
-    this.button(this.contentEl, 'Back to list', () => this.readingList(), 'list');
+    this.button(
+      this.contentEl,
+      'Open Markdown',
+      () => this.openMarkdown(file),
+      'file-pen-line',
+      'o',
+    );
+    this.button(
+      this.contentEl,
+      'Retry Reader',
+      () => this.openArticle(file.path),
+      'refresh-cw',
+      'r',
+    );
+    this.button(this.contentEl, 'Back to list', () => this.readingList(), 'list', 'b');
   }
   showList(queue = this.queue): void {
     this.clear();
@@ -575,10 +593,11 @@ export class ReaderView extends ItemView {
           this.showList(name);
         },
         { Inbox: 'inbox', Feed: 'rss', Later: 'clock' }[name],
+        { Inbox: 'i', Feed: 'f', Later: 'l' }[name],
       );
       button.classList.toggle('mod-cta', name === queue);
     }
-    this.button(tabs, 'Add URL', () => this.host.capture(), 'plus');
+    this.button(tabs, 'Add URL', () => this.host.capture(), 'plus', 'u');
     const filterButton = this.button(
       tabs,
       'Filter by topic',
@@ -591,6 +610,7 @@ export class ReaderView extends ItemView {
         this.showList();
       },
       'list-filter',
+      't',
     );
     filterButton.classList.toggle('reader-filter-active', !!this.topicFilter);
     filterButton.setAttribute('aria-pressed', String(!!this.topicFilter));
@@ -631,6 +651,7 @@ export class ReaderView extends ItemView {
             render();
           },
           'chevrons-down',
+          'm',
         );
     };
     if (!this.topicFilter) {
@@ -1091,6 +1112,7 @@ export class ReaderView extends ItemView {
           label,
           () => (direction === 1 ? this.finish('next') : this.navigate(-1)),
           `${this.surface.paged ? 'chevrons' : 'chevron'}-${direction === -1 ? 'left' : 'right'}`,
+          direction === -1 ? 'p' : 'n',
         );
         button.disabled =
           direction === -1 &&
@@ -1111,27 +1133,29 @@ export class ReaderView extends ItemView {
             this.controls();
           },
           direction === -1 ? 'chevron-left' : 'chevron-right',
+          direction === -1 ? 'z' : 'x',
         );
         button.disabled = this.surface.atBoundary(direction);
       }
     }
-    this.button(this.actions, 'Related notes', () => this.topics(), 'tags');
+    this.button(this.actions, 'Related notes', () => this.topics(), 'tags', 't');
     const savedForLater = this.host.store.catalog.article(this.snapshot.path)?.queue === 'Later';
     this.button(
       this.actions,
       savedForLater ? 'Saved to Later' : 'Read later',
       () => this.move('Later'),
       savedForLater ? 'clock-check' : 'clock',
+      'l',
     );
-    this.button(this.actions, 'Archive', () => this.finish('keep'), 'archive').setAttribute(
+    this.button(this.actions, 'Archive', () => this.finish('keep'), 'archive', 'a').setAttribute(
       'aria-label',
       'Archive and advance',
     );
-    this.button(this.actions, 'Delete', () => this.finish('delete'), 'trash-2').setAttribute(
+    this.button(this.actions, 'Delete', () => this.finish('delete'), 'trash-2', 'd').setAttribute(
       'aria-label',
       'Trash article and advance',
     );
-    this.button(this.actions, 'List', () => this.readingList(), 'list');
+    this.button(this.actions, 'List', () => this.readingList(), 'list', 'b');
     this.setupTapHighlighter();
     this.updateStatus();
   }
@@ -1196,6 +1220,7 @@ export class ReaderView extends ItemView {
         'Retry',
         () => this.host.ingestion.acquire(this.snapshot!.file.path, true),
         'refresh-cw',
+        'r',
       );
   }
   private invalidateSelection(): number {
@@ -1439,6 +1464,7 @@ export class ReaderView extends ItemView {
         {
           title: 'Create node from passage',
           actionLabel: 'Link passage',
+          tone: 'node',
           multiple: false,
           // No inherited highlight host: choosing an existing typed note is explicit.
         },
@@ -1914,6 +1940,7 @@ export class ReaderView extends ItemView {
             '',
             {
               title: 'Related notes',
+              tone: 'neutral',
               multiple: true,
               selectedPaths,
               minSelection: 0,
@@ -2090,6 +2117,7 @@ export class ReaderView extends ItemView {
       selectedPaths?: string[];
       minSelection?: number;
       actionLabel?: string;
+      tone?: 'highlight' | 'node' | 'neutral';
       allowCreate?: boolean;
       onCreateAttempt?: (existing: NodeResult[]) => void;
       onSelected?: (nodes: NodeResult[]) => void;
@@ -2284,6 +2312,7 @@ export class ReaderView extends ItemView {
                 selectedPaths: [...(options.selectedPaths ?? [])],
                 minSelection: minimum,
                 actionLabel: options.actionLabel ?? 'Add highlight',
+                tone: options.tone ?? 'highlight',
                 allowCreate: options.allowCreate,
                 allowPickFromArticle: !!options.onPickFromArticle,
                 signal: request.controller.signal,
@@ -2783,6 +2812,7 @@ export class ReaderView extends ItemView {
         minSelection: mode === 'mention' ? 1 : 0,
         selectedPaths: previousPaths,
         actionLabel: mode === 'mention' ? 'Convert to note link' : 'Apply',
+        tone: mode === 'mention' ? 'node' : 'highlight',
         epoch,
         ...(choice?.direct ? { directNodes: choice.direct } : {}),
         ...(choice?.limited ? { nodes: choice.limited } : {}),
@@ -3124,8 +3154,7 @@ export class ReaderView extends ItemView {
       event.metaKey ||
       event.altKey ||
       event.shiftKey ||
-      !this.snapshot ||
-      !this.surface ||
+      event.isComposing ||
       this.dialog ||
       this.containerEl.ownerDocument.getSelection()?.isCollapsed === false
     )
@@ -3137,6 +3166,23 @@ export class ReaderView extends ItemView {
       this.containerEl.ownerDocument.querySelector('.modal-container,.menu')
     )
       return;
+    // Route letters through the currently visible controls, not duplicate action logic.
+    // This also works after the first tap in Highlight/Create node mode: the tap
+    // range is transient and the enabled Sentence/Paragraph buttons own saving.
+    if (!Platform.isMobile && !event.repeat && /^[a-z]$/.test(event.key)) {
+      const button = Array.from(
+        this.contentEl.querySelectorAll<HTMLButtonElement>('button[data-reader-key]'),
+      ).find(
+        (candidate) =>
+          candidate.dataset.readerKey === event.key && !candidate.disabled && !candidate.hidden,
+      );
+      if (button) {
+        event.preventDefault();
+        button.click();
+        return;
+      }
+    }
+    if (!this.snapshot || !this.surface) return;
     const direction = ['ArrowDown', 'PageDown'].includes(event.key)
       ? 1
       : ['ArrowUp', 'PageUp'].includes(event.key)

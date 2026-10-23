@@ -57,6 +57,27 @@ body.is-mobile.reader-mobile-active .mobile-navbar {
 .reader-view button.reader-icon-button:not(:disabled):hover {
   background: var(--background-modifier-hover) !important;
 }
+/* Distinct, quiet action families without coloring unrelated native controls. */
+.reader-view button.reader-tap-highlight-trigger,
+.reader-view .reader-tap-highlight-toolbar:not(.reader-tap-node-toolbar) button.reader-icon-button {
+  border-color: rgba(var(--color-yellow-rgb, 224, 172, 0), 0.38) !important;
+  background: rgba(var(--color-yellow-rgb, 224, 172, 0), 0.13) !important;
+}
+.reader-view button.reader-tap-node-trigger,
+.reader-view .reader-tap-node-toolbar button.reader-icon-button {
+  border-color: rgba(var(--color-green-rgb, 46, 139, 87), 0.38) !important;
+  background: rgba(var(--color-green-rgb, 46, 139, 87), 0.13) !important;
+}
+.reader-view button.reader-tap-highlight-trigger:not(:disabled):hover,
+.reader-view
+  .reader-tap-highlight-toolbar:not(.reader-tap-node-toolbar)
+  button.reader-icon-button:not(:disabled):hover {
+  background: rgba(var(--color-yellow-rgb, 224, 172, 0), 0.22) !important;
+}
+.reader-view button.reader-tap-node-trigger:not(:disabled):hover,
+.reader-view .reader-tap-node-toolbar button.reader-icon-button:not(:disabled):hover {
+  background: rgba(var(--color-green-rgb, 46, 139, 87), 0.22) !important;
+}
 .reader-view button.reader-icon-button:disabled {
   opacity: 0.45;
 }
@@ -499,6 +520,10 @@ body.is-mobile.reader-mobile-active .mobile-navbar {
   background: var(--text-highlight-bg, rgb(255 208 0 / 35%));
   border: 2px solid var(--text-accent, Highlight);
 }
+.reader-tap-node-preview > span {
+  background: rgba(var(--color-green-rgb, 46, 139, 87), 0.23);
+  border-color: rgba(var(--color-green-rgb, 46, 139, 87), 0.75);
+}
 .reader-tap-highlight-status[hidden],
 .reader-tap-highlight-actions > button[hidden] {
   display: none;
@@ -671,6 +696,35 @@ dialog.reader-image-viewer,
 
 .reader-highlight-picker-modal {
   width: min(560px, calc(100vw - 24px));
+}
+.reader-highlight-picker-modal.reader-picker-highlight {
+  --reader-picker-rgb: var(--color-yellow-rgb, 224, 172, 0);
+}
+.reader-highlight-picker-modal.reader-picker-node {
+  --reader-picker-rgb: var(--color-green-rgb, 46, 139, 87);
+}
+.reader-highlight-picker-modal:is(.reader-picker-highlight, .reader-picker-node) {
+  border: 1px solid rgba(var(--reader-picker-rgb), 0.28);
+  background-image: linear-gradient(
+    rgba(var(--reader-picker-rgb), 0.055),
+    rgba(var(--reader-picker-rgb), 0.018) 50%,
+    transparent
+  );
+}
+.reader-highlight-picker-modal:is(.reader-picker-highlight, .reader-picker-node) .modal-title {
+  color: var(--text-normal);
+  border-inline-start: 3px solid rgba(var(--reader-picker-rgb), 0.65);
+  padding-inline-start: var(--size-4-2);
+}
+.reader-highlight-picker-modal:is(.reader-picker-highlight, .reader-picker-node)
+  .reader-highlight-picker-search {
+  border-bottom-color: rgba(var(--reader-picker-rgb), 0.4);
+}
+.reader-highlight-picker-modal:is(.reader-picker-highlight, .reader-picker-node)
+  .reader-highlight-picker-footer
+  .mod-cta {
+  background: rgba(var(--reader-picker-rgb), 0.18);
+  color: var(--text-normal);
 }
 /* This is a native Modal, not the absolutely positioned command prompt. */
 .reader-highlight-picker-modal.prompt {

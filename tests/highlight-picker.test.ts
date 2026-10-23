@@ -137,6 +137,16 @@ function open(options: HighlightHostPickerOptions = {}) {
 
 // Every case also asserts no standalone creation, linked creation, shared picker, or writes.
 describe('existing typed highlight notes', () => {
+  it('scopes faint picker accents to highlight or node intent, leaving related notes neutral', async () => {
+    for (const tone of ['highlight', 'node', 'neutral'] as const) {
+      const { choice } = open({ tone });
+      const modal = document.querySelector('.reader-highlight-picker-modal')!;
+      expect(modal.classList.contains('reader-picker-highlight')).toBe(tone === 'highlight');
+      expect(modal.classList.contains('reader-picker-node')).toBe(tone === 'node');
+      button('Cancel').click();
+      expect(await choice).toBeNull();
+    }
+  });
   it('omits articles and feeds from search, filters and creation without hiding other notes', async () => {
     const article = node('Article', ['article']);
     const feed = node('Feed', ['feed']);

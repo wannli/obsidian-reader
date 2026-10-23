@@ -77,6 +77,9 @@ export class TapHighlighter {
     trigger.className = 'reader-icon-button reader-tap-highlight-trigger';
     trigger.setAttribute('aria-label', 'Highlight mode');
     trigger.title = 'Highlight mode';
+    setTooltip(trigger, 'Highlight mode (H)');
+    trigger.setAttribute('aria-label', 'Highlight mode');
+    this.shortcut(trigger, 'h');
     setIcon(trigger, 'highlighter');
     trigger.querySelector('svg')?.setAttribute('aria-hidden', 'true');
     trigger.addEventListener('click', () => this.setActive(true, true, 'highlight'), events);
@@ -86,7 +89,9 @@ export class TapHighlighter {
     this.nodeTrigger.className = 'reader-icon-button reader-tap-node-trigger';
     this.nodeTrigger.setAttribute('aria-label', 'Create node');
     this.nodeTrigger.title = 'Create node';
-    setTooltip(this.nodeTrigger, 'Create node');
+    setTooltip(this.nodeTrigger, 'Create node (C)');
+    this.nodeTrigger.setAttribute('aria-label', 'Create node');
+    this.shortcut(this.nodeTrigger, 'c');
     setIcon(this.nodeTrigger, 'file-plus-2');
     this.nodeTrigger.querySelector('svg')?.setAttribute('aria-hidden', 'true');
     this.nodeTrigger.addEventListener('click', () => this.setActive(true, true, 'node'), events);
@@ -96,12 +101,17 @@ export class TapHighlighter {
     this.normalGridPriority = toolbar.style.getPropertyPriority('grid-template-columns');
     this.panel = doc.createElement('div');
     this.panel.className = 'reader-tap-highlight-actions';
-    this.sentence = this.button('Sentence', 'text-select', () => this.choose('sentence'));
-    this.paragraph = this.button('Paragraph', 'pilcrow', () => this.choose('paragraph'));
-    this.undo = this.button('Undo', 'undo-2', () => {
-      if (this.undoAvailable) void this.run(() => options.undo());
-    });
-    this.done = this.button('Done', 'check', () => this.setActive(false));
+    this.sentence = this.button('Sentence', 'text-select', () => this.choose('sentence'), 's');
+    this.paragraph = this.button('Paragraph', 'pilcrow', () => this.choose('paragraph'), 'p');
+    this.undo = this.button(
+      'Undo',
+      'undo-2',
+      () => {
+        if (this.undoAvailable) void this.run(() => options.undo());
+      },
+      'u',
+    );
+    this.done = this.button('Done', 'check', () => this.setActive(false), 'd');
     this.hint = doc.createElement('div');
     // Announce state without a visible explainer or extra space above the bar.
     this.hint.className = 'reader-tap-highlight-status';
@@ -289,6 +299,8 @@ export class TapHighlighter {
     this.moved = false;
     this.body.classList.toggle('reader-tap-highlight-mode', active);
     this.toolbar.classList.toggle('reader-tap-highlight-toolbar', active);
+    this.toolbar.classList.toggle('reader-tap-node-toolbar', active && mode === 'node');
+    this.preview.classList.toggle('reader-tap-node-preview', active && mode === 'node');
     this.toolbar.replaceChildren(...(active ? [this.panel] : this.normal));
     this.update();
     if (notify)
@@ -296,13 +308,20 @@ export class TapHighlighter {
       else this.options.modeChanged(active);
   }
 
-  private button(label: string, icon: string, action: () => void): HTMLButtonElement {
+  private shortcut(button: HTMLButtonElement, key: string): void {
+    button.dataset.readerKey = key;
+    button.setAttribute('aria-keyshortcuts', key.toUpperCase());
+  }
+
+  private button(label: string, icon: string, action: () => void, key?: string): HTMLButtonElement {
     const element = this.body.ownerDocument.createElement('button');
     element.type = 'button';
     element.className = 'reader-icon-button';
     element.setAttribute('aria-label', label);
     element.title = label;
-    setTooltip(element, label);
+    setTooltip(element, key ? `${label} (${key.toUpperCase()})` : label);
+    element.setAttribute('aria-label', label);
+    if (key) this.shortcut(element, key);
     setIcon(element, icon);
     element.querySelector('svg')?.setAttribute('aria-hidden', 'true');
     element.addEventListener(
@@ -383,6 +402,20 @@ export class TapHighlighter {
             }
           });
           element.dataset.action = action.id;
+          const key = {
+            'link-note': 'a',
+            'convert-node': 'c',
+            'open-note': 'o',
+            'remove-highlight': 'r',
+            unlink: 'x',
+            'retry-note-updates': 't',
+            'cancel-send': 'b',
+          }[action.id];
+          if (key) {
+            this.shortcut(element, key);
+            setTooltip(element, `${action.label} (${key.toUpperCase()})`);
+            element.setAttribute('aria-label', action.label);
+          }
           return element;
         }) ?? [];
       this.panel.replaceChildren(

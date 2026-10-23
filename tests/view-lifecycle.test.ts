@@ -869,6 +869,31 @@ describe('automatic selection event ownership', () => {
     await Promise.resolve();
   }
 
+  it.each([
+    ['s', 'Sentence'],
+    ['p', 'Paragraph'],
+  ])('uses %s after the first tapped word to save a %s highlight', async (key, label) => {
+    armTapHighlight();
+    const before = new KeyboardEvent('keydown', { key, cancelable: true });
+    f.view.key(before);
+    expect(before.defaultPrevented).toBe(false); // Disabled until the first word.
+    await tapWord();
+    expect(tapAction(label).disabled).toBe(false);
+    const event = new KeyboardEvent('keydown', { key, cancelable: true });
+    f.view.key(event);
+    expect(event.defaultPrevented).toBe(true);
+    await tapSettled();
+    expect((await f.store.read(f.article.path)).body).toBe(
+      expectedHosted('==Alpha phrase.==\n\nBeta phrase.'),
+    );
+    expect(f.probe.tapHighlighter.active).toBe(true);
+    expect(tapAction('Done').getAttribute('aria-keyshortcuts')).toBe('D');
+    const done = new KeyboardEvent('keydown', { key: 'd', cancelable: true });
+    f.view.key(done);
+    expect(done.defaultPrevented).toBe(true);
+    expect(f.probe.tapHighlighter.active).toBe(false);
+  });
+
   it.each(['Sentence', 'Paragraph'])(
     'saves a tap-%s highlight immediately through the guarded store and supports Undo',
     async (action) => {
@@ -2432,6 +2457,49 @@ describe('public reading-list command and URI', () => {
   });
 });
 
+describe('desktop button shortcuts', () => {
+  const press = (view: ReaderView, key: string, options: KeyboardEventInit = {}) => {
+    const event = new KeyboardEvent('keydown', { key, cancelable: true, ...options });
+    view.key(event);
+    return event;
+  };
+  it('routes article and list letters through visible buttons only', async () => {
+    const f = hostFixture();
+    const a = await f.note('Reading/Inbox/A.md');
+    const b = await f.note('Reading/Inbox/B.md');
+    await f.note('Reading/Inbox/C.md');
+    await f.view.openArticle(b.path, true);
+    expect(press(f.view, 'p').defaultPrevented).toBe(true);
+    await f.probe.operations;
+    expect(f.view.file).toBe(a);
+    expect(press(f.view, 'b').defaultPrevented).toBe(true);
+    await f.probe.operations;
+    expect(f.view.contentEl.querySelector('.reader-list')).not.toBeNull();
+    for (const key of ['f', 'l', 'i']) expect(press(f.view, key).defaultPrevented).toBe(true);
+    expect(press(f.view, 'a').defaultPrevented).toBe(false);
+    const capture = vi.spyOn(f.host, 'capture');
+    expect(press(f.view, 'u').defaultPrevented).toBe(true);
+    expect(capture).toHaveBeenCalledOnce();
+  });
+  it('guards repeats, mobile, modifiers and typing', async () => {
+    const f = hostFixture();
+    const b = await f.note('Reading/Inbox/B.md');
+    await f.view.openArticle(b.path, true);
+    const archive = vi.spyOn(f.store, 'move');
+    for (const options of [{ repeat: true }, { ctrlKey: true }, { shiftKey: true }])
+      expect(press(f.view, 'a', options).defaultPrevented).toBe(false);
+    Platform.isMobile = true;
+    expect(press(f.view, 'a').defaultPrevented).toBe(false);
+    Platform.isMobile = false;
+    const input = document.body.appendChild(document.createElement('input'));
+    const event = new KeyboardEvent('keydown', { key: 'a', cancelable: true });
+    input.addEventListener('keydown', (e) => f.view.key(e), { once: true });
+    input.dispatchEvent(event);
+    expect(event.defaultPrevented).toBe(false);
+    expect(archive).not.toHaveBeenCalled();
+  });
+});
+
 describe('article keyboard boundaries', () => {
   it.each(
     ['list', 'Next', 'Previous', 'PageDown', 'PageUp'].flatMap((route) =>
@@ -3453,7 +3521,10 @@ describe('bounded Reader UI', () => {
     for (const button of buttons) {
       expect(button.textContent).toBe('');
       expect(button.querySelector('svg')?.getAttribute('aria-hidden')).toBe('true');
-      expect(setTooltip).toHaveBeenCalledWith(button, actionName(button));
+      expect(setTooltip).toHaveBeenCalledWith(
+        button,
+        `${actionName(button)} (${button.dataset.readerKey!.toUpperCase()})`,
+      );
       expect(setIcon).toHaveBeenCalledWith(button, expect.any(String));
     }
     expect(f.view.contentEl.querySelector('.reader-list-item')?.textContent).toContain(
@@ -3596,16 +3667,24 @@ describe('bounded Reader UI', () => {
         'Highlight mode',
         'Create node',
       ]);
-      expect(setTooltip).toHaveBeenCalledWith(buttons[2], 'Related notes');
-      expect(setTooltip).toHaveBeenCalledWith(buttons[3], 'Read later');
-      expect(setTooltip).toHaveBeenCalledWith(buttons[4], 'Archive');
+      expect(setTooltip).toHaveBeenCalledWith(buttons[2], 'Related notes (T)');
+      expect(setTooltip).toHaveBeenCalledWith(buttons[3], 'Read later (L)');
+      expect(setTooltip).toHaveBeenCalledWith(buttons[4], 'Archive (A)');
       expect(buttons[0].disabled).toBe(true);
       for (const button of buttons) {
         const css = window.getComputedStyle(button);
         expect(button.textContent).toBe('');
         expect(css.minWidth).toBe('44px');
         expect(css.minHeight).toBe('44px');
-        expect([css.padding, css.borderRadius, css.backgroundColor, css.border]).toEqual(treatment);
+        if (!button.matches('.reader-tap-highlight-trigger,.reader-tap-node-trigger'))
+          expect([css.padding, css.borderRadius, css.backgroundColor, css.border]).toEqual(
+            treatment,
+          );
+        else {
+          expect([css.padding, css.borderRadius]).toEqual(treatment.slice(0, 2));
+          // jsdom does not resolve rgba(var(--color-*-rgb)) theme tokens.
+          expect(style.textContent).toContain(`.reader-view button.${button.classList[1]}`);
+        }
       }
       expect(style.textContent.match(/\.reader-actions \{[^}]+\}/)?.[0]).not.toContain('border');
       const hr = f.probe.surface.body.appendChild(document.createElement('hr'));

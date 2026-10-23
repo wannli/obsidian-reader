@@ -245,6 +245,8 @@ it('creates a node through the same two-tap and sentence ranges without invoking
   const f = fixture({ active: false, canUndo: true, passageActions: () => [action] });
   button(f.toolbar, 'Create node').click();
   expect(f.controller.active).toBe(true);
+  expect(f.toolbar.classList.contains('reader-tap-node-toolbar')).toBe(true);
+  expect(f.host.querySelector('.reader-tap-node-preview')).not.toBeNull();
   expect(f.toolbar.querySelector('[data-action="link"]')).toBeNull();
   expect(button(f.toolbar, 'Undo').hidden).toBe(true);
   tap(f);
@@ -258,6 +260,7 @@ it('creates a node through the same two-tap and sentence ranges without invoking
   expect(action.run).not.toHaveBeenCalled();
   expect(f.body.querySelector('mark')).toBeNull();
   button(f.toolbar, 'Done').click();
+  expect(f.toolbar.classList.contains('reader-tap-node-toolbar')).toBe(false);
   expect(button(f.toolbar, 'Highlight mode')).toBeDefined();
 });
 
@@ -319,21 +322,22 @@ it('balances seven passage actions into narrow rows without stranding Done', () 
 
 it('uses icon-only actions with accessible names and tooltips instead of a visible explainer', () => {
   const f = fixture();
-  for (const [label, icon] of [
-    ['Sentence', 'text-select'],
-    ['Paragraph', 'pilcrow'],
-    ['Undo', 'undo-2'],
-    ['Done', 'check'],
+  for (const [label, icon, key] of [
+    ['Sentence', 'text-select', 'S'],
+    ['Paragraph', 'pilcrow', 'P'],
+    ['Undo', 'undo-2', 'U'],
+    ['Done', 'check', 'D'],
   ]) {
     const action = button(f.toolbar, label);
     expect(action.textContent).toBe('');
     expect(action.classList.contains('reader-icon-button')).toBe(true);
     expect(action.getAttribute('aria-label')).toBe(label);
     expect(action.title).toBe(label);
+    expect(action.getAttribute('aria-keyshortcuts')).toBe(key);
     expect(action.querySelector('svg')?.getAttribute('data-icon')).toBe(icon);
     expect(action.querySelector('svg')?.getAttribute('aria-hidden')).toBe('true');
     expect(setIcon).toHaveBeenCalledWith(action, icon);
-    expect(setTooltip).toHaveBeenCalledWith(action, label);
+    expect(setTooltip).toHaveBeenCalledWith(action, `${label} (${key})`);
   }
   expect(f.toolbar.querySelector('.reader-tap-highlight-hint')).toBeNull();
   expect(f.hint.classList.contains('reader-tap-highlight-status')).toBe(true);

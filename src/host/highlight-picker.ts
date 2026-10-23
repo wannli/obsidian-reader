@@ -24,6 +24,7 @@ export interface HighlightHostPickerOptions {
   selectedPaths?: string[];
   minSelection?: number;
   actionLabel?: string;
+  tone?: 'highlight' | 'node' | 'neutral';
   allowPickFromArticle?: boolean;
 }
 
@@ -75,6 +76,8 @@ export function chooseHighlightHost(
       onOpen(): void {
         this.setTitle(options.title ?? 'Add highlight to notes');
         this.modalEl.classList.add('reader-highlight-picker-modal', 'prompt');
+        if (options.tone === 'highlight' || options.tone === 'node')
+          this.modalEl.classList.add(`reader-picker-${options.tone}`);
         this.contentEl.classList.add('reader-highlight-picker');
         const controls = append(this.contentEl, 'div', 'reader-highlight-picker-controls');
         const searchWrap = append(
