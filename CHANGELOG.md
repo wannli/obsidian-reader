@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.16.0](https://github.com/wannli/obsidian-reader/compare/0.15.1...0.16.0) (2026-10-23)
+
+
+### Added
+
+* **reader:** create linked nodes from tap-selected passages ([0f045fc](https://github.com/wannli/obsidian-reader/commit/0f045fc84c5a780695499745a65b151c7f2de09a))
+
+
+### Fixed
+
+* **highlights:** hide article and feed classes from note picker ([62b2a3a](https://github.com/wannli/obsidian-reader/commit/62b2a3a8f469246e2ba5283dbe00b5c3ed811ad9))
+
 ## [0.15.1](https://github.com/wannli/obsidian-reader/compare/0.15.0...0.15.1) (2026-10-22)
 
 
