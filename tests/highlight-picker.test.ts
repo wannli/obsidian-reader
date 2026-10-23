@@ -137,6 +137,34 @@ function open(options: HighlightHostPickerOptions = {}) {
 
 // Every case also asserts no standalone creation, linked creation, shared picker, or writes.
 describe('existing typed highlight notes', () => {
+  it('omits articles and feeds from search, filters and creation without hiding other notes', async () => {
+    const article = node('Article', ['article']);
+    const feed = node('Feed', ['feed']);
+    const mixed = node('Mixed', ['concept', 'article']);
+    for (const entry of [article, feed, mixed]) source.index.set(entry.path, entry);
+    source.api.listTypes.mockReturnValue([
+      ...availableTypes,
+      { type: 'article', label: 'Articles' },
+      { type: 'feed', label: 'Feeds' },
+    ]);
+    const { choice } = open({ multiple: true, minSelection: 0 });
+    expect(rows().map((entry) => entry.dataset.path)).toEqual([exact.path, alias.path, fuzzy.path]);
+    expect([...filterInput().options].map((entry) => entry.textContent)).toEqual([
+      'All types',
+      'Concept',
+      'Topic',
+    ]);
+    search('New');
+    expect(creates().map((entry) => entry.dataset.createType)).toEqual(['concept', 'topic']);
+    search('Article');
+    expect(rows().map((entry) => entry.dataset.path)).not.toContain(article.path);
+    search('');
+    source.index.set(exact.path, { ...exact, classes: ['concept', 'feed'] });
+    row(exact.path).click();
+    expect(error().textContent).toContain('no longer available');
+    button('Cancel').click();
+    expect(await choice).toBeNull();
+  });
   it('shows exact and fuzzy existing candidates with classes/path, without silently choosing', async () => {
     const { choice, settled } = open({ title: 'Choose highlight notes', query: 'Memory' });
     expect(document.querySelector('h2')?.textContent).toBe('Choose highlight notes');

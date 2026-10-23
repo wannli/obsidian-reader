@@ -32,6 +32,10 @@ export type HighlightHostApi = Pick<
   'version' | 'listTypes' | 'searchNodes' | 'getNode' | 'createNodeForLink'
 >;
 
+const excludedClasses = new Set(['article', 'feed']);
+const allowedClass = (name: string) => !excludedClasses.has(name.toLocaleLowerCase());
+const allowedNode = (node: NodeResult) => node.classes.every(allowedClass);
+
 function append<K extends keyof HTMLElementTagNameMap>(
   parent: HTMLElement,
   tag: K,
@@ -190,7 +194,10 @@ export function chooseHighlightHost(
           types = [
             ...new Map(
               available
-                .filter((entry) => typeof entry.type === 'string' && entry.type.trim())
+                .filter(
+                  (entry) =>
+                    typeof entry.type === 'string' && entry.type.trim() && allowedClass(entry.type),
+                )
                 .map((entry) => [entry.type, { ...entry, label: entry.label || entry.type }]),
             ).values(),
           ];
@@ -217,7 +224,7 @@ export function chooseHighlightHost(
         const revalidate = (path: string, type = ''): NodeResult => {
           const node = api.getNode(path);
           if (!active()) throw new Error('Selection cancelled.');
-          if (!node || node.path !== path || !hasNodeClass(node, types, type))
+          if (!node || node.path !== path || !allowedNode(node) || !hasNodeClass(node, types, type))
             throw new Error('This note is no longer available as a typed note. Search again.');
           return node;
         };
@@ -239,6 +246,7 @@ export function chooseHighlightHost(
             if (
               fresh &&
               fresh.path === match.path &&
+              allowedNode(fresh) &&
               hasNodeClass(fresh, types, type) &&
               ['Exact title', 'Exact alias'].includes(nodeChoiceMatch(fresh, term) ?? '')
             )
@@ -490,7 +498,7 @@ export function chooseHighlightHost(
             const term = query();
             const found = searchNodes(term);
             if (!active()) return;
-            rows = nodeChoices([...preferred, ...found], types, {
+            rows = nodeChoices([...preferred, ...found].filter(allowedNode), types, {
               query: term,
               type: filter.value,
               preferredPaths,
