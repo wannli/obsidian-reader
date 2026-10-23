@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.17.0](https://github.com/wannli/obsidian-reader/compare/0.16.0...0.17.0) (2026-10-23)
+
+
+### Added
+
+* **reader:** add desktop shortcuts and tinted highlight flows ([c7de44b](https://github.com/wannli/obsidian-reader/commit/c7de44b1788b2ce8a1bf7bb04967b97f6b484d18))
+
 ## [0.16.0](https://github.com/wannli/obsidian-reader/compare/0.15.1...0.16.0) (2026-10-23)
 
 
