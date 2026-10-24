@@ -1,5 +1,34 @@
 # Changelog
 
+## [0.20.0](https://github.com/wannli/obsidian-reader/compare/0.19.0...0.20.0) (2026-10-24)
+
+
+### Added
+
+* **reader:** open current article url in browser ([#61](https://github.com/wannli/obsidian-reader/issues/61)) ([15b5a0b](https://github.com/wannli/obsidian-reader/commit/15b5a0b7cc5cae35da325e945a2ff59f1e8dcd7b))
+
+
+### Fixed
+
+* **network:** bound and expire pending requests safely ([6a672f4](https://github.com/wannli/obsidian-reader/commit/6a672f438ae4ff77d8848a5e65056ba4175629bb))
+* **reader:** refresh row evidence without rebuilding lists ([19a8cf0](https://github.com/wannli/obsidian-reader/commit/19a8cf013b78ab93b70a56f7d492cb6e5bcbd8c7))
+* **store:** invalidate moves after queue folder changes ([ebb0afe](https://github.com/wannli/obsidian-reader/commit/ebb0afe859769663b0b4905414e593a21898cb18))
+
+
+### Improved
+
+* **reader:** reconcile list rows without remounting ([1edc4ae](https://github.com/wannli/obsidian-reader/commit/1edc4aebbbd525e4295284fd70b799e8614e392d))
+* **reader:** reuse exact-body passage analysis after profiling ([4fa0683](https://github.com/wannli/obsidian-reader/commit/4fa0683a8e6274dca2bd00683120bd4d6c908d1b))
+
+
+### Refactored
+
+* **reader:** extract selection and note-link coordination ([261f074](https://github.com/wannli/obsidian-reader/commit/261f074955597c2bc8a009742687bb634dd98d26))
+* **reader:** improve architecture incrementally ([2084f54](https://github.com/wannli/obsidian-reader/commit/2084f54e0b3eeb5a1aa581086ca05f934b97f1bc))
+* **reader:** improve architecture incrementally ([#62](https://github.com/wannli/obsidian-reader/issues/62)) ([2084f54](https://github.com/wannli/obsidian-reader/commit/2084f54e0b3eeb5a1aa581086ca05f934b97f1bc))
+* **runtime:** own folder services by generation ([dc7d4ce](https://github.com/wannli/obsidian-reader/commit/dc7d4ce1fc91c64620afea9ec4a3ad77996c7c29))
+* **tests:** split reader view suites by responsibility ([1ff40e5](https://github.com/wannli/obsidian-reader/commit/1ff40e59c3b3f6375ddabb88f7e9841624341a2c))
+
 ## [0.19.0](https://github.com/wannli/obsidian-reader/compare/0.18.3...0.19.0) (2026-10-24)
 
 
