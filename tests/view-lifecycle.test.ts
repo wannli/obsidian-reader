@@ -4138,6 +4138,33 @@ describe('visible-row evidence indicators', () => {
       expect(row.textContent).toBe('0 Visible');
     },
   );
+  it('refreshes a completed visible row after bookmark/body-only change events without rebuilding the list', async () => {
+    const f = await fixture('ordinary words');
+    const file = f.files[0];
+    const original = f.vault.bytes.get(file)!;
+    const reads = vi.spyOn(f.vault, 'read');
+    const writes = vi.spyOn(f.vault, 'process');
+    f.view.showList('Feed');
+    const row = f.view.contentEl.querySelector('.reader-list-item')!;
+    observers[0].intersect([row]);
+    await settle();
+    const changed = patchProperties(original.replace('ordinary words', '==ordinary words=='), {
+      bookmark: 'ordinary words',
+    });
+    f.vault.bytes.set(file, changed);
+    // Keep coarse stats identical: path-specific invalidation, not stat changes, is required.
+    await f.view.changed({ path: file.path, metadataChanged: false });
+    await settle();
+    expect(f.view.contentEl.querySelector('.reader-list-item')).toBe(row);
+    expect(row.querySelectorAll('.reader-row-indicator')).toHaveLength(2);
+    f.vault.bytes.set(file, original);
+    await f.view.changed({ path: file.path, metadataChanged: false });
+    await settle();
+    expect(row.querySelectorAll('.reader-row-indicator')).toHaveLength(0);
+    expect(reads).toHaveBeenCalledTimes(3);
+    expect(writes).not.toHaveBeenCalled();
+    expect(f.host.ingestion.acquire).not.toHaveBeenCalled();
+  });
   it('caps reads at two even across rerenders, drops old pending rows and never reads offscreen rows', async () => {
     const f = await fixture('==words==', 5),
       release = gate();
