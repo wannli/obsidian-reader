@@ -23,6 +23,7 @@ import { chooseTopicFilter } from '../host/topic-filter-dialog';
 import { TopicScanner } from './topic-scan';
 import { readDocument, readingMarker, replaceBody } from '../core/document';
 import { IndicatorReadSlots, RowIndicators } from './row-indicators';
+import { ListRows } from './list-rows';
 import { articleInfo, linkPath, queues, text, type Queue } from '../core/model';
 import {
   PartialCollectionError,
@@ -148,6 +149,8 @@ export class ReaderView extends ItemView {
   private topicAssignment?: AbortController;
   private indicatorSlots = new IndicatorReadSlots();
   private rowIndicators?: RowIndicators<TFile>;
+  private mountedListRows?: ListRows;
+  private refreshList?: () => void;
   private boundaryNavigation = false;
   private nodeCreation?: {
     controller: AbortController;
@@ -520,6 +523,8 @@ export class ReaderView extends ItemView {
   private clear(): void {
     this.rowIndicators?.dispose();
     this.rowIndicators = undefined;
+    this.mountedListRows = undefined;
+    this.refreshList = undefined;
     this.topicScan?.abort();
     this.topicScan = undefined;
     clearTimeout(this.selectionTimer);
@@ -631,13 +636,25 @@ export class ReaderView extends ItemView {
     );
     filterButton.classList.toggle('reader-filter-active', !!this.topicFilter);
     filterButton.setAttribute('aria-pressed', String(!!this.topicFilter));
-    let stopIndicators: (() => void) | undefined;
+    let restoreListFocus = !!focusedRow;
+    const wiredRows = new WeakSet<HTMLElement>();
+    const mountedRows = new ListRows(list, {
+      button: (label, action, icon, shortcut) => this.button(list, label, action, icon, shortcut),
+      open: (path) => {
+        this.listSelectedPath = path;
+        return this.openArticle(path, true);
+      },
+      more: () => {
+        this.listLimit += 50;
+        render();
+      },
+    });
+    this.mountedListRows = mountedRows;
+    this.observeRowIndicators(list, new Map());
+    let scanMessage: HTMLElement | undefined;
     const render = () => {
-      stopIndicators?.();
-      // Keep the integrated heading across scan completion and Show more rerenders.
-      for (const child of Array.from(list.children))
-        if (!child.classList.contains('reader-list-heading')) child.remove();
-      const visibleRows = new Map<HTMLButtonElement, string>();
+      scanMessage?.remove();
+      scanMessage = undefined;
       const rows = this.topicFilter
         ? this.filteredPaths
             .flatMap((path) => {
@@ -646,108 +663,104 @@ export class ReaderView extends ItemView {
             })
             .slice(0, this.listLimit + 1)
         : this.host.store.catalog.list(queue, this.search, 0, this.listLimit + 1);
-      for (const article of rows.slice(0, this.listLimit)) {
-        const button = this.button(list, '', () => {
-          this.listSelectedPath = article.path;
-          return this.openArticle(article.path, true);
-        });
-        button.addClass('reader-list-item');
-        button.dataset.readerPath = article.path;
-        button.createEl('span', { cls: 'reader-list-title', text: article.title });
-        button.addEventListener('focus', () => this.selectListRow(button, false));
-        visibleRows.set(button, article.path);
+      mountedRows.update(
+        rows.slice(0, this.listLimit),
+        rows.length > this.listLimit,
+        this.topicFilter ? 'No matching articles in this queue.' : 'No articles in this queue.',
+      );
+      const visibleRows = mountedRows.rows;
+      for (const [row, path] of visibleRows) {
+        const button = row as HTMLButtonElement;
+        button.dataset.readerPath = path;
+        if (!wiredRows.has(button)) {
+          wiredRows.add(button);
+          button.addEventListener('focus', () => this.selectListRow(button, false));
+        }
       }
+      const buttons = [...visibleRows.keys()] as HTMLButtonElement[];
       const selected =
-        Array.from(visibleRows.keys()).find(
-          (button) => button.dataset.readerPath === this.listSelectedPath,
-        ) ?? visibleRows.keys().next().value;
+        buttons.find((button) => button.dataset.readerPath === this.listSelectedPath) ??
+        buttons.find((button) => button === list.ownerDocument.activeElement) ??
+        buttons[0];
       if (selected) this.selectListRow(selected, false);
-      if (selected && (focusedRow || this.focusSelectedListRow)) {
+      if (selected && (restoreListFocus || this.focusSelectedListRow)) {
         selected.focus({ preventScroll: true });
+        restoreListFocus = false;
         this.focusSelectedListRow = false;
       }
-      stopIndicators = this.observeRowIndicators(list, visibleRows);
-      if (!rows.length)
-        list.createEl('p', {
-          text: this.topicFilter
-            ? 'No matching articles in this queue.'
-            : 'No articles in this queue.',
-        });
-      if (rows.length > this.listLimit)
-        this.button(
-          list,
-          'Show more',
-          () => {
-            this.listLimit += 50;
-            render();
-          },
-          'chevrons-down',
-          'm',
-        );
+      this.rowIndicators?.update(visibleRows);
     };
-    if (!this.topicFilter) {
-      render();
-      return;
-    }
     this.filteredPaths = [];
-    list.createEl('p', { text: 'Filtering articles…', attr: { role: 'status' } });
-    const controller = new AbortController();
-    this.topicScan = controller;
-    const lifetime = this.articleLifetime.signal;
-    const abort = () => controller.abort();
-    lifetime.addEventListener('abort', abort, { once: true });
-    this.host.signal.addEventListener('abort', abort, { once: true });
-    const filter = this.currentTopicFilter();
-    const generation = this.generation;
-    const candidates = this.host.store.catalog.list(queue, '', 0, this.host.store.catalog.size);
-    const resolve = (link: string, source: string) =>
-      this.app.metadataCache.getFirstLinkpathDest(link, source)?.path;
-    void this.topicScanner
-      .scan(candidates, {
-        signal: controller.signal,
-        file: (path) => this.host.store.vault.file(path),
-        read: (file) => this.host.store.vault.read(file),
-        metadataMatch: (article) => matchesTopicArticle(article, '', filter, resolve),
-        bodyMatch: (raw, article) => {
-          const document = readDocument(raw);
-          // Body matching is intentionally read-only and never triggers acquisition.
-          return (
-            document.properties.type === 'article' &&
-            matchesTopicArticle(article, document.body, filter, resolve)
-          );
-        },
-      })
-      .then(({ paths, uncertain }) => {
-        if (
-          controller.signal.aborted ||
-          this.stopping ||
-          this.generation !== generation ||
-          this.topicScan !== controller
-        )
-          return;
-        this.filteredPaths = paths;
+    const refresh = () => {
+      if (!this.topicFilter) {
         render();
-        if (uncertain)
-          list.createEl('p', {
-            text: `${uncertain} article(s) could not be checked. Reopen the list to retry.`,
-            attr: { role: 'status' },
-          });
-      })
-      .catch((error) => {
-        if (!controller.signal.aborted && this.generation === generation) {
-          for (const child of Array.from(list.children))
-            if (!child.classList.contains('reader-list-heading')) child.remove();
-          list.createEl('p', {
-            text: 'Could not filter articles. Reopen the list to retry.',
-            attr: { role: 'alert' },
-          });
-          this.error(error);
-        }
-      })
-      .finally(() => {
-        lifetime.removeEventListener('abort', abort);
-        this.host.signal.removeEventListener('abort', abort);
-      });
+        return;
+      }
+      const heading = list.querySelector('.reader-list-heading');
+      if (heading) heading.textContent = this.listLabel();
+      this.syncPresentation();
+      this.topicScan?.abort();
+      scanMessage?.remove();
+      scanMessage = list.createEl('p', { text: 'Filtering articles…', attr: { role: 'status' } });
+      const controller = new AbortController();
+      this.topicScan = controller;
+      const lifetime = this.articleLifetime.signal;
+      const abort = () => controller.abort();
+      lifetime.addEventListener('abort', abort, { once: true });
+      this.host.signal.addEventListener('abort', abort, { once: true });
+      const filter = this.currentTopicFilter();
+      const generation = this.generation;
+      const candidates = this.host.store.catalog.list(queue, '', 0, this.host.store.catalog.size);
+      const resolve = (link: string, source: string) =>
+        this.app.metadataCache.getFirstLinkpathDest(link, source)?.path;
+      void this.topicScanner
+        .scan(candidates, {
+          signal: controller.signal,
+          file: (path) => this.host.store.vault.file(path),
+          read: (file) => this.host.store.vault.read(file),
+          metadataMatch: (article) => matchesTopicArticle(article, '', filter, resolve),
+          bodyMatch: (raw, article) => {
+            const document = readDocument(raw);
+            // Body matching is intentionally read-only and never triggers acquisition.
+            return (
+              document.properties.type === 'article' &&
+              matchesTopicArticle(article, document.body, filter, resolve)
+            );
+          },
+        })
+        .then(({ paths, uncertain }) => {
+          if (
+            controller.signal.aborted ||
+            this.stopping ||
+            this.generation !== generation ||
+            this.topicScan !== controller
+          )
+            return;
+          this.filteredPaths = paths;
+          render();
+          if (uncertain)
+            scanMessage = list.createEl('p', {
+              text: `${uncertain} article(s) could not be checked. Reopen the list to retry.`,
+              attr: { role: 'status' },
+            });
+        })
+        .catch((error) => {
+          if (!controller.signal.aborted && this.generation === generation) {
+            scanMessage?.remove();
+            scanMessage = list.createEl('p', {
+              text: 'Could not filter articles. Reopen the list to retry.',
+              attr: { role: 'alert' },
+            });
+            this.error(error);
+          }
+        })
+        .finally(() => {
+          lifetime.removeEventListener('abort', abort);
+          this.host.signal.removeEventListener('abort', abort);
+        });
+    };
+    this.refreshList = refresh;
+    refresh();
   }
   private selectListRow(button: HTMLButtonElement, focus: boolean): void {
     this.listSelectedPath = button.dataset.readerPath;
@@ -3086,6 +3099,9 @@ export class ReaderView extends ItemView {
       }
     }
     if (change.previousPath) {
+      if (this.listSelectedPath === change.previousPath) this.listSelectedPath = change.path;
+      this.mountedListRows?.rename(change.previousPath, change.path);
+      if (this.mountedListRows) this.rowIndicators?.update(this.mountedListRows.rows);
       this.readingQueue.rename(change.previousPath, change.path);
       if (this.topicFilter?.path === change.previousPath)
         this.topicFilter = { ...this.topicFilter, path: change.path };
@@ -3115,7 +3131,7 @@ export class ReaderView extends ItemView {
             !this.lifetime.signal.aborted &&
             (this.topicFilter || this.contentEl.ownerDocument.activeElement?.tagName !== 'INPUT')
           )
-            this.showList();
+            this.refreshList?.();
         });
       return;
     }
