@@ -26,6 +26,48 @@ function fixture(concurrency = 1) {
   return { queue, events, add };
 }
 
+describe('pending cancellation', () => {
+  it.each([false, true])(
+    'removes a pending job in foreground=%s and permits same-key retry',
+    async (foreground) => {
+      const { queue, add } = fixture();
+      const active = add('active');
+      await active.started;
+      const old = add('pending', foreground);
+      const error = new Error('expired');
+      const rejected = expect(old.promise).rejects.toBe(error);
+      expect(queue.pendingCount).toBe(1);
+      expect(queue.cancelPending('pending', error)).toBe(true);
+      expect(queue.cancelPending('pending', error)).toBe(false);
+      expect(queue.cancelPending('missing')).toBe(false);
+      expect(queue.pendingCount).toBe(0);
+      const retry = add('pending', foreground);
+      await rejected;
+      expect(old.run).not.toHaveBeenCalled();
+      active.release();
+      await retry.started;
+      retry.release();
+      await Promise.all([active.promise, retry.promise]);
+    },
+  );
+
+  it('cannot cancel or release a dispatched slot even before its callback starts', async () => {
+    const { queue, add, events } = fixture();
+    const active = add('active');
+    expect(queue.cancelPending('active')).toBe(false);
+    const waiting = add('waiting');
+    await active.started;
+    expect(queue.cancelPending('active')).toBe(false);
+    expect(queue.pendingCount).toBe(1);
+    expect(events).toEqual(['active']);
+    expect(queue.enqueue('active', async () => {})).toBe(active.promise);
+    active.release();
+    await waiting.started;
+    waiting.release();
+    await Promise.all([active.promise, waiting.promise]);
+  });
+});
+
 describe('foreground scheduling', () => {
   it('promotes pending background work to the foreground FIFO without replacing its promise or callback', async () => {
     const { queue, events, add } = fixture();
