@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.18.0](https://github.com/wannli/obsidian-reader/compare/0.17.0...0.18.0) (2026-10-24)
+
+
+### Added
+
+* **reader:** consolidate article status actions ([6585249](https://github.com/wannli/obsidian-reader/commit/658524936a29beaff7bd8da5beb3631f97ddee6e))
+
+
+### Fixed
+
+* **security:** parse publisher HTML inertly ([b7d4186](https://github.com/wannli/obsidian-reader/commit/b7d41868d95d06b27ec886ef84fa257281684dfa))
+
 ## [0.17.0](https://github.com/wannli/obsidian-reader/compare/0.16.0...0.17.0) (2026-10-23)
 
 
