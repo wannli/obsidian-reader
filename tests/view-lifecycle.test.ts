@@ -194,6 +194,60 @@ describe('Reader operation and close lifecycle', () => {
 });
 
 describe('public article commands', () => {
+  it('opens only the active article source URL in the browser', async () => {
+    const f = await pluginFixture();
+    const command = (checking = true) => mocks.commands.get('open-url')!.checkCallback!(checking);
+    const open = vi.spyOn(window, 'open').mockImplementation(() => null);
+    const file = await f.note('Reading/Inbox/Source.md');
+    expect(command()).toBe(false);
+    vi.mocked(f.app.workspace.getActiveViewOfType).mockReturnValue(f.view);
+    expect(command()).toBe(false);
+    f.vault.bytes.set(
+      file,
+      createDocument(
+        { type: 'article', status: 'inbox', url: 'https://example.com/start#section' },
+        'Article',
+      ),
+    );
+    await f.view.openArticle(file.path);
+    expect(command()).toBe(true);
+    expect(open).not.toHaveBeenCalled();
+    expect(command(false)).toBe(true);
+    expect(open).toHaveBeenCalledExactlyOnceWith(
+      'https://example.com/start#section',
+      '_blank',
+      'noopener,noreferrer',
+    );
+    for (const url of ['javascript:alert(1)', 'https://user:pass@example.com']) {
+      f.vault.bytes.set(file, createDocument({ type: 'article', status: 'inbox', url }, 'Article'));
+      await f.view.changed({ path: file.path });
+      expect(command()).toBe(false);
+      expect(command(false)).toBe(false);
+    }
+    f.vault.bytes.set(
+      file,
+      createDocument(
+        { type: 'article', status: 'inbox', url: 'https://example.com/new' },
+        'Article',
+      ),
+    );
+    await f.view.changed({ path: file.path });
+    expect(command(false)).toBe(true);
+    expect(open).toHaveBeenCalledTimes(2);
+    expect(open).toHaveBeenLastCalledWith(
+      'https://example.com/new',
+      '_blank',
+      'noopener,noreferrer',
+    );
+    vi.mocked(f.app.workspace.getActiveViewOfType).mockReturnValue(null);
+    expect(command(false)).toBe(false);
+    f.signal.abort();
+    expect(f.view.articleCommand('open-url', false)).toBe(false);
+    expect(open).toHaveBeenCalledTimes(2);
+    open.mockRestore();
+    f.view.stopForUnload();
+  });
+
   it('checks active Reader context without side effects, preserves Move/Topics, and keeps Markdown escape on failure', async () => {
     const f = await pluginFixture();
     const command = (id: string, checking = true) =>

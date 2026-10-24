@@ -1607,7 +1607,10 @@ export class ReaderView extends ItemView {
     return this.operation(() => this.prepareToLeave(), false);
   }
   /** Public palette route. Checking availability must never cancel a live Nodes request. */
-  articleCommand(command: 'move' | 'topics' | 'open-markdown', checking: boolean): boolean {
+  articleCommand(
+    command: 'move' | 'topics' | 'open-markdown' | 'open-url',
+    checking: boolean,
+  ): boolean {
     if (
       this.stopping ||
       this.host.signal.aborted ||
@@ -1615,6 +1618,13 @@ export class ReaderView extends ItemView {
       (command !== 'open-markdown' && !this.snapshot)
     )
       return false;
+    if (command === 'open-url') {
+      const snapshot = this.snapshot!;
+      if (!articleInfo(snapshot.path, snapshot.properties)?.url) return false;
+      if (!checking)
+        window.open(text(snapshot.properties.url).trim(), '_blank', 'noopener,noreferrer');
+      return true;
+    }
     if (!checking) {
       const task =
         command === 'move'

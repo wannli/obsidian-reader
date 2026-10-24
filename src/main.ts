@@ -209,6 +209,7 @@ export default class ReaderPlugin extends Plugin {
       ['move', 'Change article status…'],
       ['topics', 'Edit related notes…'],
       ['open-markdown', 'Open article as Markdown'],
+      ['open-url', 'Open article URL in browser'],
     ] as const) {
       this.addCommand({
         id,
