@@ -214,6 +214,17 @@ it('switches the same toolbar contextually and restores the exact original actio
   const f = fixture({ active: false });
   const normal = [...f.toolbar.childNodes];
   const trigger = button(f.toolbar, 'Highlight mode');
+  for (const [action, key] of [
+    [trigger, 'H'],
+    [button(f.toolbar, 'Create node'), 'C'],
+  ] as const) {
+    expect(action.hasAttribute('title')).toBe(false);
+    expect(action.getAttribute('aria-keyshortcuts')).toBe(key);
+    expect(setTooltip).toHaveBeenCalledWith(
+      action,
+      `${action.getAttribute('aria-label')} (${key})`,
+    );
+  }
   expect(f.controller.active).toBe(false);
   expect(f.options.modeChanged).not.toHaveBeenCalled();
   expect(f.host.querySelector('[role="status"]')).toBeNull();
@@ -332,7 +343,7 @@ it('uses icon-only actions with accessible names and tooltips instead of a visib
     expect(action.textContent).toBe('');
     expect(action.classList.contains('reader-icon-button')).toBe(true);
     expect(action.getAttribute('aria-label')).toBe(label);
-    expect(action.title).toBe(label);
+    expect(action.hasAttribute('title')).toBe(false);
     expect(action.getAttribute('aria-keyshortcuts')).toBe(key);
     expect(action.querySelector('svg')?.getAttribute('data-icon')).toBe(icon);
     expect(action.querySelector('svg')?.getAttribute('aria-hidden')).toBe('true');
@@ -376,7 +387,7 @@ it('renders generic icon-only passage actions, Undo and Done in the same panel',
     expect(element.textContent).toBe('');
     expect(element.classList.contains('reader-icon-button')).toBe(true);
     expect(element.getAttribute('aria-label')).toBe(action.label);
-    expect(element.title).toBe(action.label);
+    expect(element.hasAttribute('title')).toBe(false);
     expect(element.querySelector('svg')?.getAttribute('data-icon')).toBe(action.icon);
     expect(element.querySelector('svg')?.getAttribute('aria-hidden')).toBe('true');
     expect(setTooltip).toHaveBeenCalledWith(element, action.label);

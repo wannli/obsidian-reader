@@ -75,8 +75,6 @@ export class TapHighlighter {
     const trigger = (this.trigger = doc.createElement('button'));
     trigger.type = 'button';
     trigger.className = 'reader-icon-button reader-tap-highlight-trigger';
-    trigger.setAttribute('aria-label', 'Highlight mode');
-    trigger.title = 'Highlight mode';
     setTooltip(trigger, 'Highlight mode (H)');
     trigger.setAttribute('aria-label', 'Highlight mode');
     this.shortcut(trigger, 'h');
@@ -87,8 +85,6 @@ export class TapHighlighter {
     this.nodeTrigger = doc.createElement('button');
     this.nodeTrigger.type = 'button';
     this.nodeTrigger.className = 'reader-icon-button reader-tap-node-trigger';
-    this.nodeTrigger.setAttribute('aria-label', 'Create node');
-    this.nodeTrigger.title = 'Create node';
     setTooltip(this.nodeTrigger, 'Create node (C)');
     this.nodeTrigger.setAttribute('aria-label', 'Create node');
     this.shortcut(this.nodeTrigger, 'c');
@@ -317,8 +313,7 @@ export class TapHighlighter {
     const element = this.body.ownerDocument.createElement('button');
     element.type = 'button';
     element.className = 'reader-icon-button';
-    element.setAttribute('aria-label', label);
-    element.title = label;
+    // A native title would mask Obsidian's tooltip (and its shortcut) on hover.
     setTooltip(element, key ? `${label} (${key.toUpperCase()})` : label);
     element.setAttribute('aria-label', label);
     if (key) this.shortcut(element, key);
