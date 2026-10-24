@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.18.2](https://github.com/wannli/obsidian-reader/compare/0.18.1...0.18.2) (2026-10-24)
+
+
+### Fixed
+
+* **reader:** show usable shortcuts in action tooltips ([#54](https://github.com/wannli/obsidian-reader/issues/54)) ([73280e4](https://github.com/wannli/obsidian-reader/commit/73280e4322d186c32081ff3d2b8f03082e79a812))
+
 ## [0.18.1](https://github.com/wannli/obsidian-reader/compare/0.18.0...0.18.1) (2026-10-24)
 
 
