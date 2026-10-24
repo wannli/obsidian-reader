@@ -22,7 +22,7 @@ import { matchesTopicArticle, type TopicFilter } from '../core/topic-filter';
 import { chooseTopicFilter } from '../host/topic-filter-dialog';
 import { TopicScanner } from './topic-scan';
 import { readDocument, readingMarker, replaceBody } from '../core/document';
-import { renderedHighlight } from '../core/markdown';
+import { IndicatorReadSlots, RowIndicators } from './row-indicators';
 import { articleInfo, linkPath, queues, text, type Queue } from '../core/model';
 import {
   PartialCollectionError,
@@ -146,8 +146,8 @@ export class ReaderView extends ItemView {
   private articleLifetime = new AbortController();
   private nodeCreationEpoch = 0;
   private topicAssignment?: AbortController;
-  private indicatorReads = 0;
-  private indicatorPump?: () => void;
+  private indicatorSlots = new IndicatorReadSlots();
+  private rowIndicators?: RowIndicators<TFile>;
   private boundaryNavigation = false;
   private nodeCreation?: {
     controller: AbortController;
@@ -518,6 +518,8 @@ export class ReaderView extends ItemView {
     return button;
   }
   private clear(): void {
+    this.rowIndicators?.dispose();
+    this.rowIndicators = undefined;
     this.topicScan?.abort();
     this.topicScan = undefined;
     clearTimeout(this.selectionTimer);
@@ -877,114 +879,24 @@ export class ReaderView extends ItemView {
   }
   /** Positive-only, visible-row decoration. No catalog scan, promotion or persisted state. */
   private observeRowIndicators(list: HTMLElement, rows: Map<HTMLElement, string>): () => void {
-    const Observer = list.ownerDocument.defaultView?.IntersectionObserver;
-    if (typeof Observer !== 'function' || !rows.size || this.stopping || this.host.signal.aborted)
-      return () => {};
-    const signal = this.articleLifetime.signal,
-      generation = this.generation;
-    const visible = new Set<HTMLElement>(),
-      pending = new Map<HTMLElement, string>(),
-      reading = new Set<HTMLElement>();
-    let closed = false;
-    const active = () =>
-      !closed &&
-      !signal.aborted &&
-      !this.host.signal.aborted &&
-      !this.stopping &&
-      generation === this.generation &&
-      list.isConnected;
-    const pump = () => {
-      while (active() && this.indicatorReads < 2 && pending.size) {
-        const [row, path] = pending.entries().next().value!;
-        pending.delete(row);
-        if (!visible.has(row) || !row.isConnected) continue;
-        const file = this.host.store.vault.file(path),
-          stat = file?.stat;
-        if (!file || !stat) continue;
-        const { mtime, size } = stat;
-        this.indicatorReads++;
-        reading.add(row);
-        void (async () => {
-          const raw = await this.host.store.vault.read(file);
-          if (
-            !active() ||
-            !visible.has(row) ||
-            !row.isConnected ||
-            file.path !== path ||
-            this.host.store.vault.file(path) !== file ||
-            file.stat.mtime !== mtime ||
-            file.stat.size !== size
-          )
-            return;
-          const document = readDocument(raw);
-          if (document.properties.type !== 'article') return;
-          const openedBefore = !!readingMarker(document.properties.bookmark);
-          let highlighted = false;
-          try {
-            highlighted = renderedHighlight(document.body);
-          } catch {
-            // Uncertain highlight grammar must not erase known position evidence.
-          }
-          for (const [present, name, icon, label] of [
-            [openedBefore, 'reader-opened-indicator', 'eye', 'Opened before'],
-            [highlighted, 'reader-highlight-indicator', 'highlighter', 'Has highlights'],
-          ] as const) {
-            if (!present) continue;
-            const indicator = row.createEl('span', {
-              cls: `reader-row-indicator ${name}`,
-              attr: { role: 'img', 'aria-label': label },
-            });
-            setIcon(indicator, icon);
-            setTooltip(indicator, label);
-            indicator.querySelector('svg')?.setAttribute('aria-hidden', 'true');
-          }
-          observer.unobserve(row);
-          rows.delete(row);
-          visible.delete(row);
-        })()
-          .catch(() => {
-            // Unknown/unreadable status is not evidence of no highlights. Leave the title alone.
-          })
-          .finally(() => {
-            reading.delete(row);
-            this.indicatorReads--;
-            this.indicatorPump?.();
-          });
-      }
-    };
-    const observer = new Observer(
-      (entries) => {
-        if (!active()) return;
-        for (const entry of entries) {
-          const row = entry.target as HTMLElement,
-            path = rows.get(row);
-          if (!path) continue;
-          if (entry.isIntersecting) {
-            visible.add(row);
-            if (!reading.has(row)) pending.set(row, path);
-          } else {
-            visible.delete(row);
-            pending.delete(row);
-          }
-        }
-        pump();
+    const generation = this.generation;
+    const indicators = new RowIndicators(
+      list,
+      {
+        file: (path) => this.host.store.vault.file(path),
+        read: (file) => this.host.store.vault.read(file),
+        signal: this.articleLifetime.signal,
+        hostSignal: this.host.signal,
+        active: () => !this.stopping && this.generation === generation,
       },
-      { root: list },
+      this.indicatorSlots,
     );
-    const stop = () => {
-      closed = true;
-      observer.disconnect();
-      pending.clear();
-      visible.clear();
-      if (this.indicatorPump === pump) this.indicatorPump = undefined;
-      signal.removeEventListener('abort', stop);
-      this.host.signal.removeEventListener('abort', stop);
+    this.rowIndicators = indicators;
+    indicators.update(rows);
+    return () => {
+      indicators.dispose();
+      if (this.rowIndicators === indicators) this.rowIndicators = undefined;
     };
-    this.indicatorPump = pump;
-    signal.addEventListener('abort', stop, { once: true });
-    this.host.signal.addEventListener('abort', stop, { once: true });
-    for (const row of rows.keys()) observer.observe(row);
-    return stop;
   }
   openArticle(
     path: string,
@@ -3159,6 +3071,8 @@ export class ReaderView extends ItemView {
   }
   async changed(change: LibraryChange): Promise<void> {
     if (this.stopping || this.lifetime.signal.aborted || this.host.signal.aborted) return;
+    this.rowIndicators?.invalidate(change.path);
+    if (change.previousPath) this.rowIndicators?.invalidate(change.previousPath);
     const request = this.nodeCreation;
     if (request) {
       const source = request.source;
