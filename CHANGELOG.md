@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.18.1](https://github.com/wannli/obsidian-reader/compare/0.18.0...0.18.1) (2026-10-24)
+
+
+### Fixed
+
+* **reader:** show shortcut hints on highlight controls ([#52](https://github.com/wannli/obsidian-reader/issues/52)) ([dc110a8](https://github.com/wannli/obsidian-reader/commit/dc110a82683db179063c1d934aab3dacd36659ee))
+
 ## [0.18.0](https://github.com/wannli/obsidian-reader/compare/0.17.0...0.18.0) (2026-10-24)
 
 
