@@ -172,6 +172,11 @@ export class ReaderView extends ItemView {
   private closing?: Promise<void>;
   private refreshPending = false;
   private listLimit = 50;
+  private listSelectedPath?: string;
+  private focusSelectedListRow = false;
+  private pendingG = 0;
+  private shortcutHelp?: HTMLElement;
+  private shortcutHelpReturn?: HTMLElement;
   private search = '';
   private topicFilter?: TopicFilter;
   /** Only an article reached through a filtered browsing snapshot carries this origin. */
@@ -526,6 +531,9 @@ export class ReaderView extends ItemView {
     this.clearTapUndo();
     this.surface?.dispose();
     this.surface = undefined;
+    this.shortcutHelp = undefined;
+    this.shortcutHelpReturn = undefined;
+    this.pendingG = 0;
     this.snapshot = undefined;
     this.fallbackFile = undefined;
     this.actions = undefined;
@@ -569,6 +577,13 @@ export class ReaderView extends ItemView {
     this.button(this.contentEl, 'Back to list', () => this.readingList(), 'list', 'b');
   }
   showList(queue = this.queue): void {
+    const focusedRow =
+      this.contentEl.contains(this.contentEl.ownerDocument.activeElement) &&
+      this.contentEl.ownerDocument.activeElement?.classList.contains('reader-list-item');
+    if (queue !== this.queue) {
+      this.listSelectedPath = undefined;
+      this.focusSelectedListRow = false;
+    }
     this.clear();
     this.filteredOrigin = false;
     this.snapshot = undefined;
@@ -620,7 +635,7 @@ export class ReaderView extends ItemView {
       // Keep the integrated heading across scan completion and Show more rerenders.
       for (const child of Array.from(list.children))
         if (!child.classList.contains('reader-list-heading')) child.remove();
-      const visibleRows = new Map<HTMLElement, string>();
+      const visibleRows = new Map<HTMLButtonElement, string>();
       const rows = this.topicFilter
         ? this.filteredPaths
             .flatMap((path) => {
@@ -630,10 +645,24 @@ export class ReaderView extends ItemView {
             .slice(0, this.listLimit + 1)
         : this.host.store.catalog.list(queue, this.search, 0, this.listLimit + 1);
       for (const article of rows.slice(0, this.listLimit)) {
-        const button = this.button(list, '', () => this.openArticle(article.path, true));
+        const button = this.button(list, '', () => {
+          this.listSelectedPath = article.path;
+          return this.openArticle(article.path, true);
+        });
         button.addClass('reader-list-item');
+        button.dataset.readerPath = article.path;
         button.createEl('span', { cls: 'reader-list-title', text: article.title });
+        button.addEventListener('focus', () => this.selectListRow(button, false));
         visibleRows.set(button, article.path);
+      }
+      const selected =
+        Array.from(visibleRows.keys()).find(
+          (button) => button.dataset.readerPath === this.listSelectedPath,
+        ) ?? visibleRows.keys().next().value;
+      if (selected) this.selectListRow(selected, false);
+      if (selected && (focusedRow || this.focusSelectedListRow)) {
+        selected.focus({ preventScroll: true });
+        this.focusSelectedListRow = false;
       }
       stopIndicators = this.observeRowIndicators(list, visibleRows);
       if (!rows.length)
@@ -717,6 +746,71 @@ export class ReaderView extends ItemView {
         lifetime.removeEventListener('abort', abort);
         this.host.signal.removeEventListener('abort', abort);
       });
+  }
+  private selectListRow(button: HTMLButtonElement, focus: boolean): void {
+    this.listSelectedPath = button.dataset.readerPath;
+    for (const row of this.contentEl.querySelectorAll<HTMLButtonElement>('.reader-list-item')) {
+      const selected = row === button;
+      row.classList.toggle('reader-list-selected', selected);
+      if (selected) row.setAttribute('aria-current', 'true');
+      else row.removeAttribute('aria-current');
+    }
+    if (focus) button.focus();
+  }
+  private listRows(): HTMLButtonElement[] {
+    return Array.from(this.contentEl.querySelectorAll<HTMLButtonElement>('.reader-list-item'));
+  }
+  private moveListCursor(key: 'j' | 'k' | 'first' | 'last'): void {
+    const rows = this.listRows();
+    if (!rows.length) return;
+    const index = rows.findIndex((row) => row.dataset.readerPath === this.listSelectedPath);
+    const next =
+      key === 'first'
+        ? 0
+        : key === 'last'
+          ? rows.length - 1
+          : Math.max(0, Math.min(rows.length - 1, index + (key === 'j' ? 1 : -1)));
+    this.selectListRow(rows[next], true);
+  }
+  private toggleShortcutHelp(): void {
+    if (this.shortcutHelp) {
+      this.shortcutHelp.remove();
+      this.shortcutHelp = undefined;
+      if (this.shortcutHelpReturn?.isConnected) this.shortcutHelpReturn.focus();
+      this.shortcutHelpReturn = undefined;
+      return;
+    }
+    const active = this.contentEl.ownerDocument.activeElement;
+    this.shortcutHelpReturn =
+      active instanceof HTMLElement && this.contentEl.contains(active) ? active : undefined;
+    const help = this.contentEl.createDiv({
+      cls: 'reader-shortcut-help',
+      attr: { role: 'dialog', 'aria-label': 'Reader keyboard shortcuts' },
+    });
+    this.shortcutHelp = help;
+    help.createEl('h2', { text: 'Keyboard shortcuts' });
+    const list = help.createEl('dl');
+    for (const [keys, label] of this.snapshot
+      ? [
+          ['j / k', 'Next / previous article'],
+          ['gg / G', 'Top / bottom'],
+          ['d / u', 'Half page down / up'],
+          ['Space', 'Full page down'],
+          ['q', 'Back to list'],
+          ['?', 'Close shortcuts'],
+        ]
+      : [
+          ['j / k', 'Next / previous row'],
+          ['Enter', 'Open selected article'],
+          ['gg / G', 'First / last visible row'],
+          ['?', 'Close shortcuts'],
+        ]) {
+      list.createEl('dt', { text: keys });
+      list.createEl('dd', { text: label });
+    }
+    const close = help.createEl('button', { text: 'Close shortcuts', attr: { type: 'button' } });
+    close.addEventListener('click', () => this.toggleShortcutHelp());
+    close.focus();
   }
   /** Resolve aliases afresh so metadata edits do not leave a stale filter vocabulary. */
   private currentTopicFilter(): TopicFilter {
@@ -996,7 +1090,7 @@ export class ReaderView extends ItemView {
       this.articleTitle = surface.title;
       setTooltip(
         surface.title,
-        'J: next article · K: previous article · ↑/↓ or Page Up/Down at article edges',
+        'J/K: next/previous article · Space: page · D/U: half-page · gg/G: top/bottom · Q: list · ?: shortcuts',
       );
       if (this.filteredOrigin && this.topicFilter) {
         const context = surface.title.ownerDocument.createElement('div');
@@ -1131,13 +1225,25 @@ export class ReaderView extends ItemView {
     statusButton.setAttribute('aria-label', 'Change article status and advance');
     const statusTooltip = 'Change status and advance · S: choose · L: Later · A: Archive';
     setTooltip(statusButton, statusTooltip);
-    this.button(this.actions, 'Delete', () => this.finish('delete'), 'trash-2', 'd').setAttribute(
+    this.button(this.actions, 'Delete', () => this.finish('delete'), 'trash-2').setAttribute(
       'aria-label',
       'Trash article and advance',
     );
     this.button(this.actions, 'List', () => this.readingList(), 'list', 'b');
     this.setupTapHighlighter();
     this.updateStatus();
+  }
+  private updatePagingControls(): void {
+    if (!this.surface?.paged) return;
+    for (const [key, direction] of [
+      ['z', -1],
+      ['x', 1],
+    ] as const) {
+      const button = this.actions?.querySelector<HTMLButtonElement>(
+        `button[data-reader-key="${key}"]`,
+      );
+      if (button) button.disabled = this.surface.atBoundary(direction);
+    }
   }
   private setupTapHighlighter(): void {
     if (!this.surface || !this.actions) return;
@@ -3142,25 +3248,125 @@ export class ReaderView extends ItemView {
     }
   }
   key(event: KeyboardEvent): void {
+    const doc = this.containerEl.ownerDocument;
     if (
       this.stopping ||
       event.defaultPrevented ||
       event.ctrlKey ||
       event.metaKey ||
       event.altKey ||
-      event.shiftKey ||
+      (event.shiftKey && !['G', '?'].includes(event.key)) ||
       event.isComposing ||
       this.dialog ||
-      this.containerEl.ownerDocument.getSelection()?.isCollapsed === false
+      doc.getSelection()?.isCollapsed === false
     )
       return;
+    const target = event.target as Element | null;
+    if (target && target !== doc.body && !this.contentEl.contains(target)) return;
     if (
-      (event.target as Element | null)?.closest?.(
+      target?.closest?.(
         'input,textarea,select,[contenteditable]:not([contenteditable="false"]),.modal,.menu',
       ) ||
-      this.containerEl.ownerDocument.querySelector('.modal-container,.menu')
+      doc.querySelector('.modal-container,.menu')
     )
       return;
+    if (this.shortcutHelp) {
+      if (event.key === 'Escape' || event.key === '?') {
+        event.preventDefault();
+        this.toggleShortcutHelp();
+      } else if (event.key !== 'Tab') event.preventDefault();
+      return;
+    }
+    const reading = !!this.snapshot && !!this.surface;
+    if (
+      !this.tapMode &&
+      event.repeat &&
+      event.key === ' ' &&
+      reading &&
+      !target?.closest?.('button,a,[role="button"]') &&
+      !doc.activeElement?.closest?.('button,a,[role="button"]')
+    ) {
+      event.preventDefault();
+      return;
+    }
+    if (
+      !this.tapMode &&
+      !event.repeat &&
+      (event.key === '?' ||
+        event.key === 'G' ||
+        event.key === 'g' ||
+        (!reading && ['j', 'k', 'Enter'].includes(event.key)) ||
+        (reading && ['d', 'u', 'q', ' '].includes(event.key)))
+    ) {
+      if (event.key === '?') {
+        event.preventDefault();
+        this.pendingG = 0;
+        this.toggleShortcutHelp();
+        return;
+      }
+      if (event.key === 'g') {
+        event.preventDefault();
+        if (this.pendingG > Date.now()) {
+          this.pendingG = 0;
+          if (reading) {
+            this.surface?.jumpTo(-1);
+            this.updatePagingControls();
+          } else this.moveListCursor('first');
+        } else this.pendingG = Date.now() + 900;
+        return;
+      }
+      this.pendingG = 0;
+      if (event.key === 'G') {
+        event.preventDefault();
+        if (reading) {
+          this.surface?.jumpTo(1);
+          this.updatePagingControls();
+        } else this.moveListCursor('last');
+        return;
+      }
+      if (!reading) {
+        if (event.key === 'Enter') {
+          // Preserve native Enter on toolbar controls; a selected row is still a button.
+          if (target?.closest?.('button') && !target.closest('.reader-list-item')) return;
+          const row = this.listRows().find(
+            (candidate) => candidate.dataset.readerPath === this.listSelectedPath,
+          );
+          if (row) {
+            event.preventDefault();
+            row.click();
+          }
+        } else {
+          event.preventDefault();
+          this.moveListCursor(event.key as 'j' | 'k');
+        }
+        return;
+      }
+      if (
+        event.key === ' ' &&
+        (target?.closest?.('button,a,[role="button"]') ||
+          doc.activeElement?.closest?.('button,a,[role="button"]'))
+      )
+        return;
+      event.preventDefault();
+      if (event.key === 'q') {
+        void this.readingList()
+          .then(() => {
+            if (!this.stopping && !this.snapshot) {
+              const row = this.listRows().find(
+                (candidate) => candidate.dataset.readerPath === this.listSelectedPath,
+              );
+              if (row) row.focus();
+              else this.focusSelectedListRow = true;
+            }
+          })
+          .catch((error) => this.error(error));
+      } else {
+        this.surface?.moveByPage(event.key === 'u' ? -1 : 1, event.key === ' ' ? 1 : 0.5);
+        this.updatePagingControls();
+      }
+      return;
+    }
+    if (event.key !== 'g') this.pendingG = 0;
     // Route visible controls through their shortcuts, except status destinations
     // grouped under one button. Tap mode keeps its own contextual keys.
     if (!Platform.isMobile && !event.repeat && !this.tapMode && this.snapshot) {

@@ -455,6 +455,44 @@ export class ReadingSurface {
     return false;
   }
 
+  /** Explicit keyboard motions stay inside this article and never infer a neighbour. */
+  moveByPage(direction: -1 | 1, fraction: 0.5 | 1): void {
+    if (this.dead || this.restoring || this.restorePending || !this.index || this.nativeSelection())
+      return;
+    if (this.paged) {
+      if (fraction === 1) {
+        this.page(direction);
+        return;
+      }
+      this.invalidateEnd();
+      this.viewport.scrollLeft = Math.min(
+        Math.max(0, this.viewport.scrollWidth - this.viewport.clientWidth),
+        Math.max(0, this.viewport.scrollLeft + direction * (this.columnWidth() + GAP) * fraction),
+      );
+    } else {
+      this.viewport.scrollTop = Math.min(
+        Math.max(0, this.viewport.scrollHeight - this.viewport.clientHeight),
+        Math.max(0, this.viewport.scrollTop + direction * this.viewport.clientHeight * fraction),
+      );
+    }
+    this.fallback = this.viewportPosition();
+    this.capture();
+  }
+
+  jumpTo(direction: -1 | 1): void {
+    if (this.dead || this.restoring || this.restorePending || !this.index || this.nativeSelection())
+      return;
+    if (this.paged) {
+      this.invalidateEnd();
+      this.viewport.scrollLeft =
+        direction === -1 ? 0 : Math.max(0, this.viewport.scrollWidth - this.viewport.clientWidth);
+    } else
+      this.viewport.scrollTop =
+        direction === -1 ? 0 : Math.max(0, this.viewport.scrollHeight - this.viewport.clientHeight);
+    this.fallback = this.viewportPosition();
+    this.capture();
+  }
+
   page(direction: -1 | 1): void {
     if (this.dead || !this.paged || this.nativeSelection()) return;
     // A page may cancel restoration, but that unsettled request cannot prove EOF.
