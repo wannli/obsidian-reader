@@ -4,6 +4,8 @@ Approved by Wannes: articles and subscriptions are identified by YAML outside Te
 
 ## Article
 
+For property types, defaults, highlight syntax and public Fileclass typing, see the [file schema reference](file-schema.md). It documents this contract without changing stored data.
+
 Example: `Reading/Inbox/261015 A useful article.md`. Moving an article between queue folders changes its Reader queue without rewriting YAML.
 
 ```markdown

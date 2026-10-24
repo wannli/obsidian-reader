@@ -4,6 +4,8 @@ Approved by Wannes in the Reader highlight-design discussion, the 20 October E2E
 
 ## Markdown contract
 
+See the [file schema reference](file-schema.md) for field tables, source/destination examples and the distinction between Reader file types and public Fileclass membership.
+
 An article preserves its selected words, emphasis and publisher links:
 
 ```markdown

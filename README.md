@@ -121,7 +121,7 @@ If extraction fails, the URL and available text remain, and you can retry. **Run
 
 ## Your reading library is just Markdown
 
-Reader identifies articles by `type: article` and subscriptions by `type: feed`, wherever you store them. You can move and rename the files yourself.
+Reader identifies articles by `type: article` and subscriptions by `type: feed`, wherever you store them outside Templates and .trash. You can move and rename the files yourself. See the [file, highlight and typed-note schema reference](docs/file-schema.md) for property types, defaults and linked examples.
 
 An article might look like this:
 
