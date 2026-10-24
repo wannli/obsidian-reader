@@ -320,6 +320,46 @@ body.is-mobile.reader-mobile-active .mobile-navbar {
   overflow: visible;
   text-overflow: clip;
 }
+.reader-view > .reader-list > button.reader-list-item.reader-list-selected {
+  background: var(--background-modifier-hover) !important;
+  outline: 2px solid var(--text-normal) !important;
+  outline-offset: -2px;
+}
+.reader-shortcut-help {
+  position: absolute;
+  z-index: 5;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  box-sizing: border-box;
+  width: min(360px, calc(100% - 24px));
+  max-height: calc(100% - 24px);
+  overflow: auto;
+  padding: 16px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 8px;
+  background: var(--background-primary);
+  color: var(--text-normal);
+  box-shadow: var(--shadow-s);
+}
+.reader-shortcut-help h2 {
+  margin: 0 0 12px;
+}
+.reader-shortcut-help dl {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 8px 16px;
+}
+.reader-shortcut-help dt {
+  font-weight: 600;
+  white-space: nowrap;
+}
+.reader-shortcut-help dd {
+  margin: 0;
+}
+.reader-shortcut-help button {
+  min-height: 44px;
+}
 .reader-list-title {
   flex: 1 1 auto;
   min-width: 0;

@@ -235,6 +235,8 @@ vi.mock('../src/reader/surface', () => ({
     });
     restore = vi.fn();
     page = vi.fn();
+    moveByPage = vi.fn();
+    jumpTo = vi.fn();
     reveal = vi.fn();
     highlightFeedback = vi.fn(() => vi.fn());
     dispose = vi.fn();
@@ -2489,6 +2491,99 @@ describe('desktop button shortcuts', () => {
     expect(press(f.view, 'u').defaultPrevented).toBe(true);
     expect(capture).toHaveBeenCalledOnce();
   });
+  it('moves a visible list cursor, opens with Enter and restores the row with q', async () => {
+    const f = hostFixture();
+    const first = await f.note('Reading/Inbox/A.md');
+    const second = await f.note('Reading/Inbox/B.md');
+    await f.note('Reading/Inbox/C.md');
+    f.view.showList();
+    const rows = () => [
+      ...f.view.contentEl.querySelectorAll<HTMLButtonElement>('.reader-list-item'),
+    ];
+    expect(rows()[0].classList.contains('reader-list-selected')).toBe(true);
+    expect(press(f.view, 'j').defaultPrevented).toBe(true);
+    expect(rows()[1].getAttribute('aria-current')).toBe('true');
+    expect(document.activeElement).toBe(rows()[1]);
+    expect(press(f.view, 'Enter').defaultPrevented).toBe(true);
+    await f.probe.operations;
+    expect(f.view.file).toBe(second);
+    expect(press(f.view, 'q').defaultPrevented).toBe(true);
+    await f.probe.operations;
+    expect(f.view.file).toBeUndefined();
+    expect(document.activeElement).toBe(rows()[1]);
+    expect(
+      f.view.contentEl.querySelector('.reader-list-item.reader-list-selected')?.textContent,
+    ).toContain('B');
+    expect(press(f.view, 'k').defaultPrevented).toBe(true);
+    expect(rows()[0].getAttribute('aria-current')).toBe('true');
+    expect(first.path).toContain('A.md');
+  });
+  it('uses gg/G on rendered rows only and shows a scoped shortcut sheet', async () => {
+    const f = hostFixture();
+    for (let index = 0; index < 55; index++)
+      await f.note(`Reading/Inbox/${String(index).padStart(2, '0')}.md`);
+    f.view.showList();
+    const rows = () => [
+      ...f.view.contentEl.querySelectorAll<HTMLButtonElement>('.reader-list-item'),
+    ];
+    expect(rows()).toHaveLength(50);
+    expect(press(f.view, 'G', { shiftKey: true }).defaultPrevented).toBe(true);
+    expect(rows()[49].classList.contains('reader-list-selected')).toBe(true);
+    expect(press(f.view, 'g').defaultPrevented).toBe(true);
+    expect(press(f.view, 'g').defaultPrevented).toBe(true);
+    expect(rows()[0].classList.contains('reader-list-selected')).toBe(true);
+    expect(press(f.view, '?', { shiftKey: true }).defaultPrevented).toBe(true);
+    expect(f.view.contentEl.querySelector('[role="dialog"]')?.textContent).toContain(
+      'First / last visible row',
+    );
+    expect(press(f.view, 'j').defaultPrevented).toBe(true);
+    expect(rows()[0].classList.contains('reader-list-selected')).toBe(true);
+    expect(press(f.view, 'Escape').defaultPrevented).toBe(true);
+    expect(f.view.contentEl.querySelector('[role="dialog"]')).toBeNull();
+  });
+  it('moves within an article without mapping d to Delete or Space to next article', async () => {
+    const f = hostFixture();
+    const article = await f.note('Reading/Inbox/A.md', 'Long article content');
+    await f.note('Reading/Inbox/B.md');
+    await f.view.openArticle(article.path, true);
+    const move = vi.spyOn(f.probe.surface, 'moveByPage');
+    const jump = vi.spyOn(f.probe.surface, 'jumpTo');
+    for (const [key, direction, fraction] of [
+      ['d', 1, 0.5],
+      ['u', -1, 0.5],
+      [' ', 1, 1],
+    ] as const) {
+      expect(press(f.view, key).defaultPrevented).toBe(true);
+      expect(move).toHaveBeenLastCalledWith(direction, fraction);
+    }
+    expect(press(f.view, ' ', { repeat: true }).defaultPrevented).toBe(true);
+    expect(move).toHaveBeenCalledTimes(3);
+    expect(press(f.view, 'g').defaultPrevented).toBe(true);
+    expect(press(f.view, 'g').defaultPrevented).toBe(true);
+    expect(jump).toHaveBeenCalledWith(-1);
+    expect(press(f.view, 'G', { shiftKey: true }).defaultPrevented).toBe(true);
+    expect(jump).toHaveBeenCalledWith(1);
+    expect(f.view.contentEl.querySelector('[data-reader-key="d"]')).toBeNull();
+    expect(f.view.file).toBe(article);
+    expect(press(f.view, '?', { shiftKey: true }).defaultPrevented).toBe(true);
+    expect(f.view.contentEl.querySelector('[role="dialog"]')?.textContent).toContain(
+      'Full page down',
+    );
+    expect(press(f.view, 'Tab').defaultPrevented).toBe(false);
+    expect(document.activeElement?.textContent).toBe('Close shortcuts');
+    expect(press(f.view, 'Escape').defaultPrevented).toBe(true);
+    const button = f.view.contentEl.querySelector<HTMLButtonElement>('.reader-actions button')!;
+    button.focus();
+    expect(press(f.view, 'd').defaultPrevented).toBe(true);
+    expect(document.activeElement).toBe(button);
+    expect(press(f.view, ' ').defaultPrevented).toBe(false);
+    const outside = document.body.appendChild(document.createElement('button'));
+    outside.focus();
+    const event = new KeyboardEvent('keydown', { key: 'd', bubbles: true, cancelable: true });
+    outside.addEventListener('keydown', (e) => f.view.key(e), { once: true });
+    outside.dispatchEvent(event);
+    expect(event.defaultPrevented).toBe(false);
+  });
   it('routes numbered contextual destinations to the visible matching button', async () => {
     const f = hostFixture();
     const article = await f.note('Reading/Inbox/A.md');
@@ -3730,7 +3825,7 @@ describe('bounded Reader UI', () => {
       expect(setTooltip).toHaveBeenCalledWith(buttons[5], 'Create node (C)');
       expect(setTooltip).toHaveBeenCalledWith(
         f.probe.surface.title,
-        'J: next article · K: previous article · ↑/↓ or Page Up/Down at article edges',
+        'J/K: next/previous article · Space: page · D/U: half-page · gg/G: top/bottom · Q: list · ?: shortcuts',
       );
       for (const button of buttons) {
         const css = window.getComputedStyle(button);

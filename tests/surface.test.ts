@@ -49,6 +49,41 @@ function fixture(
   );
   return surface;
 }
+it('moves by half/full flow pages and jumps without crossing the article', () => {
+  fixture(false);
+  Object.defineProperty(surface.viewport, 'scrollHeight', { get: () => 1000 });
+  surface.setBody(markdown, '');
+  frame();
+  surface.moveByPage(1, 0.5);
+  expect(surface.viewport.scrollTop).toBe(100);
+  surface.moveByPage(1, 1);
+  expect(surface.viewport.scrollTop).toBe(300);
+  surface.jumpTo(1);
+  expect(surface.viewport.scrollTop).toBe(800);
+  surface.moveByPage(1, 1);
+  expect(surface.viewport.scrollTop).toBe(800);
+  surface.moveByPage(-1, 0.5);
+  expect(surface.viewport.scrollTop).toBe(700);
+  surface.jumpTo(-1);
+  expect(surface.viewport.scrollTop).toBe(0);
+});
+it('moves through paged columns without navigating articles or using an unsettled restore', () => {
+  fixture(true);
+  Object.defineProperty(surface.viewport, 'scrollWidth', { get: () => 996 });
+  surface.setBody(markdown, '');
+  frame();
+  surface.moveByPage(1, 0.5);
+  expect(surface.viewport.scrollLeft).toBe(166);
+  surface.jumpTo(1);
+  expect(surface.viewport.scrollLeft).toBe(696);
+  surface.jumpTo(-1);
+  expect(surface.viewport.scrollLeft).toBe(0);
+  surface.restore(secondMarker);
+  const restored = surface.viewport.scrollLeft;
+  surface.moveByPage(1, 0.5);
+  expect(surface.viewport.scrollLeft).toBe(restored);
+});
+
 it('reports only settled, actually reached paged article boundaries, not a rounded near-final column', () => {
   fixture(true);
   expect(surface.atBoundary(-1)).toBe(false);
