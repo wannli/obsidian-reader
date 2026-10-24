@@ -60,6 +60,23 @@ export class WorkQueue {
     this.pump();
     return result;
   }
+  get pendingCount(): number {
+    return this.foreground.length + this.background.length;
+  }
+  /** Remove only work that has not been dispatched; active work retains its slot and key. */
+  cancelPending(key: string, error: unknown = new Error('Request cancelled.')): boolean {
+    const job = this.jobs.get(key);
+    if (!job) return false;
+    for (const lane of [this.foreground, this.background]) {
+      const index = lane.indexOf(job);
+      if (index === -1) continue;
+      lane.splice(index, 1);
+      this.jobs.delete(key);
+      job.reject(error);
+      return true;
+    }
+    return false;
+  }
   private pump(): void {
     while (
       !this.stopped &&

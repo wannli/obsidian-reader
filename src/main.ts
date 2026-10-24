@@ -27,15 +27,23 @@ import { ArticleStore } from './core/store';
 import { confirmArticleReplacement, input } from './host/dialogs';
 import { Ingestion } from './host/ingestion';
 import { ReaderSettings, showFeeds } from './host/settings';
-import { ObsidianVault, watchLibrary, type LibraryChange } from './host/vault';
-import { nativeLinkPath, READER_VIEW, ReaderView } from './reader/view';
+import { type LibraryChange } from './host/vault';
+import { FolderRuntime } from './host/folder-runtime';
+import { READER_VIEW, ReaderView } from './reader/view';
+import { nativeLinkPath } from './host/note-links';
 
 export default class ReaderPlugin extends Plugin {
-  store!: ArticleStore<TFile>;
-  ingestion!: Ingestion;
-  private lifetime = new AbortController();
+  private runtime = new FolderRuntime();
+  get store(): ArticleStore<TFile> {
+    return this.runtime.store;
+  }
+  set store(store: ArticleStore<TFile>) {
+    this.runtime.store = store;
+  }
+  get ingestion(): Ingestion {
+    return this.runtime.ingestion;
+  }
   private unloaded = false;
-  private vault!: ObsidianVault;
   private network = new Network();
   private folderSaves = new SerialWrites<string>();
   private viewWrites = new Set<Promise<unknown>>();
@@ -45,19 +53,52 @@ export default class ReaderPlugin extends Plugin {
   private fragmentSources = new WeakMap<Element, string>();
   private routingLeaves = new WeakSet<WorkspaceLeaf>();
   private sourceLeaves = new Map<WorkspaceLeaf, { file: TFile; transitioning: boolean }>();
-  private attempted = new Set<string>();
-  private promotions = new Map<TFile, boolean>();
-  private promoting = new Set<TFile>();
-  private lastMaintenance = 0;
   private statusFolders: ResolvedStatusFolders = defaultStatusFolders;
-  private refreshing = false;
-  private referencesReady = false;
-  private referencesRecovered = false;
-  private startupCaptureRecoveryPending = true;
-  private deferredCaptureSeeds = new Set<TFile>();
-  private stopIndex?: () => void;
+  // These adapters preserve command/test seams; the generation owns the actual state.
+  private get attempted() {
+    return this.runtime.attempted;
+  }
+  private get promotions() {
+    return this.runtime.promotions;
+  }
+  private get promoting() {
+    return this.runtime.promoting;
+  }
+  private get deferredCaptureSeeds() {
+    return this.runtime.deferredCaptureSeeds;
+  }
+  private get lastMaintenance() {
+    return this.runtime.lastMaintenance;
+  }
+  private set lastMaintenance(value: number) {
+    this.runtime.lastMaintenance = value;
+  }
+  private get refreshing() {
+    return this.runtime.refreshing;
+  }
+  private set refreshing(value: boolean) {
+    this.runtime.refreshing = value;
+  }
+  private get referencesReady() {
+    return this.runtime.referencesReady;
+  }
+  private set referencesReady(value: boolean) {
+    this.runtime.referencesReady = value;
+  }
+  private get referencesRecovered() {
+    return this.runtime.referencesRecovered;
+  }
+  private set referencesRecovered(value: boolean) {
+    this.runtime.referencesRecovered = value;
+  }
+  private get startupCaptureRecoveryPending() {
+    return this.runtime.startupCaptureRecoveryPending;
+  }
+  private set startupCaptureRecoveryPending(value: boolean) {
+    this.runtime.startupCaptureRecoveryPending = value;
+  }
   get signal(): AbortSignal {
-    return this.lifetime.signal;
+    return this.runtime.signal;
   }
   get paged(): boolean {
     try {
@@ -334,29 +375,20 @@ export default class ReaderPlugin extends Plugin {
     });
   }
   private startFolders(folders: ReaderFolders): void {
-    const signal = this.signal;
-    this.vault = new ObsidianVault(this.app, () => !signal.aborted);
-    this.store = new ArticleStore(this.vault, folders);
-    this.store.setStatusFolders(this.statusFolders);
-    this.ingestion = new Ingestion(
-      this.store,
-      (message) => {
-        if (!signal.aborted) this.notice(message);
-      },
+    this.runtime.start(
+      this.app,
+      folders,
+      this.statusFolders,
       this.network,
+      (change) => this.changed(change),
+      (message) => this.notice(message),
     );
-    this.stopIndex = watchLibrary(this, this.store, (change) => {
-      if (!signal.aborted) this.changed(change);
-    });
   }
   private stopFolders(): void {
-    this.lifetime.abort();
+    this.runtime.stop();
     this.routingEpoch++;
     this.articleFragments.clear();
     this.routingLeaves = new WeakSet();
-    this.ingestion?.stop();
-    this.stopIndex?.();
-    this.store?.dispose();
   }
   private dispatchView<T>(operation: () => Promise<T>): Promise<T> {
     if (this.signal.aborted) return Promise.reject(new Error('Reader is paused.'));
@@ -403,10 +435,11 @@ export default class ReaderPlugin extends Plugin {
       await this.saveData(saveFolderSettings(data, folders));
       assertLoaded();
       // No candidate path becomes live until the complete group is valid and durable.
+      const retiring = this.runtime;
       for (const view of this.views()) view.stopForUnload();
       this.stopFolders();
       while (this.viewWrites.size) await Promise.allSettled([...this.viewWrites]);
-      await this.vault.drain();
+      await retiring.drain();
       assertLoaded();
       const cleared = await Promise.allSettled(
         this.views().map(async (view) => {
@@ -426,18 +459,12 @@ export default class ReaderPlugin extends Plugin {
       const reset = cleared.flatMap((result) =>
         result.status === 'fulfilled' && result.value ? [result.value] : [],
       );
-      this.attempted = new Set();
-      this.promotions = new Map();
-      this.promoting = new Set();
-      this.lastMaintenance = 0;
-      this.refreshing = false;
-      this.referencesReady = this.referencesRecovered = false;
-      this.lifetime = new AbortController();
-      // Applying folders is not a new startup and must not acquire existing notes.
-      this.startupCaptureRecoveryPending = false;
-      // Metadata replay after Apply is not a request to acquire existing files.
-      // New native captures have new identities and remain eligible immediately.
-      this.deferredCaptureSeeds = new Set(this.app.vault.getMarkdownFiles());
+      // Applying folders is not startup/recovery. Seed the replay hold by file identity;
+      // new captures remain eligible without reopening or acquiring existing articles.
+      this.runtime = new FolderRuntime({
+        recoverStartup: false,
+        deferredSeeds: this.app.vault.getMarkdownFiles(),
+      });
       this.startFolders(folders);
       const signal = this.signal;
       // Metadata-only reseed above: never recover/acquire/promote or reopen articles here.
@@ -1039,15 +1066,12 @@ export default class ReaderPlugin extends Plugin {
     // to finish mutations after Hot Reload. Normal closes/visibility changes drain earlier;
     // abrupt unload/process termination cannot guarantee the final unsaved selection/position.
     this.unloaded = true;
-    this.lifetime.abort();
+    this.runtime.stop();
     this.articleFragments.clear();
     this.fragmentSources = new WeakMap();
     this.routingLeaves = new WeakSet();
     this.network.stop();
     document.body.classList.remove('reader-mobile-active');
-    this.ingestion?.stop();
-    this.stopIndex?.();
-    this.store?.dispose();
     this.sourceLeaves.clear();
     for (const view of this.views()) {
       view.stopForUnload();

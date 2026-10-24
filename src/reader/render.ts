@@ -5,6 +5,7 @@ import { paragraphAnchors } from '../core/hosted-highlights';
 import { fragment } from '../content/html';
 import { readerDecoration, readerRangeText, VisibleText } from './text';
 import { imageViewer } from './images';
+import type { ArticleAnalysis } from './article-analysis';
 
 const escape = (value: string): string =>
   value.replace(
@@ -80,6 +81,7 @@ export function renderBody(
   root: HTMLElement,
   base: string,
   referenceIcon?: ReferenceIcon,
+  analysis?: ArticleAnalysis,
 ): () => void {
   const citations = nativeCitations(body);
   // Replace only parser-proven source spans with render-local tokens. Matching
@@ -166,7 +168,7 @@ export function renderBody(
         // A reloaded/unavailable provider must not hide the native reference or article.
       }
     }
-  const source = passages(body),
+  const source = analysis?.passages(body) ?? passages(body),
     marks = [...root.querySelectorAll<HTMLElement>('mark')].filter(
       (mark) => !readerDecoration(mark),
     );

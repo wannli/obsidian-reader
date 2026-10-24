@@ -2,12 +2,14 @@ import { bookmarkRange, renderBody, selectedPassage, textBookmark } from './rend
 import type { ReferenceIcon } from './render';
 import { VisibleText } from './text';
 import { HighlightFeedback } from './highlight-feedback';
+import { ArticleAnalysis } from './article-analysis';
 import { articleTopicPill, type ArticleTopic } from './topic-pills';
 
 const GAP = 32;
 
 /** Owns only the current article DOM and device layout; never persists or indexes notes. */
 export class ReadingSurface {
+  readonly analysis = new ArticleAnalysis();
   readonly viewport: HTMLDivElement;
   readonly flow: HTMLDivElement;
   readonly body: HTMLElement;
@@ -197,7 +199,13 @@ export class ReadingSurface {
       this.disposeBody = undefined;
       dispose?.();
       if (this.dead) return;
-      this.disposeBody = renderBody(next.body, this.body, next.url, this.referenceIcon);
+      this.disposeBody = renderBody(
+        next.body,
+        this.body,
+        next.url,
+        this.referenceIcon,
+        this.analysis,
+      );
       this.index = new VisibleText(this.body);
       this.content = next.body;
       this.url = next.url;
@@ -628,6 +636,7 @@ export class ReadingSurface {
     if (this.dead) return;
     this.invalidateEnd();
     this.dead = true;
+    this.analysis.clear();
     this.feedback.dispose();
     clearTimeout(this.saveTimer);
     this.saveTimer = undefined;

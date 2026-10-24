@@ -22,7 +22,11 @@ import { matchesTopicArticle, type TopicFilter } from '../core/topic-filter';
 import { chooseTopicFilter } from '../host/topic-filter-dialog';
 import { TopicScanner } from './topic-scan';
 import { readDocument, readingMarker, replaceBody } from '../core/document';
-import { renderedHighlight } from '../core/markdown';
+import { IndicatorReadSlots, RowIndicators } from './row-indicators';
+import { ListRows } from './list-rows';
+import { SelectionCoordinator } from './selection-coordinator';
+import { nativeLinkPath, openExistingNote } from '../host/note-links';
+export { nativeLinkPath, openExistingNote } from '../host/note-links';
 import { articleInfo, linkPath, queues, text, type Queue } from '../core/model';
 import {
   PartialCollectionError,
@@ -68,42 +72,6 @@ type HighlightRemoval = {
   previousQuote: Pick<HostedHighlight, 'quoteMarkdown' | 'blockId'>;
   validate: (paths?: readonly string[]) => void;
 };
-/** Rendered hrefs are encoded once. Never reinterpret a decoded URI as a vault path. */
-export function nativeLinkPath(value: string, encoded = true): string | undefined {
-  let path: string;
-  try {
-    path = (encoded ? decodeURIComponent(value) : value).trim();
-  } catch {
-    return;
-  }
-  if (/^(?:[a-z][\w+.-]*:|\/\/|#)/i.test(path)) return;
-  path = path.replace(/^\//, '');
-  return path && !/^(?:[a-z][\w+.-]*:|\/\/|#)/i.test(path) ? path : undefined;
-}
-
-/** Unlike openLinkText, this never asks Obsidian to create a missing note. */
-export async function openExistingNote(
-  app: App,
-  target: string,
-  source: string,
-  newLeaf = false,
-): Promise<void> {
-  const safe = nativeLinkPath(target, false);
-  if (!safe) throw new Error('This is not a vault-note link.');
-  const { path, subpath } = parseLinktext(safe);
-  const file = app.metadataCache.getFirstLinkpathDest(path, source);
-  if (!file) throw new Error('The linked note no longer exists. No note was created.');
-  const expected = file.path;
-  const assert = () => {
-    if (file.path !== expected || app.vault.getAbstractFileByPath(expected) !== file)
-      throw new Error('The linked note changed. Reopen the link.');
-  };
-  assert();
-  const leaf = app.workspace.getLeaf(newLeaf);
-  assert();
-  await leaf.openFile(file, { active: true, ...(subpath ? { eState: { subpath } } : {}) });
-}
-
 interface ReaderHost {
   app: App;
   store: ArticleStore<TFile>;
@@ -146,8 +114,10 @@ export class ReaderView extends ItemView {
   private articleLifetime = new AbortController();
   private nodeCreationEpoch = 0;
   private topicAssignment?: AbortController;
-  private indicatorReads = 0;
-  private indicatorPump?: () => void;
+  private indicatorSlots = new IndicatorReadSlots();
+  private rowIndicators?: RowIndicators<TFile>;
+  private mountedListRows?: ListRows;
+  private refreshList?: () => void;
   private boundaryNavigation = false;
   private nodeCreation?: {
     controller: AbortController;
@@ -158,9 +128,10 @@ export class ReaderView extends ItemView {
   private opening = 0;
   private loadingPath?: string;
   private listFrame?: number;
-  private selectionTimer?: ReturnType<typeof setTimeout>;
-  private selectionRevision = 0;
-  private selecting = false;
+  private selectionState = new SelectionCoordinator();
+  private get selecting(): boolean {
+    return this.selectionState.selecting;
+  }
   private dialog = false;
   private automatic?: Passage;
   private lastSelection = '';
@@ -234,99 +205,14 @@ export class ReaderView extends ItemView {
     await super.setState(state, result);
   }
   async onOpen(): Promise<void> {
-    const doc = this.containerEl.ownerDocument,
-      options = { signal: this.lifetime.signal };
-    const pointers = new Map<number, string>(),
-      touches = new Set<number>();
-    const release = (event: Event) => {
-      if (this.stopping || this.host.signal.aborted) return;
-      if (event.type.startsWith('touch')) {
-        for (const touch of Array.from((event as TouchEvent).changedTouches ?? []))
-          touches.delete(touch.identifier);
-        const active = (event as TouchEvent).touches;
-        if (active) {
-          touches.clear();
-          for (const touch of Array.from(active)) touches.add(touch.identifier);
-          // Touch identifiers and pointer IDs are unrelated. Only an authoritative
-          // empty touchend proves all touch pointers lifted; cancellation may be takeover.
-          if (event.type === 'touchend' && active.length === 0)
-            for (const [id, type] of pointers) if (type === 'touch') pointers.delete(id);
-        }
-      } else pointers.delete((event as PointerEvent).pointerId);
-      this.selecting = pointers.size > 0 || touches.size > 0;
-      this.invalidateSelection();
-      // Surface may register its document capture listener after ours. Wait until
-      // dispatch completes so both trackers have released before checking the range.
-      this.selectionTimer = setTimeout(() => this.selectionChanged(), 0);
-    };
-    doc.addEventListener('selectionchange', () => this.selectionChanged(), options);
-    this.contentEl.addEventListener(
-      'pointerdown',
-      (event) => {
-        if (this.stopping || this.host.signal.aborted) return;
-        pointers.set(event.pointerId, event.pointerType);
-        this.selecting = true;
-        this.invalidateSelection();
-      },
-      options,
+    const options = { signal: this.lifetime.signal };
+    this.selectionState.install(
+      this.contentEl,
+      this.lifetime.signal,
+      this.host.signal,
+      () => !this.stopping && !this.host.signal.aborted,
+      () => this.selectionChanged(),
     );
-    // Observe termination before host/native gesture handlers stop bubbling.
-    // Surface's capture listener also releases its pointer before the quiet timer runs.
-    for (const type of ['pointerup', 'pointercancel', 'touchend', 'touchcancel'])
-      doc.addEventListener(type, release, { ...options, capture: true });
-    doc.defaultView?.addEventListener(
-      'blur',
-      () => {
-        pointers.clear();
-        touches.clear();
-        this.selecting = false;
-        this.selectionChanged();
-      },
-      options,
-    );
-    // Stop only workspace swipe recognition, not native selection, scrolling or
-    // zoom. Bubble after Surface's capture handlers and Reader's pointerdown.
-    const gestures = new AbortController(),
-      stopGestures = () => {
-        gestures.abort();
-        this.invalidateSelection();
-      };
-    this.lifetime.signal.addEventListener('abort', stopGestures, { once: true });
-    this.host.signal.addEventListener('abort', stopGestures, { ...options, once: true });
-    if (this.lifetime.signal.aborted || this.host.signal.aborted) stopGestures();
-    const isolate = (event: Event) => {
-      if (this.stopping || this.host.signal.aborted) return;
-      if (
-        event.type.startsWith('pointer') &&
-        !['touch', 'pen'].includes((event as PointerEvent).pointerType)
-      )
-        return;
-      if (event.type === 'touchstart') {
-        // Refresh stale touch identifiers across gestures, but never infer pointer
-        // releases from a new start: native touchend may itself be deferred.
-        const active = (event as TouchEvent).touches;
-        if (active) touches.clear();
-        for (const touch of Array.from(active ?? (event as TouchEvent).changedTouches ?? []))
-          touches.add(touch.identifier);
-        this.selecting = true;
-        this.invalidateSelection();
-      }
-      event.stopPropagation();
-    };
-    for (const type of [
-      'touchstart',
-      'touchmove',
-      'touchend',
-      'touchcancel',
-      'pointerdown',
-      'pointermove',
-      'pointerup',
-      'pointercancel',
-    ])
-      this.contentEl.addEventListener(type, isolate, {
-        passive: true,
-        signal: gestures.signal,
-      });
     this.contentEl.addEventListener('focusin', () => this.refreshArticleTopics(), options);
     this.contentEl.ownerDocument.defaultView?.addEventListener(
       'focus',
@@ -362,13 +248,13 @@ export class ReaderView extends ItemView {
     this.stopping = true;
     this.articleLifetime.abort();
     if (this.listFrame !== undefined) cancelAnimationFrame(this.listFrame);
-    clearTimeout(this.selectionTimer);
+    this.selectionState.cancel();
     this.closing = (async () => {
       try {
         await this.operations.catch((error) => this.error(error));
         // Normal tab/source transitions can await this. Host plugin unload cannot.
         if (!this.host.signal.aborted) {
-          this.selecting = false;
+          this.selectionState.selecting = false;
           this.dialog = false;
           await this.prepareToLeave(pending);
         }
@@ -385,7 +271,7 @@ export class ReaderView extends ItemView {
     this.stopping = true;
     this.articleLifetime.abort();
     if (this.listFrame !== undefined) cancelAnimationFrame(this.listFrame);
-    clearTimeout(this.selectionTimer);
+    this.selectionState.cancel();
     this.disposeReading();
   }
   private disposeReading(): void {
@@ -518,9 +404,13 @@ export class ReaderView extends ItemView {
     return button;
   }
   private clear(): void {
+    this.rowIndicators?.dispose();
+    this.rowIndicators = undefined;
+    this.mountedListRows = undefined;
+    this.refreshList = undefined;
     this.topicScan?.abort();
     this.topicScan = undefined;
-    clearTimeout(this.selectionTimer);
+    this.selectionState.cancel();
     this.articleLifetime.abort();
     this.articleLifetime = new AbortController();
     this.clearSend();
@@ -629,13 +519,25 @@ export class ReaderView extends ItemView {
     );
     filterButton.classList.toggle('reader-filter-active', !!this.topicFilter);
     filterButton.setAttribute('aria-pressed', String(!!this.topicFilter));
-    let stopIndicators: (() => void) | undefined;
+    let restoreListFocus = !!focusedRow;
+    const wiredRows = new WeakSet<HTMLElement>();
+    const mountedRows = new ListRows(list, {
+      button: (label, action, icon, shortcut) => this.button(list, label, action, icon, shortcut),
+      open: (path) => {
+        this.listSelectedPath = path;
+        return this.openArticle(path, true);
+      },
+      more: () => {
+        this.listLimit += 50;
+        render();
+      },
+    });
+    this.mountedListRows = mountedRows;
+    this.observeRowIndicators(list, new Map());
+    let scanMessage: HTMLElement | undefined;
     const render = () => {
-      stopIndicators?.();
-      // Keep the integrated heading across scan completion and Show more rerenders.
-      for (const child of Array.from(list.children))
-        if (!child.classList.contains('reader-list-heading')) child.remove();
-      const visibleRows = new Map<HTMLButtonElement, string>();
+      scanMessage?.remove();
+      scanMessage = undefined;
       const rows = this.topicFilter
         ? this.filteredPaths
             .flatMap((path) => {
@@ -644,108 +546,104 @@ export class ReaderView extends ItemView {
             })
             .slice(0, this.listLimit + 1)
         : this.host.store.catalog.list(queue, this.search, 0, this.listLimit + 1);
-      for (const article of rows.slice(0, this.listLimit)) {
-        const button = this.button(list, '', () => {
-          this.listSelectedPath = article.path;
-          return this.openArticle(article.path, true);
-        });
-        button.addClass('reader-list-item');
-        button.dataset.readerPath = article.path;
-        button.createEl('span', { cls: 'reader-list-title', text: article.title });
-        button.addEventListener('focus', () => this.selectListRow(button, false));
-        visibleRows.set(button, article.path);
+      mountedRows.update(
+        rows.slice(0, this.listLimit),
+        rows.length > this.listLimit,
+        this.topicFilter ? 'No matching articles in this queue.' : 'No articles in this queue.',
+      );
+      const visibleRows = mountedRows.rows;
+      for (const [row, path] of visibleRows) {
+        const button = row as HTMLButtonElement;
+        button.dataset.readerPath = path;
+        if (!wiredRows.has(button)) {
+          wiredRows.add(button);
+          button.addEventListener('focus', () => this.selectListRow(button, false));
+        }
       }
+      const buttons = [...visibleRows.keys()] as HTMLButtonElement[];
       const selected =
-        Array.from(visibleRows.keys()).find(
-          (button) => button.dataset.readerPath === this.listSelectedPath,
-        ) ?? visibleRows.keys().next().value;
+        buttons.find((button) => button.dataset.readerPath === this.listSelectedPath) ??
+        buttons.find((button) => button === list.ownerDocument.activeElement) ??
+        buttons[0];
       if (selected) this.selectListRow(selected, false);
-      if (selected && (focusedRow || this.focusSelectedListRow)) {
+      if (selected && (restoreListFocus || this.focusSelectedListRow)) {
         selected.focus({ preventScroll: true });
+        restoreListFocus = false;
         this.focusSelectedListRow = false;
       }
-      stopIndicators = this.observeRowIndicators(list, visibleRows);
-      if (!rows.length)
-        list.createEl('p', {
-          text: this.topicFilter
-            ? 'No matching articles in this queue.'
-            : 'No articles in this queue.',
-        });
-      if (rows.length > this.listLimit)
-        this.button(
-          list,
-          'Show more',
-          () => {
-            this.listLimit += 50;
-            render();
-          },
-          'chevrons-down',
-          'm',
-        );
+      this.rowIndicators?.update(visibleRows);
     };
-    if (!this.topicFilter) {
-      render();
-      return;
-    }
     this.filteredPaths = [];
-    list.createEl('p', { text: 'Filtering articles…', attr: { role: 'status' } });
-    const controller = new AbortController();
-    this.topicScan = controller;
-    const lifetime = this.articleLifetime.signal;
-    const abort = () => controller.abort();
-    lifetime.addEventListener('abort', abort, { once: true });
-    this.host.signal.addEventListener('abort', abort, { once: true });
-    const filter = this.currentTopicFilter();
-    const generation = this.generation;
-    const candidates = this.host.store.catalog.list(queue, '', 0, this.host.store.catalog.size);
-    const resolve = (link: string, source: string) =>
-      this.app.metadataCache.getFirstLinkpathDest(link, source)?.path;
-    void this.topicScanner
-      .scan(candidates, {
-        signal: controller.signal,
-        file: (path) => this.host.store.vault.file(path),
-        read: (file) => this.host.store.vault.read(file),
-        metadataMatch: (article) => matchesTopicArticle(article, '', filter, resolve),
-        bodyMatch: (raw, article) => {
-          const document = readDocument(raw);
-          // Body matching is intentionally read-only and never triggers acquisition.
-          return (
-            document.properties.type === 'article' &&
-            matchesTopicArticle(article, document.body, filter, resolve)
-          );
-        },
-      })
-      .then(({ paths, uncertain }) => {
-        if (
-          controller.signal.aborted ||
-          this.stopping ||
-          this.generation !== generation ||
-          this.topicScan !== controller
-        )
-          return;
-        this.filteredPaths = paths;
+    const refresh = () => {
+      if (!this.topicFilter) {
         render();
-        if (uncertain)
-          list.createEl('p', {
-            text: `${uncertain} article(s) could not be checked. Reopen the list to retry.`,
-            attr: { role: 'status' },
-          });
-      })
-      .catch((error) => {
-        if (!controller.signal.aborted && this.generation === generation) {
-          for (const child of Array.from(list.children))
-            if (!child.classList.contains('reader-list-heading')) child.remove();
-          list.createEl('p', {
-            text: 'Could not filter articles. Reopen the list to retry.',
-            attr: { role: 'alert' },
-          });
-          this.error(error);
-        }
-      })
-      .finally(() => {
-        lifetime.removeEventListener('abort', abort);
-        this.host.signal.removeEventListener('abort', abort);
-      });
+        return;
+      }
+      const heading = list.querySelector('.reader-list-heading');
+      if (heading) heading.textContent = this.listLabel();
+      this.syncPresentation();
+      this.topicScan?.abort();
+      scanMessage?.remove();
+      scanMessage = list.createEl('p', { text: 'Filtering articles…', attr: { role: 'status' } });
+      const controller = new AbortController();
+      this.topicScan = controller;
+      const lifetime = this.articleLifetime.signal;
+      const abort = () => controller.abort();
+      lifetime.addEventListener('abort', abort, { once: true });
+      this.host.signal.addEventListener('abort', abort, { once: true });
+      const filter = this.currentTopicFilter();
+      const generation = this.generation;
+      const candidates = this.host.store.catalog.list(queue, '', 0, this.host.store.catalog.size);
+      const resolve = (link: string, source: string) =>
+        this.app.metadataCache.getFirstLinkpathDest(link, source)?.path;
+      void this.topicScanner
+        .scan(candidates, {
+          signal: controller.signal,
+          file: (path) => this.host.store.vault.file(path),
+          read: (file) => this.host.store.vault.read(file),
+          metadataMatch: (article) => matchesTopicArticle(article, '', filter, resolve),
+          bodyMatch: (raw, article) => {
+            const document = readDocument(raw);
+            // Body matching is intentionally read-only and never triggers acquisition.
+            return (
+              document.properties.type === 'article' &&
+              matchesTopicArticle(article, document.body, filter, resolve)
+            );
+          },
+        })
+        .then(({ paths, uncertain }) => {
+          if (
+            controller.signal.aborted ||
+            this.stopping ||
+            this.generation !== generation ||
+            this.topicScan !== controller
+          )
+            return;
+          this.filteredPaths = paths;
+          render();
+          if (uncertain)
+            scanMessage = list.createEl('p', {
+              text: `${uncertain} article(s) could not be checked. Reopen the list to retry.`,
+              attr: { role: 'status' },
+            });
+        })
+        .catch((error) => {
+          if (!controller.signal.aborted && this.generation === generation) {
+            scanMessage?.remove();
+            scanMessage = list.createEl('p', {
+              text: 'Could not filter articles. Reopen the list to retry.',
+              attr: { role: 'alert' },
+            });
+            this.error(error);
+          }
+        })
+        .finally(() => {
+          lifetime.removeEventListener('abort', abort);
+          this.host.signal.removeEventListener('abort', abort);
+        });
+    };
+    this.refreshList = refresh;
+    refresh();
   }
   private selectListRow(button: HTMLButtonElement, focus: boolean): void {
     this.listSelectedPath = button.dataset.readerPath;
@@ -877,114 +775,24 @@ export class ReaderView extends ItemView {
   }
   /** Positive-only, visible-row decoration. No catalog scan, promotion or persisted state. */
   private observeRowIndicators(list: HTMLElement, rows: Map<HTMLElement, string>): () => void {
-    const Observer = list.ownerDocument.defaultView?.IntersectionObserver;
-    if (typeof Observer !== 'function' || !rows.size || this.stopping || this.host.signal.aborted)
-      return () => {};
-    const signal = this.articleLifetime.signal,
-      generation = this.generation;
-    const visible = new Set<HTMLElement>(),
-      pending = new Map<HTMLElement, string>(),
-      reading = new Set<HTMLElement>();
-    let closed = false;
-    const active = () =>
-      !closed &&
-      !signal.aborted &&
-      !this.host.signal.aborted &&
-      !this.stopping &&
-      generation === this.generation &&
-      list.isConnected;
-    const pump = () => {
-      while (active() && this.indicatorReads < 2 && pending.size) {
-        const [row, path] = pending.entries().next().value!;
-        pending.delete(row);
-        if (!visible.has(row) || !row.isConnected) continue;
-        const file = this.host.store.vault.file(path),
-          stat = file?.stat;
-        if (!file || !stat) continue;
-        const { mtime, size } = stat;
-        this.indicatorReads++;
-        reading.add(row);
-        void (async () => {
-          const raw = await this.host.store.vault.read(file);
-          if (
-            !active() ||
-            !visible.has(row) ||
-            !row.isConnected ||
-            file.path !== path ||
-            this.host.store.vault.file(path) !== file ||
-            file.stat.mtime !== mtime ||
-            file.stat.size !== size
-          )
-            return;
-          const document = readDocument(raw);
-          if (document.properties.type !== 'article') return;
-          const openedBefore = !!readingMarker(document.properties.bookmark);
-          let highlighted = false;
-          try {
-            highlighted = renderedHighlight(document.body);
-          } catch {
-            // Uncertain highlight grammar must not erase known position evidence.
-          }
-          for (const [present, name, icon, label] of [
-            [openedBefore, 'reader-opened-indicator', 'eye', 'Opened before'],
-            [highlighted, 'reader-highlight-indicator', 'highlighter', 'Has highlights'],
-          ] as const) {
-            if (!present) continue;
-            const indicator = row.createEl('span', {
-              cls: `reader-row-indicator ${name}`,
-              attr: { role: 'img', 'aria-label': label },
-            });
-            setIcon(indicator, icon);
-            setTooltip(indicator, label);
-            indicator.querySelector('svg')?.setAttribute('aria-hidden', 'true');
-          }
-          observer.unobserve(row);
-          rows.delete(row);
-          visible.delete(row);
-        })()
-          .catch(() => {
-            // Unknown/unreadable status is not evidence of no highlights. Leave the title alone.
-          })
-          .finally(() => {
-            reading.delete(row);
-            this.indicatorReads--;
-            this.indicatorPump?.();
-          });
-      }
-    };
-    const observer = new Observer(
-      (entries) => {
-        if (!active()) return;
-        for (const entry of entries) {
-          const row = entry.target as HTMLElement,
-            path = rows.get(row);
-          if (!path) continue;
-          if (entry.isIntersecting) {
-            visible.add(row);
-            if (!reading.has(row)) pending.set(row, path);
-          } else {
-            visible.delete(row);
-            pending.delete(row);
-          }
-        }
-        pump();
+    const generation = this.generation;
+    const indicators = new RowIndicators(
+      list,
+      {
+        file: (path) => this.host.store.vault.file(path),
+        read: (file) => this.host.store.vault.read(file),
+        signal: this.articleLifetime.signal,
+        hostSignal: this.host.signal,
+        active: () => !this.stopping && this.generation === generation,
       },
-      { root: list },
+      this.indicatorSlots,
     );
-    const stop = () => {
-      closed = true;
-      observer.disconnect();
-      pending.clear();
-      visible.clear();
-      if (this.indicatorPump === pump) this.indicatorPump = undefined;
-      signal.removeEventListener('abort', stop);
-      this.host.signal.removeEventListener('abort', stop);
+    this.rowIndicators = indicators;
+    indicators.update(rows);
+    return () => {
+      indicators.dispose();
+      if (this.rowIndicators === indicators) this.rowIndicators = undefined;
     };
-    this.indicatorPump = pump;
-    signal.addEventListener('abort', stop, { once: true });
-    this.host.signal.addEventListener('abort', stop, { once: true });
-    for (const row of rows.keys()) observer.observe(row);
-    return stop;
   }
   openArticle(
     path: string,
@@ -1310,9 +1118,7 @@ export class ReaderView extends ItemView {
       );
   }
   private invalidateSelection(): number {
-    clearTimeout(this.selectionTimer);
-    this.selectionTimer = undefined;
-    return ++this.selectionRevision;
+    return this.selectionState.invalidate();
   }
   private selectionChanged(): void {
     if (this.stopping || this.host.signal.aborted || this.dialog) return;
@@ -1358,7 +1164,7 @@ export class ReaderView extends ItemView {
           this.selecting ||
           surface.pointerActive ||
           (this.dialog && !hosted) ||
-          this.selectionRevision !== revision ||
+          this.selectionState.revision !== revision ||
           this.surface !== surface ||
           !this.current(source, generation) ||
           surface.displayedBody !== body ||
@@ -1382,7 +1188,7 @@ export class ReaderView extends ItemView {
       };
       // Require 900ms of quiet after the last adjustment/release; never
       // write while a pointer is held. Tokens still guard every asynchronous boundary.
-      this.selectionTimer = setTimeout(() => {
+      this.selectionState.schedule(() => {
         if (!active() || !currentRange()) return;
         const selection = surface.selection();
         if (!selection) return;
@@ -1416,7 +1222,13 @@ export class ReaderView extends ItemView {
       return;
     const selection = pending?.selection ?? this.surface?.selection(),
       snapshot = this.snapshot;
-    if (!selection || !snapshot || this.selecting || this.surface?.pointerActive || this.dialog)
+    if (
+      !selection ||
+      !snapshot ||
+      this.selectionState.selecting ||
+      this.surface?.pointerActive ||
+      this.dialog
+    )
       return;
     const key = JSON.stringify([selection.quote, selection.before, selection.after]);
     if (key === this.lastSelection) return;
@@ -1782,7 +1594,7 @@ export class ReaderView extends ItemView {
       .catch((error) => this.error(error));
   }
   private async prepareToLeave(pending?: PendingSelection): Promise<void> {
-    clearTimeout(this.selectionTimer);
+    this.selectionState.cancel();
     await this.positionWrite;
     // Leaving can finish a known sole typed default, but must never start a new
     // picker after the navigation/close intent has already cancelled modal work.
@@ -2500,7 +2312,7 @@ export class ReaderView extends ItemView {
     if (!this.tapHighlighter?.active) this.tapHighlighter?.setActive(true);
     this.sendSource = { snapshot, passage, generation, draft, mode };
     this.surface?.body.classList.add('reader-send-active');
-    const index = passages(snapshot.body).findIndex(
+    const index = this.passages(snapshot.body).findIndex(
       (item) => item.from === passage.from && item.to === passage.to,
     );
     const marks = this.surface?.body.querySelectorAll<HTMLElement>('mark') ?? [];
@@ -2570,7 +2382,7 @@ export class ReaderView extends ItemView {
         this.assertDisplayed(source);
         const index = reference?.getAttribute('data-reader-passage');
         const passage =
-          index && /^\d+$/.test(index) ? passages(source.body)[Number(index)] : undefined;
+          index && /^\d+$/.test(index) ? this.passages(source.body)[Number(index)] : undefined;
         if (!passage)
           throw new Error(
             'This reference cannot be matched safely to a highlight. Open Markdown to edit it.',
@@ -2587,6 +2399,9 @@ export class ReaderView extends ItemView {
       this.error(error);
     }
     return true;
+  }
+  private passages(body: string): Passage[] {
+    return this.surface?.analysis.passages(body) ?? passages(body);
   }
   private sendToPassage(passage: Passage): void {
     try {
@@ -2712,7 +2527,7 @@ export class ReaderView extends ItemView {
     try {
       this.assertDisplayed(this.snapshot);
       const marks = [...this.surface.body.querySelectorAll('mark')],
-        source = passages(this.snapshot.body),
+        source = this.passages(this.snapshot.body),
         mapped = mark.getAttribute('data-reader-passage');
       const index =
         mapped !== null && /^\d+$/.test(mapped)
@@ -2739,7 +2554,7 @@ export class ReaderView extends ItemView {
     body: string,
   ): Passage | undefined {
     if (!expected) return;
-    const matches = passages(body).filter(
+    const matches = this.passages(body).filter(
       (item) =>
         item.text === expected.text &&
         item.target === expected.target &&
@@ -2906,7 +2721,7 @@ export class ReaderView extends ItemView {
       )
         return;
       const expected = edit
-        ? passages(edit.body).find((item) => item.from === passage.from)
+        ? this.passages(edit.body).find((item) => item.from === passage.from)
         : undefined;
       const selected = edit ? this.passageAfterWrite(edit.body, expected, saved.body) : undefined;
       if (selected) {
@@ -3047,7 +2862,7 @@ export class ReaderView extends ItemView {
       this.surface?.setBody(saved.body, text(saved.properties.url));
       if (action !== 'remove' && this.tapMode && this.passageIntent === intent) {
         const expected = changePassage(snapshot.body, passage, action, target);
-        const changed = passages(expected).find((item) => item.from === passage.from);
+        const changed = this.passages(expected).find((item) => item.from === passage.from);
         const selected = this.passageAfterWrite(expected, changed, saved.body);
         if (selected && this.surface?.displayedBody === saved.body) this.passageMenu(selected);
       }
@@ -3169,6 +2984,8 @@ export class ReaderView extends ItemView {
   }
   async changed(change: LibraryChange): Promise<void> {
     if (this.stopping || this.lifetime.signal.aborted || this.host.signal.aborted) return;
+    this.rowIndicators?.invalidate(change.path);
+    if (change.previousPath) this.rowIndicators?.invalidate(change.previousPath);
     const request = this.nodeCreation;
     if (request) {
       const source = request.source;
@@ -3182,6 +2999,9 @@ export class ReaderView extends ItemView {
       }
     }
     if (change.previousPath) {
+      if (this.listSelectedPath === change.previousPath) this.listSelectedPath = change.path;
+      this.mountedListRows?.rename(change.previousPath, change.path);
+      if (this.mountedListRows) this.rowIndicators?.update(this.mountedListRows.rows);
       this.readingQueue.rename(change.previousPath, change.path);
       if (this.topicFilter?.path === change.previousPath)
         this.topicFilter = { ...this.topicFilter, path: change.path };
@@ -3211,7 +3031,7 @@ export class ReaderView extends ItemView {
             !this.lifetime.signal.aborted &&
             (this.topicFilter || this.contentEl.ownerDocument.activeElement?.tagName !== 'INPUT')
           )
-            this.showList();
+            this.refreshList?.();
         });
       return;
     }
@@ -3447,6 +3267,11 @@ export class ReaderView extends ItemView {
     return this.snapshot?.file ?? this.fallbackFile;
   }
   get busy(): boolean {
-    return this.operating || !!this.writing || this.selecting || !!this.surface?.selection();
+    return (
+      this.operating ||
+      !!this.writing ||
+      this.selectionState.selecting ||
+      !!this.surface?.selection()
+    );
   }
 }

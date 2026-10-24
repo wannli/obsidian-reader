@@ -15,7 +15,7 @@ src/main.ts                         Obsidian lifecycle, commands, routing
   └─ reader/view.ts → core/store.ts      guarded user operations → vault files
 ```
 
-`main.ts` owns plugin lifetime, explicit feed refresh, active/online capture recovery and expiry housekeeping, safe native routing, tracked generation-aware presentation transitions and unload cleanup. It wires the library, ingestion and Reader view; there is no parallel legacy entry point.
+`main.ts` owns explicit feed refresh, active/online capture recovery and expiry orchestration, safe native routing and tracked presentation transitions. `host/folder-runtime.ts` owns each folder generation's signal, vault/store/ingestion, index disposer and maintenance/recovery state. Stop is idempotent; replacement waits for the retired generation's dispatched native writes. Network and presentation lanes remain plugin-owned, and frozen view hosts retain their original generation. It wires the library, ingestion and Reader view; there is no parallel legacy entry point.
 
 ## Core: data and guarded writes
 
@@ -33,7 +33,7 @@ src/main.ts                         Obsidian lifecycle, commands, routing
 | `projection.ts`          | Conservative mapping from rendered words to original Markdown ranges                            |
 | `work.ts`                | Small keyed work queue and file-identity write serialization                                    |
 
-`work.ts` keeps FIFO foreground/background lanes and one shared promise per key. A foreground request moves only pending background work to the foreground tail; dispatched work is never interrupted or rerun. `FOREGROUND_BURST = 3` bounds consecutive foreground dispatches across worker lanes: the next dispatch serves a waiting background job, then resets the burst. Either priority runs freely when the other is empty; foreground-only dispatches still count toward the burst. Stop rejects pending work but lets dispatched jobs settle.
+`work.ts` keeps FIFO foreground/background lanes and one shared promise per key. A foreground request moves only pending background work to the foreground tail; dispatched work is never interrupted or rerun. `FOREGROUND_BURST = 3` bounds consecutive foreground dispatches across worker lanes: the next dispatch serves a waiting background job, then resets the burst. Either priority runs freely when the other is empty; foreground-only dispatches still count toward the burst. Stop rejects pending work but lets dispatched jobs settle. Keyed cancellation removes only not-yet-dispatched jobs from either lane; dispatched jobs retain their slots and keys until settlement.
 
 `store.ts` is the mutation boundary. It rechecks current identity/revision, promotes Feed-folder articles to Later before annotation, writes Reader status changes in YAML, then moves them to their queue folder using guarded native moves (also used for capture retitling). Annotation promotion saves Later, then the annotation, then moves; postmove snapshots use actual bytes/links. Session-only capture receipts permit safe filename retitling; they never become persisted ownership stamps. Explicit Reader deletion archives annotated/topic-bearing articles; unprotected feed-associated deletions record URLs in subscription `deleted_urls` before trash; RSS import rechecks suppression under a shared local import/delete lane. Expiry does not record suppression: it requires explicit `status: feed` in metadata and fresh bytes, protects active work/backlinks, then reads only candidate bodies. Folder determines queue; expiry additionally requires explicit fresh `status: feed` in the Feed folder.
 
@@ -51,7 +51,7 @@ Runtime libraries: `yaml`, `marked`, `entities`, `dompurify`, `defuddle`. No UI 
 ## Host: narrow Obsidian adapters
 
 - `host/vault.ts`: public vault/metadata/editor APIs, dirty-buffer protection, folder/case collisions, recoverable trash, link-aware moves, change subscriptions. Session-local post-layout create receipts freeze eligible ctime minutes for missing publication on exact new articles; startup indexing remains read-only. See the storage contract for cold-launch/Sync provenance limits.
-- `host/network.ts`: bounded request slots and delivery timeouts. An uncancellable timed-out request retains its slot until the host settles it.
+- `host/network.ts`: two native request slots, a default ceiling of 64 waiting requests, and delivery deadlines including queue wait. Overflow rejects with a retryable `NetworkOverflowError`; same URL/Accept consumers still join at capacity. Expired waiting jobs release their queue entry, request-map entry, guards and timer; identity-checked cleanup cannot delete a newer retry. An uncancellable timed-out native request retains its slot and shared result until the host settles it. These are processing/backlog bounds, not a download-memory cap: `requestUrl` may buffer its full response before content-size checks. The general ingestion/recovery queue is not capped.
 - `host/ingestion.ts`: local-only subscription creation (editable hostname title/prefix), explicit latest-20 Sync/Refresh feeds imports, dedupe, cancellation, and acquisition proof against current excerpt/standalone native source-link bytes. Explicit confirmed re-download is separate from conservative acquisition/Retry and retains snapshot/editor/lifetime guards. No automatic feed polling or add-time fetch/import.
 - `host/dialogs.ts` / `settings.ts`: native input/dialogs, staged independent-folder settings and subscription controls.
 - `host/folder-settings.ts` / `folder-picker.ts`: feed subscription creation destination in `captureFolders`; old article destination remains inert/preserved. Applying destinations drains old work and creates fresh list views without acquisition or promotion. Exact article/feed types outside Templates/.trash are indexed anywhere in the vault.
@@ -60,6 +60,11 @@ Runtime libraries: `yaml`, `marked`, `entities`, `dompurify`, `defuddle`. No UI 
 
 ## Reader: presentation and transient state
 
+- `host/note-links.ts`: safe native link parsing and existing-note-only navigation, shared by routing and Reader without a lifecycle-policy import from the view.
+- `reader/article-analysis.ts`: one exact-body passage-analysis entry per reading surface, shared by rendering and actions; defensive copies and disposal keep mutable intents/lifetimes isolated. See [profile evidence](analysis-profile.md).
+- `reader/selection-coordinator.ts`: native pointer/touch ownership, workspace-swipe isolation and revision-bound quiet timers. The view retains displayed-source and hosted-write phase authority; the coordinator never writes notes.
+- `reader/list-rows.ts`: keyed list reconciliation, append-only expansion, current-path click targets and scroll/focus preservation. Metadata and topic-filter refreshes retain the mounted list and its surviving rows; explicit queue/filter changes start a new list.
+- `reader/row-indicators.ts`: disposable visible-row evidence, path-specific invalidation and per-row revisions, with two read slots shared across list mounts. Body/bookmark-only changes refresh indicators without persisting flags or rebuilding the list.
 - `reader/view.ts`: flat library/article UI, browsing context, guarded operations/lifetimes and native menus/Markdown escape. Related notes edits defaults separately from highlight-note multiselection/removal. Selecting a highlight arms direct reference-click collection of that source, not target text. Topic filters retain navigation; indicators use existing `bookmark`/Markdown only, with a separate `dog_ear` shortcut pointer.
 - `core/topic-filter.ts`, `reader/topic-scan.ts`, `host/topic-filter-dialog.ts`: pure topic/alias/visible-text matching, cancellable current-queue reads and the topic/free-text filter picker. Filtering never acquires or writes articles; see [acceptance scope](topic-filter.md).
 - `reader/render.ts`: sanitized Markdown, lazy images and one native-sized pill per highlight’s references, containing only Fileclass icons/names with individually clickable destinations. `reader/topic-pills.ts` paints read-only header topics; Surface queues their reflow without adding metadata to source text. Its optional host painter decorates all recognized typed-note links with public Fileclass icons; icon metadata stays outside prose mapping.
@@ -76,8 +81,9 @@ Displayed text must match the write snapshot before a selection action. Position
 
 ## Tests and tooling
 
-- `tests/*.test.ts`: fast unit/component regressions; `helpers/memory-vault.ts` supplies an isolated vault port. Node is the default; DOM-dependent tests opt in or install explicit local fixtures.
+- `tests/*.test.ts`: fast unit/component regressions; `helpers/memory-vault.ts` supplies an isolated vault port. `helpers/reader-view-fixture.ts` keeps shared mock/DOM setup together; lifecycle, selection, keyboard, list, Nodes and hosted-view behavior have separate suites with unchanged assertions. Node is the default; DOM-dependent tests opt in or install explicit local fixtures.
 - `scripts/*.test.mjs`: build/setup/Hot Reload/release safety, with isolated fixture repositories from `tooling-fixture.mjs`.
+- `tsconfig.runtime.json`: runtime-only typecheck without Node globals; the root configuration retains Node types for tests. A virtual negative fixture also checks dependency-provided globals. `npm run typecheck` runs both configurations.
 - `build.mjs`: browser-only bundling from `src/main.ts` and `src/reader/styles.css`; only `obsidian` stays external.
 - `dev.mjs`: direct installed-vault build; `setup-vault.mjs` / `seed.mjs`: explicit create-only synthetic setup and backed-up artifact updates.
 - `hot-reload.mjs`: explicit pinned development-plugin installation; never a build-time download.
@@ -86,6 +92,8 @@ Displayed text must match the write snapshot before a selection action. Position
 - `validate-release.mjs`, root metadata, `.github/`: validation and the existing Release Please publication path. The serialized workflow builds the exact release tag and can retry existing drafts without overwriting mismatched assets; it never creates or moves tags outside Release Please.
 
 `mise exec -- npm run benchmark:scale` is an opt-in 10,000-article/100-feed core and filesystem benchmark, not native UI/E2E automation. Its synthetic corpus and measurements stay ignored.
+
+`mise exec -- npm run benchmark:analysis` profiles pure article-analysis stages on in-memory synthetic bodies, with parser-call counters and no vault/network access. See [method, evidence and cache limits](analysis-profile.md).
 
 Use `mise exec -- npm run check`; see [README](../README.md) for focused commands. Prettier keeps source/tests/tooling consistent. No test exclusions hide retired code; no automated E2E suite exists.
 
