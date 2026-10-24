@@ -80,7 +80,7 @@ Displayed text must match the write snapshot before a selection action. Position
 
 ## Tests and tooling
 
-- `tests/*.test.ts`: fast unit/component regressions; `helpers/memory-vault.ts` supplies an isolated vault port. Node is the default; DOM-dependent tests opt in or install explicit local fixtures.
+- `tests/*.test.ts`: fast unit/component regressions; `helpers/memory-vault.ts` supplies an isolated vault port. `helpers/reader-view-fixture.ts` keeps shared mock/DOM setup together; lifecycle, selection, keyboard, list, Nodes and hosted-view behavior have separate suites with unchanged assertions. Node is the default; DOM-dependent tests opt in or install explicit local fixtures.
 - `scripts/*.test.mjs`: build/setup/Hot Reload/release safety, with isolated fixture repositories from `tooling-fixture.mjs`.
 - `tsconfig.runtime.json`: runtime-only typecheck without Node globals; the root configuration retains Node types for tests. A virtual negative fixture also checks dependency-provided globals. `npm run typecheck` runs both configurations.
 - `build.mjs`: browser-only bundling from `src/main.ts` and `src/reader/styles.css`; only `obsidian` stays external.
