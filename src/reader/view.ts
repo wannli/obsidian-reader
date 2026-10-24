@@ -495,7 +495,6 @@ export class ReaderView extends ItemView {
       setIcon(button, icon);
       const tooltip = shortcut ? `${label} (${shortcut.toUpperCase()})` : label;
       setTooltip(button, tooltip);
-      button.title = tooltip;
       button.setAttribute('aria-label', label);
       button.querySelector('svg')?.setAttribute('aria-hidden', 'true');
     }
@@ -1132,7 +1131,6 @@ export class ReaderView extends ItemView {
     statusButton.setAttribute('aria-label', 'Change article status and advance');
     const statusTooltip = 'Change status and advance · S: choose · L: Later · A: Archive';
     setTooltip(statusButton, statusTooltip);
-    statusButton.title = statusTooltip;
     this.button(this.actions, 'Delete', () => this.finish('delete'), 'trash-2', 'd').setAttribute(
       'aria-label',
       'Trash article and advance',

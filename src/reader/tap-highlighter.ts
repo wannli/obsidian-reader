@@ -76,7 +76,6 @@ export class TapHighlighter {
     trigger.type = 'button';
     trigger.className = 'reader-icon-button reader-tap-highlight-trigger';
     setTooltip(trigger, 'Highlight mode (H)');
-    trigger.title = 'Highlight mode (H)';
     trigger.setAttribute('aria-label', 'Highlight mode');
     this.shortcut(trigger, 'h');
     setIcon(trigger, 'highlighter');
@@ -87,7 +86,6 @@ export class TapHighlighter {
     this.nodeTrigger.type = 'button';
     this.nodeTrigger.className = 'reader-icon-button reader-tap-node-trigger';
     setTooltip(this.nodeTrigger, 'Create node (C)');
-    this.nodeTrigger.title = 'Create node (C)';
     this.nodeTrigger.setAttribute('aria-label', 'Create node');
     this.shortcut(this.nodeTrigger, 'c');
     setIcon(this.nodeTrigger, 'file-plus-2');
@@ -317,8 +315,6 @@ export class TapHighlighter {
     element.className = 'reader-icon-button';
     const tooltip = key ? `${label} (${key.toUpperCase()})` : label;
     setTooltip(element, tooltip);
-    // Native hover can take precedence over Obsidian's tooltip. Keep both identical.
-    element.title = tooltip;
     element.setAttribute('aria-label', label);
     if (key) this.shortcut(element, key);
     setIcon(element, icon);
@@ -421,7 +417,6 @@ export class TapHighlighter {
             ? `${action.label} (${key.toUpperCase()})`
             : `${action.label} (Enter when focused)`;
           setTooltip(element, tooltip);
-          element.title = tooltip;
           element.setAttribute('aria-label', action.label);
           return element;
         }) ?? [];

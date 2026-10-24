@@ -218,7 +218,7 @@ it('switches the same toolbar contextually and restores the exact original actio
     [trigger, 'H'],
     [button(f.toolbar, 'Create node'), 'C'],
   ] as const) {
-    expect(action.title).toBe(`${action.getAttribute('aria-label')} (${key})`);
+    expect(action.hasAttribute('title')).toBe(false);
     expect(action.getAttribute('aria-keyshortcuts')).toBe(key);
     expect(setTooltip).toHaveBeenCalledWith(
       action,
@@ -343,7 +343,7 @@ it('uses icon-only actions with accessible names and tooltips instead of a visib
     expect(action.textContent).toBe('');
     expect(action.classList.contains('reader-icon-button')).toBe(true);
     expect(action.getAttribute('aria-label')).toBe(label);
-    expect(action.title).toBe(`${label} (${key})`);
+    expect(action.hasAttribute('title')).toBe(false);
     expect(action.getAttribute('aria-keyshortcuts')).toBe(key);
     expect(action.querySelector('svg')?.getAttribute('data-icon')).toBe(icon);
     expect(action.querySelector('svg')?.getAttribute('aria-hidden')).toBe('true');
@@ -391,7 +391,7 @@ it('renders generic icon-only passage actions, Undo and Done in the same panel',
     const tooltip = shortcut
       ? `${action.label} (${shortcut})`
       : `${action.label} (Enter when focused)`;
-    expect(element.title).toBe(tooltip);
+    expect(element.hasAttribute('title')).toBe(false);
     expect(element.querySelector('svg')?.getAttribute('data-icon')).toBe(action.icon);
     expect(element.querySelector('svg')?.getAttribute('aria-hidden')).toBe('true');
     expect(setTooltip).toHaveBeenCalledWith(element, tooltip);
@@ -415,7 +415,9 @@ it('labels multiple note destinations with working keys and a focused Enter fall
   for (const [index, action] of actions.entries()) {
     const key = ['O', '1', '9', undefined][index];
     const element = button(f.toolbar, action.label);
-    expect(element.title).toBe(
+    expect(element.hasAttribute('title')).toBe(false);
+    expect(setTooltip).toHaveBeenCalledWith(
+      element,
       key ? `${action.label} (${key})` : `${action.label} (Enter when focused)`,
     );
     expect(element.getAttribute('aria-keyshortcuts')).toBe(key ?? null);
