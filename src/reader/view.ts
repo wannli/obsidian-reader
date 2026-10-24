@@ -2302,7 +2302,7 @@ export class ReaderView extends ItemView {
     if (!this.tapHighlighter?.active) this.tapHighlighter?.setActive(true);
     this.sendSource = { snapshot, passage, generation, draft, mode };
     this.surface?.body.classList.add('reader-send-active');
-    const index = passages(snapshot.body).findIndex(
+    const index = this.passages(snapshot.body).findIndex(
       (item) => item.from === passage.from && item.to === passage.to,
     );
     const marks = this.surface?.body.querySelectorAll<HTMLElement>('mark') ?? [];
@@ -2372,7 +2372,7 @@ export class ReaderView extends ItemView {
         this.assertDisplayed(source);
         const index = reference?.getAttribute('data-reader-passage');
         const passage =
-          index && /^\d+$/.test(index) ? passages(source.body)[Number(index)] : undefined;
+          index && /^\d+$/.test(index) ? this.passages(source.body)[Number(index)] : undefined;
         if (!passage)
           throw new Error(
             'This reference cannot be matched safely to a highlight. Open Markdown to edit it.',
@@ -2389,6 +2389,9 @@ export class ReaderView extends ItemView {
       this.error(error);
     }
     return true;
+  }
+  private passages(body: string): Passage[] {
+    return this.surface?.analysis.passages(body) ?? passages(body);
   }
   private sendToPassage(passage: Passage): void {
     try {
@@ -2514,7 +2517,7 @@ export class ReaderView extends ItemView {
     try {
       this.assertDisplayed(this.snapshot);
       const marks = [...this.surface.body.querySelectorAll('mark')],
-        source = passages(this.snapshot.body),
+        source = this.passages(this.snapshot.body),
         mapped = mark.getAttribute('data-reader-passage');
       const index =
         mapped !== null && /^\d+$/.test(mapped)
@@ -2541,7 +2544,7 @@ export class ReaderView extends ItemView {
     body: string,
   ): Passage | undefined {
     if (!expected) return;
-    const matches = passages(body).filter(
+    const matches = this.passages(body).filter(
       (item) =>
         item.text === expected.text &&
         item.target === expected.target &&
@@ -2708,7 +2711,7 @@ export class ReaderView extends ItemView {
       )
         return;
       const expected = edit
-        ? passages(edit.body).find((item) => item.from === passage.from)
+        ? this.passages(edit.body).find((item) => item.from === passage.from)
         : undefined;
       const selected = edit ? this.passageAfterWrite(edit.body, expected, saved.body) : undefined;
       if (selected) {
@@ -2849,7 +2852,7 @@ export class ReaderView extends ItemView {
       this.surface?.setBody(saved.body, text(saved.properties.url));
       if (action !== 'remove' && this.tapMode && this.passageIntent === intent) {
         const expected = changePassage(snapshot.body, passage, action, target);
-        const changed = passages(expected).find((item) => item.from === passage.from);
+        const changed = this.passages(expected).find((item) => item.from === passage.from);
         const selected = this.passageAfterWrite(expected, changed, saved.body);
         if (selected && this.surface?.displayedBody === saved.body) this.passageMenu(selected);
       }

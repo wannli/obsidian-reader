@@ -7,6 +7,7 @@ import { createDocument, patchProperties, readDocument } from '../../src/core/do
 import { changePassage, passages } from '../../src/core/annotations';
 import { hostPassage, paragraphAnchors } from '../../src/core/hosted-highlights';
 import { articleTopicPill, type ArticleTopic } from '../../src/reader/topic-pills';
+import { ArticleAnalysis } from '../../src/reader/article-analysis';
 import { ReaderView } from '../../src/reader/view';
 import ReaderPlugin from '../../src/main';
 import type { NodesApi, NodeResult } from '../../src/host/nodes';
@@ -184,6 +185,7 @@ vi.mock('../../src/host/ingestion', () => ({
 
 vi.mock('../../src/reader/surface', () => ({
   ReadingSurface: class {
+    analysis = new ArticleAnalysis();
     viewport = document.createElement('div');
     flow = document.createElement('div');
     body = document.createElement('article');
@@ -230,7 +232,7 @@ vi.mock('../../src/reader/surface', () => ({
     jumpTo = vi.fn();
     reveal = vi.fn();
     highlightFeedback = vi.fn(() => vi.fn());
-    dispose = vi.fn();
+    dispose = vi.fn(() => this.analysis.clear());
     constructor(
       parent: HTMLElement,
       readonly paged: boolean,

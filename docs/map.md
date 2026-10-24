@@ -61,6 +61,7 @@ Runtime libraries: `yaml`, `marked`, `entities`, `dompurify`, `defuddle`. No UI 
 ## Reader: presentation and transient state
 
 - `host/note-links.ts`: safe native link parsing and existing-note-only navigation, shared by routing and Reader without a lifecycle-policy import from the view.
+- `reader/article-analysis.ts`: one exact-body passage-analysis entry per reading surface, shared by rendering and actions; defensive copies and disposal keep mutable intents/lifetimes isolated. See [profile evidence](analysis-profile.md).
 - `reader/selection-coordinator.ts`: native pointer/touch ownership, workspace-swipe isolation and revision-bound quiet timers. The view retains displayed-source and hosted-write phase authority; the coordinator never writes notes.
 - `reader/list-rows.ts`: keyed list reconciliation, append-only expansion, current-path click targets and scroll/focus preservation. Metadata and topic-filter refreshes retain the mounted list and its surviving rows; explicit queue/filter changes start a new list.
 - `reader/row-indicators.ts`: disposable visible-row evidence, path-specific invalidation and per-row revisions, with two read slots shared across list mounts. Body/bookmark-only changes refresh indicators without persisting flags or rebuilding the list.
@@ -91,6 +92,8 @@ Displayed text must match the write snapshot before a selection action. Position
 - `validate-release.mjs`, root metadata, `.github/`: validation and the existing Release Please publication path. The serialized workflow builds the exact release tag and can retry existing drafts without overwriting mismatched assets; it never creates or moves tags outside Release Please.
 
 `mise exec -- npm run benchmark:scale` is an opt-in 10,000-article/100-feed core and filesystem benchmark, not native UI/E2E automation. Its synthetic corpus and measurements stay ignored.
+
+`mise exec -- npm run benchmark:analysis` profiles pure article-analysis stages on in-memory synthetic bodies, with parser-call counters and no vault/network access. See [method, evidence and cache limits](analysis-profile.md).
 
 Use `mise exec -- npm run check`; see [README](../README.md) for focused commands. Prettier keeps source/tests/tooling consistent. No test exclusions hide retired code; no automated E2E suite exists.
 
