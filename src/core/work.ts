@@ -20,14 +20,20 @@ export class SerialWrites<Key> {
 
 interface Job {
   key: string;
+  promise: Promise<void>;
   run: () => Promise<void>;
   resolve: () => void;
   reject: (error: unknown) => void;
 }
+/** At most three consecutive foreground dispatches before a waiting background job. */
+const FOREGROUND_BURST = 3;
+
 /** Small session-local queue, not a second persistent job database. */
 export class WorkQueue {
-  private pending: Job[] = [];
-  private jobs = new Map<string, Promise<void>>();
+  private foreground: Job[] = [];
+  private background: Job[] = [];
+  private foregroundBurst = 0;
+  private jobs = new Map<string, Job>();
   private active = 0;
   private stopped = false;
   constructor(readonly concurrency = 2) {
@@ -36,22 +42,37 @@ export class WorkQueue {
   enqueue(key: string, run: () => Promise<void>, foreground = false): Promise<void> {
     if (this.stopped) return Promise.reject(new Error('Reader has stopped.'));
     const existing = this.jobs.get(key);
-    if (existing) return existing;
+    if (existing) {
+      // Only pending background work can move; active jobs keep their occupied lane.
+      const index = foreground ? this.background.indexOf(existing) : -1;
+      if (index !== -1) this.foreground.push(...this.background.splice(index, 1));
+      return existing.promise;
+    }
     let resolve!: () => void, reject!: (error: unknown) => void;
     const result = new Promise<void>((yes, no) => {
       resolve = yes;
       reject = no;
     });
-    const job = { key, run, resolve, reject };
-    if (foreground) this.pending.unshift(job);
-    else this.pending.push(job);
-    this.jobs.set(key, result);
+    const job = { key, promise: result, run, resolve, reject };
+    if (foreground) this.foreground.push(job);
+    else this.background.push(job);
+    this.jobs.set(key, job);
     this.pump();
     return result;
   }
   private pump(): void {
-    while (!this.stopped && this.active < this.concurrency && this.pending.length) {
-      const job = this.pending.shift()!;
+    while (
+      !this.stopped &&
+      this.active < this.concurrency &&
+      (this.foreground.length || this.background.length)
+    ) {
+      const useForeground =
+        this.foreground.length > 0 &&
+        (this.background.length === 0 || this.foregroundBurst < FOREGROUND_BURST);
+      const job = (useForeground ? this.foreground : this.background).shift()!;
+      this.foregroundBurst = useForeground
+        ? Math.min(this.foregroundBurst + 1, FOREGROUND_BURST)
+        : 0;
       this.active++;
       const finished = () => {
         this.active--;
@@ -74,7 +95,7 @@ export class WorkQueue {
   }
   stop(): void {
     this.stopped = true;
-    for (const job of this.pending.splice(0)) {
+    for (const job of [...this.foreground.splice(0), ...this.background.splice(0)]) {
       this.jobs.delete(job.key);
       job.reject(new Error('Reader has stopped.'));
     }
