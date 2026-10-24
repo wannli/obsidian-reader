@@ -2,6 +2,8 @@
 
 One disposable vault, one Obsidian Sync remote, one short phone walkthrough. This is manual native acceptance, not an E2E suite or proof from DOM mocks.
 
+The Mac results and settings below are a **14 October historical record**, not a current installation inventory. That build used folder queues and `reading_position`. Current source uses folder-authoritative queues, a YAML `status` mirror, `bookmark` and four queue folders; see the [storage contract](storage-contract.md). Reconfirm build identity and owner clearance before a future walkthrough; do not convert the old fixtures automatically.
+
 ## Safety and authorization
 
 - Reader's owned target is `.sandbox/Reader2 Test Vault` in this repository. **The native lane is returned to Wannes, hold true; he can use the window now.** Agents must not access native Obsidian without fresh clearance, including read-only checks. Future authorized work still requires exact ownership/path verification.
@@ -26,7 +28,7 @@ Recorded final evidence: `reader-redesign-audit.json`, `native-folder-apply.json
 
 Earlier signed desktop Nodes API v2 capture/early-link, PhoneTask `false`/`0`, Atlas & Orbit project readback, visible highlight and Stream-protection checks succeeded. They do not prove full mobile capture, Date/cancellation or physical acceptance. Fileclass 0.2.15/public API 1.1 requires **Obsidian 1.12.7+** on both devices; API versions and plugin release versions differ. Preserve the verified project baseline (**Atlas & Orbit**, **Borealis research**, excluding **Should never show**) and legitimate added projects; never prune a created node or treat fallback/all-file candidates as Base-filter proof.
 
-For future authorized interoperability checks, creation’s chosen class may differ from discovery’s last bound class. Link/Change and Create note must use `fileclass-inline.api` v2 `pickNodeForLink`, committing the source before required completion. Without that capability, neither action is available; verify ordinary highlights still work. There is no All notes route or standalone fallback. Reject uncertain source writes, verify target visibility through the public API at Reader’s commit boundary, and never prune the target. Reader’s Stream → Inbox promotion must not cancel required completion; Fileclass defaults/hooks must not alter Reader articles or retention.
+For future authorized interoperability checks, creation’s chosen class may differ from discovery’s last bound class. Link/Change and Create note must use `fileclass-inline.api` v2 `pickNodeForLink`, committing the source before required completion. Without that capability, neither action is available; verify ordinary highlights still work. There is no All notes route or standalone fallback. Reject uncertain source writes, verify target visibility through the public API at Reader’s commit boundary, and never prune the target. Current Reader’s Feed-folder → Later promotion must not cancel required completion; Fileclass defaults/hooks must not alter Reader articles or retention.
 
 ## Fileclass safety profile — unchanged
 
@@ -47,12 +49,12 @@ Recorded Mac `fileclass/data.json` safety profile below remains unchanged; do no
 
 Keep class definitions and Nodes capture outside `Reading/`, with matching `fileClass` aliases. Leave class `newNotes[].template` and legacy `fileClassNoteTemplate` unset; no global/folder/tag bindings for Reader. There is no per-folder write-deny switch: folder separation alone is not protection. Turning Canvas off after writes were queued is not a cancellation guarantee. Do not run explicit Fileclass write commands on Reader articles.
 
-**Current live test:** preserve Wannes’s restored choices: configuration/enablement and installed-plugin/settings sync on; “Sync all other types” off. The Mac Fileclass safety profile is unchanged. The iPhone already synced an enabled Reader/Fileclass/Nodes list; mobile first-enable/config-arrival ordering is unverified, not grounds to silently reconfigure his devices. Verify Base arrival and record unrun mobile cases.
+**Recorded Sync configuration (14 October):** preserve Wannes’s restored choices: configuration/enablement and installed-plugin/settings sync on; “Sync all other types” off. The Mac Fileclass safety profile is unchanged. The iPhone already synced an enabled Reader/Fileclass/Nodes list; mobile first-enable/config-arrival ordering is unverified, not grounds to silently reconfigure his devices. Verify Base arrival and record unrun mobile cases.
 
 ## Phone walkthrough — four steps, two feature interactions
 
 1. **Use the existing disposable remote, Reader phone smoke 2026-10-14.** Do not create another remote or connect a personal vault. Authentication/encryption secrets stay with Wannes.
-2. **During Wannes’s phone walkthrough, confirm downloads/build identity.** Mac Reader is installed as `f4bf…`; actual phone acceptance is not established. Confirm Obsidian 1.12.7+, Bases and the three plugin builds without changing restored Sync settings. Record unknown startup ordering honestly; do not claim mobile readiness from desktop tests.
+2. **During Wannes’s phone walkthrough, confirm downloads/build identity.** The last build recorded here is Mac Reader `f4bf…`; verify the actual Mac and phone builds rather than assuming that record is current. Actual phone acceptance is not established. Confirm Obsidian 1.12.7+, Bases and the three plugin builds without changing restored Sync settings. Record unknown startup ordering honestly; do not claim mobile readiness from desktop tests.
 3. **Native `@` Person capture:** open the prepared ordinary Markdown scratch note, type the supplied `@` query and choose optional-only Person. Verify real iOS keyboard/touch selection, readable class icon, source/link preservation, and no optional completion form. A toolbar fallback is not proof that the `@` trigger worked.
 4. **Reader → required PhoneTask:** select the prepared passage, then clear selection and tap its visible highlight → **Create note…** → PhoneTask. Enter the agreed summary, completed **False (`false`)**, estimate **`0`**, and choose **Atlas & Orbit** from the verified project list; leave optional details empty. Verify link-before-completion and Save/Close access with the keyboard present. Tap the linked highlight → **Open note** once after Sync; briefly background/resume and report “done” or the first unexpected result.
 
@@ -62,7 +64,7 @@ Use the exact owner fixture pack: standalone Person, Project and PhoneTask class
 
 The final Mac audit above is complete. The following phone readback cases remain a future checklist, not authorization to access the currently held native lane:
 
-- Verify the exact synced article Markdown, highlight/link destination and reading anchor; check the target's expected class membership and field values.
+- For current source, verify the exact synced article Markdown, highlight/link destination and `bookmark`; Feed-folder annotations must save `status: later` before the annotation and move to Later. Legacy `reading_position` stays untouched/inert. Check the target's expected class membership and field values.
 - Check that meaningful `false`/`0`, required text, Base-selected links and any tested Date survived with the expected types/values.
 - Confirm a cancelled/failed linked creation never triggered target pruning or stale article writes.
 - Record device model, OS/Obsidian versions, both plugin build identities, tested cases, skipped cases and observed errors. Sync completion alone does not prove plugin loading or interaction correctness.

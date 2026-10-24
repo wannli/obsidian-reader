@@ -10,7 +10,8 @@ coverage/
 /main.js
 /main.js.map
 
-# Local Obsidian development marker, vaults, profiles, user data, and credentials
+# Local worktrees and Obsidian development marker, vaults, profiles, user data, and credentials
+.worktrees/
 .hotreload
 .sandbox/
 .obsidian/

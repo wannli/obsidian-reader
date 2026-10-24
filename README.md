@@ -73,13 +73,13 @@ Lists follow the article's folder, not its YAML `status`. The four queue folders
 
 ## Follow feeds without the backlog
 
-Run **Add feed** with an RSS or Atom URL. Reader saves the subscription first, giving you time to edit its title and options. Then use **Sync** in **Manage feeds**, or the **Refresh feeds** command, to bring in articles.
+Run **Manage feeds**, choose **Add feed**, and enter an RSS or Atom URL. Reader saves the subscription first, giving you time to edit its title and options in the subscription note. Then use **Sync** in **Manage feeds**, or the **Refresh feeds** command, to bring in articles.
 
 - **You choose when to refresh.** No startup or scheduled feed polling.
 - **Each refresh considers the latest 20 entries per feed**, before deduplication and age filtering. Reader is for recent reading, not a complete feed archive; busy feeds can have entries you miss between refreshes.
 - **Available feed text is saved first.** Missing full text can be fetched when you open an article or move it to Inbox/Later.
 - **Delete once through Reader.** The subscription remembers explicitly deleted article URLs so later refreshes skip them. This is per subscription: another feed or a device that hasn’t synced the deletion record can still import the URL. It does not cover external deletions or automatic expiry, and you can still save the URL manually.
-- **Unsubscribe without losing saved articles.** Removing a subscription leaves its articles alone.
+- **Unsubscribe without losing saved articles.** Removing a subscription leaves its articles alone. If an article still links to a missing subscription, Reader can refuse its deletion because it cannot record the deleted URL; unsubscribing does not remove that provenance link.
 
 ## Highlight and collect ideas
 

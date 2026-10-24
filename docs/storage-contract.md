@@ -69,7 +69,7 @@ deleted_urls:
 
 - `title`, `prefix`, and `enabled` are optional; enabled defaults to true. `error` may describe the last failed refresh. Article statuses do not apply to subscriptions.
 - New subscription notes do not write `id` or `ID`. Existing unknown properties, including old IDs, remain preserved. No automatic cleanup or migration of existing IDs.
-- Unsubscribe trashes the subscription note, not its articles. Articles and subscriptions may share a folder.
+- Unsubscribe trashes the subscription note, not its articles, and leaves their `feed` links intact. Explicit Reader deletion fails closed if a linked subscription cannot be resolved for deleted-URL recording; it does not silently drop suppression history. Articles and subscriptions may share a folder.
 
 ### Deleted articles
 
