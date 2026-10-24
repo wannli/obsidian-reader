@@ -60,6 +60,8 @@ Runtime libraries: `yaml`, `marked`, `entities`, `dompurify`, `defuddle`. No UI 
 
 ## Reader: presentation and transient state
 
+- `host/note-links.ts`: safe native link parsing and existing-note-only navigation, shared by routing and Reader without a lifecycle-policy import from the view.
+- `reader/selection-coordinator.ts`: native pointer/touch ownership, workspace-swipe isolation and revision-bound quiet timers. The view retains displayed-source and hosted-write phase authority; the coordinator never writes notes.
 - `reader/list-rows.ts`: keyed list reconciliation, append-only expansion, current-path click targets and scroll/focus preservation. Metadata and topic-filter refreshes retain the mounted list and its surviving rows; explicit queue/filter changes start a new list.
 - `reader/row-indicators.ts`: disposable visible-row evidence, path-specific invalidation and per-row revisions, with two read slots shared across list mounts. Body/bookmark-only changes refresh indicators without persisting flags or rebuilding the list.
 - `reader/view.ts`: flat library/article UI, browsing context, guarded operations/lifetimes and native menus/Markdown escape. Related notes edits defaults separately from highlight-note multiselection/removal. Selecting a highlight arms direct reference-click collection of that source, not target text. Topic filters retain navigation; indicators use existing `bookmark`/Markdown only, with a separate `dog_ear` shortcut pointer.

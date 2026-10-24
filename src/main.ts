@@ -28,7 +28,8 @@ import { confirmArticleReplacement, input } from './host/dialogs';
 import { Ingestion } from './host/ingestion';
 import { ReaderSettings, showFeeds } from './host/settings';
 import { ObsidianVault, watchLibrary, type LibraryChange } from './host/vault';
-import { nativeLinkPath, READER_VIEW, ReaderView } from './reader/view';
+import { READER_VIEW, ReaderView } from './reader/view';
+import { nativeLinkPath } from './host/note-links';
 
 export default class ReaderPlugin extends Plugin {
   store!: ArticleStore<TFile>;

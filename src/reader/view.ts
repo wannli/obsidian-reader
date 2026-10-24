@@ -24,6 +24,9 @@ import { TopicScanner } from './topic-scan';
 import { readDocument, readingMarker, replaceBody } from '../core/document';
 import { IndicatorReadSlots, RowIndicators } from './row-indicators';
 import { ListRows } from './list-rows';
+import { SelectionCoordinator } from './selection-coordinator';
+import { nativeLinkPath, openExistingNote } from '../host/note-links';
+export { nativeLinkPath, openExistingNote } from '../host/note-links';
 import { articleInfo, linkPath, queues, text, type Queue } from '../core/model';
 import {
   PartialCollectionError,
@@ -69,42 +72,6 @@ type HighlightRemoval = {
   previousQuote: Pick<HostedHighlight, 'quoteMarkdown' | 'blockId'>;
   validate: (paths?: readonly string[]) => void;
 };
-/** Rendered hrefs are encoded once. Never reinterpret a decoded URI as a vault path. */
-export function nativeLinkPath(value: string, encoded = true): string | undefined {
-  let path: string;
-  try {
-    path = (encoded ? decodeURIComponent(value) : value).trim();
-  } catch {
-    return;
-  }
-  if (/^(?:[a-z][\w+.-]*:|\/\/|#)/i.test(path)) return;
-  path = path.replace(/^\//, '');
-  return path && !/^(?:[a-z][\w+.-]*:|\/\/|#)/i.test(path) ? path : undefined;
-}
-
-/** Unlike openLinkText, this never asks Obsidian to create a missing note. */
-export async function openExistingNote(
-  app: App,
-  target: string,
-  source: string,
-  newLeaf = false,
-): Promise<void> {
-  const safe = nativeLinkPath(target, false);
-  if (!safe) throw new Error('This is not a vault-note link.');
-  const { path, subpath } = parseLinktext(safe);
-  const file = app.metadataCache.getFirstLinkpathDest(path, source);
-  if (!file) throw new Error('The linked note no longer exists. No note was created.');
-  const expected = file.path;
-  const assert = () => {
-    if (file.path !== expected || app.vault.getAbstractFileByPath(expected) !== file)
-      throw new Error('The linked note changed. Reopen the link.');
-  };
-  assert();
-  const leaf = app.workspace.getLeaf(newLeaf);
-  assert();
-  await leaf.openFile(file, { active: true, ...(subpath ? { eState: { subpath } } : {}) });
-}
-
 interface ReaderHost {
   app: App;
   store: ArticleStore<TFile>;
@@ -161,9 +128,10 @@ export class ReaderView extends ItemView {
   private opening = 0;
   private loadingPath?: string;
   private listFrame?: number;
-  private selectionTimer?: ReturnType<typeof setTimeout>;
-  private selectionRevision = 0;
-  private selecting = false;
+  private selectionState = new SelectionCoordinator();
+  private get selecting(): boolean {
+    return this.selectionState.selecting;
+  }
   private dialog = false;
   private automatic?: Passage;
   private lastSelection = '';
@@ -237,99 +205,14 @@ export class ReaderView extends ItemView {
     await super.setState(state, result);
   }
   async onOpen(): Promise<void> {
-    const doc = this.containerEl.ownerDocument,
-      options = { signal: this.lifetime.signal };
-    const pointers = new Map<number, string>(),
-      touches = new Set<number>();
-    const release = (event: Event) => {
-      if (this.stopping || this.host.signal.aborted) return;
-      if (event.type.startsWith('touch')) {
-        for (const touch of Array.from((event as TouchEvent).changedTouches ?? []))
-          touches.delete(touch.identifier);
-        const active = (event as TouchEvent).touches;
-        if (active) {
-          touches.clear();
-          for (const touch of Array.from(active)) touches.add(touch.identifier);
-          // Touch identifiers and pointer IDs are unrelated. Only an authoritative
-          // empty touchend proves all touch pointers lifted; cancellation may be takeover.
-          if (event.type === 'touchend' && active.length === 0)
-            for (const [id, type] of pointers) if (type === 'touch') pointers.delete(id);
-        }
-      } else pointers.delete((event as PointerEvent).pointerId);
-      this.selecting = pointers.size > 0 || touches.size > 0;
-      this.invalidateSelection();
-      // Surface may register its document capture listener after ours. Wait until
-      // dispatch completes so both trackers have released before checking the range.
-      this.selectionTimer = setTimeout(() => this.selectionChanged(), 0);
-    };
-    doc.addEventListener('selectionchange', () => this.selectionChanged(), options);
-    this.contentEl.addEventListener(
-      'pointerdown',
-      (event) => {
-        if (this.stopping || this.host.signal.aborted) return;
-        pointers.set(event.pointerId, event.pointerType);
-        this.selecting = true;
-        this.invalidateSelection();
-      },
-      options,
+    const options = { signal: this.lifetime.signal };
+    this.selectionState.install(
+      this.contentEl,
+      this.lifetime.signal,
+      this.host.signal,
+      () => !this.stopping && !this.host.signal.aborted,
+      () => this.selectionChanged(),
     );
-    // Observe termination before host/native gesture handlers stop bubbling.
-    // Surface's capture listener also releases its pointer before the quiet timer runs.
-    for (const type of ['pointerup', 'pointercancel', 'touchend', 'touchcancel'])
-      doc.addEventListener(type, release, { ...options, capture: true });
-    doc.defaultView?.addEventListener(
-      'blur',
-      () => {
-        pointers.clear();
-        touches.clear();
-        this.selecting = false;
-        this.selectionChanged();
-      },
-      options,
-    );
-    // Stop only workspace swipe recognition, not native selection, scrolling or
-    // zoom. Bubble after Surface's capture handlers and Reader's pointerdown.
-    const gestures = new AbortController(),
-      stopGestures = () => {
-        gestures.abort();
-        this.invalidateSelection();
-      };
-    this.lifetime.signal.addEventListener('abort', stopGestures, { once: true });
-    this.host.signal.addEventListener('abort', stopGestures, { ...options, once: true });
-    if (this.lifetime.signal.aborted || this.host.signal.aborted) stopGestures();
-    const isolate = (event: Event) => {
-      if (this.stopping || this.host.signal.aborted) return;
-      if (
-        event.type.startsWith('pointer') &&
-        !['touch', 'pen'].includes((event as PointerEvent).pointerType)
-      )
-        return;
-      if (event.type === 'touchstart') {
-        // Refresh stale touch identifiers across gestures, but never infer pointer
-        // releases from a new start: native touchend may itself be deferred.
-        const active = (event as TouchEvent).touches;
-        if (active) touches.clear();
-        for (const touch of Array.from(active ?? (event as TouchEvent).changedTouches ?? []))
-          touches.add(touch.identifier);
-        this.selecting = true;
-        this.invalidateSelection();
-      }
-      event.stopPropagation();
-    };
-    for (const type of [
-      'touchstart',
-      'touchmove',
-      'touchend',
-      'touchcancel',
-      'pointerdown',
-      'pointermove',
-      'pointerup',
-      'pointercancel',
-    ])
-      this.contentEl.addEventListener(type, isolate, {
-        passive: true,
-        signal: gestures.signal,
-      });
     this.contentEl.addEventListener('focusin', () => this.refreshArticleTopics(), options);
     this.contentEl.ownerDocument.defaultView?.addEventListener(
       'focus',
@@ -365,13 +248,13 @@ export class ReaderView extends ItemView {
     this.stopping = true;
     this.articleLifetime.abort();
     if (this.listFrame !== undefined) cancelAnimationFrame(this.listFrame);
-    clearTimeout(this.selectionTimer);
+    this.selectionState.cancel();
     this.closing = (async () => {
       try {
         await this.operations.catch((error) => this.error(error));
         // Normal tab/source transitions can await this. Host plugin unload cannot.
         if (!this.host.signal.aborted) {
-          this.selecting = false;
+          this.selectionState.selecting = false;
           this.dialog = false;
           await this.prepareToLeave(pending);
         }
@@ -388,7 +271,7 @@ export class ReaderView extends ItemView {
     this.stopping = true;
     this.articleLifetime.abort();
     if (this.listFrame !== undefined) cancelAnimationFrame(this.listFrame);
-    clearTimeout(this.selectionTimer);
+    this.selectionState.cancel();
     this.disposeReading();
   }
   private disposeReading(): void {
@@ -527,7 +410,7 @@ export class ReaderView extends ItemView {
     this.refreshList = undefined;
     this.topicScan?.abort();
     this.topicScan = undefined;
-    clearTimeout(this.selectionTimer);
+    this.selectionState.cancel();
     this.articleLifetime.abort();
     this.articleLifetime = new AbortController();
     this.clearSend();
@@ -1235,9 +1118,7 @@ export class ReaderView extends ItemView {
       );
   }
   private invalidateSelection(): number {
-    clearTimeout(this.selectionTimer);
-    this.selectionTimer = undefined;
-    return ++this.selectionRevision;
+    return this.selectionState.invalidate();
   }
   private selectionChanged(): void {
     if (this.stopping || this.host.signal.aborted || this.dialog) return;
@@ -1283,7 +1164,7 @@ export class ReaderView extends ItemView {
           this.selecting ||
           surface.pointerActive ||
           (this.dialog && !hosted) ||
-          this.selectionRevision !== revision ||
+          this.selectionState.revision !== revision ||
           this.surface !== surface ||
           !this.current(source, generation) ||
           surface.displayedBody !== body ||
@@ -1307,7 +1188,7 @@ export class ReaderView extends ItemView {
       };
       // Require 900ms of quiet after the last adjustment/release; never
       // write while a pointer is held. Tokens still guard every asynchronous boundary.
-      this.selectionTimer = setTimeout(() => {
+      this.selectionState.schedule(() => {
         if (!active() || !currentRange()) return;
         const selection = surface.selection();
         if (!selection) return;
@@ -1341,7 +1222,13 @@ export class ReaderView extends ItemView {
       return;
     const selection = pending?.selection ?? this.surface?.selection(),
       snapshot = this.snapshot;
-    if (!selection || !snapshot || this.selecting || this.surface?.pointerActive || this.dialog)
+    if (
+      !selection ||
+      !snapshot ||
+      this.selectionState.selecting ||
+      this.surface?.pointerActive ||
+      this.dialog
+    )
       return;
     const key = JSON.stringify([selection.quote, selection.before, selection.after]);
     if (key === this.lastSelection) return;
@@ -1707,7 +1594,7 @@ export class ReaderView extends ItemView {
       .catch((error) => this.error(error));
   }
   private async prepareToLeave(pending?: PendingSelection): Promise<void> {
-    clearTimeout(this.selectionTimer);
+    this.selectionState.cancel();
     await this.positionWrite;
     // Leaving can finish a known sole typed default, but must never start a new
     // picker after the navigation/close intent has already cancelled modal work.
@@ -3367,6 +3254,11 @@ export class ReaderView extends ItemView {
     return this.snapshot?.file ?? this.fallbackFile;
   }
   get busy(): boolean {
-    return this.operating || !!this.writing || this.selecting || !!this.surface?.selection();
+    return (
+      this.operating ||
+      !!this.writing ||
+      this.selectionState.selecting ||
+      !!this.surface?.selection()
+    );
   }
 }
