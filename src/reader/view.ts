@@ -493,7 +493,9 @@ export class ReaderView extends ItemView {
     );
     if (icon) {
       setIcon(button, icon);
-      setTooltip(button, shortcut ? `${label} (${shortcut.toUpperCase()})` : label);
+      const tooltip = shortcut ? `${label} (${shortcut.toUpperCase()})` : label;
+      setTooltip(button, tooltip);
+      button.title = tooltip;
       button.setAttribute('aria-label', label);
       button.querySelector('svg')?.setAttribute('aria-hidden', 'true');
     }
@@ -1125,9 +1127,12 @@ export class ReaderView extends ItemView {
       'Change status and advance',
       () => this.changeStatus(),
       'list-filter',
+      's',
     );
     statusButton.setAttribute('aria-label', 'Change article status and advance');
-    setTooltip(statusButton, 'Change status and advance · L: Later · A: Archive');
+    const statusTooltip = 'Change status and advance · S: choose · L: Later · A: Archive';
+    setTooltip(statusButton, statusTooltip);
+    statusButton.title = statusTooltip;
     this.button(this.actions, 'Delete', () => this.finish('delete'), 'trash-2', 'd').setAttribute(
       'aria-label',
       'Trash article and advance',
@@ -3158,8 +3163,8 @@ export class ReaderView extends ItemView {
       this.containerEl.ownerDocument.querySelector('.modal-container,.menu')
     )
       return;
-    // Route letters through visible controls, except status destinations grouped
-    // under one button. Tap mode keeps its own contextual letter shortcuts.
+    // Route visible controls through their shortcuts, except status destinations
+    // grouped under one button. Tap mode keeps its own contextual keys.
     if (!Platform.isMobile && !event.repeat && !this.tapMode && this.snapshot) {
       if (event.key === 'l' || event.key === 'a') {
         event.preventDefault();
@@ -3169,7 +3174,7 @@ export class ReaderView extends ItemView {
         return;
       }
     }
-    if (!Platform.isMobile && !event.repeat && /^[a-z]$/.test(event.key)) {
+    if (!Platform.isMobile && !event.repeat && /^[a-z1-9]$/.test(event.key)) {
       const button = Array.from(
         this.contentEl.querySelectorAll<HTMLButtonElement>('button[data-reader-key]'),
       ).find(

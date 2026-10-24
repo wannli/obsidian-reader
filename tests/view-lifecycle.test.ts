@@ -2489,6 +2489,33 @@ describe('desktop button shortcuts', () => {
     expect(press(f.view, 'u').defaultPrevented).toBe(true);
     expect(capture).toHaveBeenCalledOnce();
   });
+  it('routes numbered contextual destinations to the visible matching button', async () => {
+    const f = hostFixture();
+    const article = await f.note('Reading/Inbox/A.md');
+    await f.view.openArticle(article.path, true);
+    const button = f.view.contentEl
+      .querySelector<HTMLElement>('.reader-actions')!
+      .appendChild(document.createElement('button'));
+    button.dataset.readerKey = '1';
+    const click = vi.spyOn(button, 'click');
+    expect(press(f.view, '1').defaultPrevented).toBe(true);
+    expect(click).toHaveBeenCalledOnce();
+  });
+  it('opens the status picker with S without changing status on cancellation', async () => {
+    const f = hostFixture();
+    const article = await f.note('Reading/Inbox/A.md');
+    await f.view.openArticle(article.path, true);
+    const button = f.view.contentEl.querySelector<HTMLButtonElement>(
+      '.reader-actions button[data-reader-key="s"]',
+    )!;
+    expect(button.getAttribute('aria-keyshortcuts')).toBe('S');
+    expect(button.title).toContain('S: choose');
+    mocks.choose.mockResolvedValueOnce(null);
+    expect(press(f.view, 's').defaultPrevented).toBe(true);
+    expect(mocks.choose).toHaveBeenCalledOnce();
+    expect(f.view.file).toBe(article);
+    expect((await f.store.read(article.path)).properties.status).toBe('inbox');
+  });
   it.each([
     ['l', 'Later', 'later'],
     ['a', 'Archive', 'archive'],
@@ -3558,10 +3585,9 @@ describe('bounded Reader UI', () => {
     for (const button of buttons) {
       expect(button.textContent).toBe('');
       expect(button.querySelector('svg')?.getAttribute('aria-hidden')).toBe('true');
-      expect(setTooltip).toHaveBeenCalledWith(
-        button,
-        `${actionName(button)} (${button.dataset.readerKey!.toUpperCase()})`,
-      );
+      const tooltip = `${actionName(button)} (${button.dataset.readerKey!.toUpperCase()})`;
+      expect(setTooltip).toHaveBeenCalledWith(button, tooltip);
+      expect(button.title).toBe(tooltip);
       expect(setIcon).toHaveBeenCalledWith(button, expect.any(String));
     }
     expect(f.view.contentEl.querySelector('.reader-list-item')?.textContent).toContain(
@@ -3684,7 +3710,7 @@ describe('bounded Reader UI', () => {
       ).toEqual(['tags', 'list-filter', 'trash-2', 'list', 'highlighter', 'file-plus-2']);
       expect(buttons.map((button) => button.getAttribute('aria-label'))).toEqual([
         'Related notes',
-        'Change status and advance · L: Later · A: Archive',
+        'Change status and advance · S: choose · L: Later · A: Archive',
         'Trash article and advance',
         'List',
         'Highlight mode',
@@ -3693,8 +3719,16 @@ describe('bounded Reader UI', () => {
       expect(setTooltip).toHaveBeenCalledWith(buttons[0], 'Related notes (T)');
       expect(setTooltip).toHaveBeenCalledWith(
         buttons[1],
-        'Change status and advance · L: Later · A: Archive',
+        'Change status and advance · S: choose · L: Later · A: Archive',
       );
+      expect(buttons.map((button) => button.title)).toEqual([
+        'Related notes (T)',
+        'Change status and advance · S: choose · L: Later · A: Archive',
+        'Delete (D)',
+        'List (B)',
+        'Highlight mode (H)',
+        'Create node (C)',
+      ]);
       expect(setTooltip).toHaveBeenCalledWith(
         f.probe.surface.title,
         'J: next article · K: previous article · ↑/↓ or Page Up/Down at article edges',
