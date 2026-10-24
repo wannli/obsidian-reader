@@ -15,7 +15,7 @@ src/main.ts                         Obsidian lifecycle, commands, routing
   └─ reader/view.ts → core/store.ts      guarded user operations → vault files
 ```
 
-`main.ts` owns plugin lifetime, explicit feed refresh, active/online capture recovery and expiry housekeeping, safe native routing, tracked generation-aware presentation transitions and unload cleanup. It wires the library, ingestion and Reader view; there is no parallel legacy entry point.
+`main.ts` owns explicit feed refresh, active/online capture recovery and expiry orchestration, safe native routing and tracked presentation transitions. `host/folder-runtime.ts` owns each folder generation's signal, vault/store/ingestion, index disposer and maintenance/recovery state. Stop is idempotent; replacement waits for the retired generation's dispatched native writes. Network and presentation lanes remain plugin-owned, and frozen view hosts retain their original generation. It wires the library, ingestion and Reader view; there is no parallel legacy entry point.
 
 ## Core: data and guarded writes
 
