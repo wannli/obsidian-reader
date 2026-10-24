@@ -78,6 +78,7 @@ Displayed text must match the write snapshot before a selection action. Position
 
 - `tests/*.test.ts`: fast unit/component regressions; `helpers/memory-vault.ts` supplies an isolated vault port. Node is the default; DOM-dependent tests opt in or install explicit local fixtures.
 - `scripts/*.test.mjs`: build/setup/Hot Reload/release safety, with isolated fixture repositories from `tooling-fixture.mjs`.
+- `tsconfig.runtime.json`: runtime-only typecheck without Node globals; the root configuration retains Node types for tests. A virtual negative fixture also checks dependency-provided globals. `npm run typecheck` runs both configurations.
 - `build.mjs`: browser-only bundling from `src/main.ts` and `src/reader/styles.css`; only `obsidian` stays external.
 - `dev.mjs`: direct installed-vault build; `setup-vault.mjs` / `seed.mjs`: explicit create-only synthetic setup and backed-up artifact updates.
 - `hot-reload.mjs`: explicit pinned development-plugin installation; never a build-time download.
