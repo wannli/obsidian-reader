@@ -38,7 +38,18 @@ export function boundDom(root: Node): void {
 export function parseHtml(html: string): HTMLTemplateElement {
   boundMarkup(html);
   const template = document.createElement('template');
-  template.innerHTML = html;
+  const marker = `data-reader-boundary-${Math.random().toString(36).slice(2)}`;
+  const pendingBoundary = `<span ${marker}=""></span>`;
+  const parsed = new DOMParser().parseFromString(
+    html.replaceAll('<!--$?-->', pendingBoundary),
+    'text/html',
+  );
+  for (const node of [...parsed.head.childNodes, ...parsed.body.childNodes]) {
+    template.content.append(document.importNode(node, true));
+  }
+  for (const element of template.content.querySelectorAll(`[${marker}]`)) {
+    element.replaceWith(document.createComment('$?'));
+  }
   boundDom(template.content);
   return template;
 }
