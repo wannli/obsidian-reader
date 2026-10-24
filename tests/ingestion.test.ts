@@ -281,6 +281,49 @@ describe('subscription import contracts', () => {
   });
 
   it.each([false, true])(
+    'counts duplicate occurrences within the latest 20 without pulling in the 21st (reversed=%s)',
+    async (reversed) => {
+      const h = host();
+      const entries = Array.from({ length: 20 }, (_, i) => item(i + 1));
+      const duplicate = item(21, { url: `${item(20).url}#duplicate` });
+      const current = [...entries, duplicate];
+      serve(() => response(xml(reversed ? [...current].reverse() : current)));
+      await h.ingestion.subscribe(FEED);
+      await h.ingestion.refreshAll();
+      expect(urls(h.store)).toEqual(
+        entries
+          .slice(1)
+          .map((entry) => entry.url)
+          .sort(),
+      );
+      expect(h.store.catalog.list('Feed')).toHaveLength(19);
+      expect(h.store.catalog.findUrl(item(1).url)).toBeUndefined();
+      const saved = await h.store.read(h.store.catalog.findUrl(item(20).url)!.path);
+      expect(saved.properties.title).toBe(duplicate.title);
+      expect(h.notify).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([false, true])(
+    'selects the newer duplicate even when the older occurrence is outside the window (reversed=%s)',
+    async (reversed) => {
+      const h = host();
+      const newest = item(21, { html: '<p>Newest occurrence.</p>' });
+      const older = item(0, { url: `${newest.url}#older`, html: '<p>Older occurrence.</p>' });
+      const entries = Array.from({ length: 20 }, (_, i) => item(i + 1));
+      const current = [older, ...entries, newest];
+      serve(() => response(xml(reversed ? [...current].reverse() : current)));
+      await h.ingestion.subscribe(FEED);
+      await h.ingestion.refreshAll();
+      expect(urls(h.store)).toEqual([...entries.slice(1), newest].map((entry) => entry.url).sort());
+      const saved = await h.store.read(h.store.catalog.findUrl(newest.url)!.path);
+      expect(saved.properties.title).toBe(newest.title);
+      expect(saved.body).toBe(await feeds.feedMarkdown(newest));
+      expect(h.notify).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([false, true])(
     'does not backfill entries outside the latest 20 on refresh (restart=%s)',
     async (restart) => {
       const h = host(),

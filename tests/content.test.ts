@@ -15,16 +15,17 @@ const rss = `<rss version="2.0" xmlns:content="http://purl.org/rss/1.0/modules/c
 <item><title>Unsafe</title><link>javascript:alert(1)</link></item></channel></rss>`;
 
 describe('feed ingestion without network', () => {
-  it('parses RSS, resolves URLs, deduplicates entries, and distinguishes excerpts', async () => {
+  it('parses RSS, resolves URLs, preserves occurrences, and distinguishes excerpts', async () => {
     const feed = parseFeed(rss, source);
     expect(feed.title).toBe('Example & research');
-    expect(feed.items).toHaveLength(2);
+    expect(feed.items).toHaveLength(3);
     expect(feed.items[0]).toMatchObject({
       url: 'https://example.com/one',
       excerpt: true,
       published: '2026-10-12T10:00:00.000Z',
     });
-    expect(feed.items[1].excerpt).toBe(false);
+    expect(feed.items[1]).toMatchObject({ url: feed.items[0].url, title: 'Duplicate' });
+    expect(feed.items[2].excerpt).toBe(false);
     expect(await feedMarkdown(feed.items[0])).toBe('\nA brief **summary**.\n');
   });
   it('parses Atom and preserves unknown publication dates', () => {

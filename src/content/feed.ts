@@ -32,8 +32,8 @@ export function parseFeed(xml: string, source: string): ParsedFeed {
   const atom = root.localName === 'feed';
   const channel = atom ? root : child(root, 'channel');
   if (!channel || (!atom && root.localName !== 'rss')) throw new Error('Expected RSS or Atom.');
-  const items: FeedItem[] = [],
-    seen = new Set<string>();
+  // Keep occurrences: refresh selects its latest-20 window before URL deduplication.
+  const items: FeedItem[] = [];
   for (const entry of [...channel.children]
     .filter((node) => node.localName === (atom ? 'entry' : 'item'))
     .slice(0, 500)) {
@@ -49,7 +49,6 @@ export function parseFeed(xml: string, source: string): ParsedFeed {
         : value(entry, 'link');
       if (!link) continue;
       const url = webUrl(link, source);
-      if (seen.has(url)) continue;
       const full = atom ? child(entry, 'content') : child(entry, 'encoded');
       const summary = child(entry, atom ? 'summary' : 'description');
       const content = full ?? summary;
@@ -69,7 +68,6 @@ export function parseFeed(xml: string, source: string): ParsedFeed {
         html,
         excerpt: !full,
       });
-      seen.add(url);
     } catch (error) {
       if (error instanceof UnsafePublisherContent) throw error;
       /* Malformed entries do not prevent reading the rest of the subscription. */
