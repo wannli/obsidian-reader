@@ -60,6 +60,7 @@ Runtime libraries: `yaml`, `marked`, `entities`, `dompurify`, `defuddle`. No UI 
 
 ## Reader: presentation and transient state
 
+- `reader/list-rows.ts`: keyed list reconciliation, append-only expansion, current-path click targets and scroll/focus preservation. Metadata and topic-filter refreshes retain the mounted list and its surviving rows; explicit queue/filter changes start a new list.
 - `reader/row-indicators.ts`: disposable visible-row evidence, path-specific invalidation and per-row revisions, with two read slots shared across list mounts. Body/bookmark-only changes refresh indicators without persisting flags or rebuilding the list.
 - `reader/view.ts`: flat library/article UI, browsing context, guarded operations/lifetimes and native menus/Markdown escape. Related notes edits defaults separately from highlight-note multiselection/removal. Selecting a highlight arms direct reference-click collection of that source, not target text. Topic filters retain navigation; indicators use existing `bookmark`/Markdown only, with a separate `dog_ear` shortcut pointer.
 - `core/topic-filter.ts`, `reader/topic-scan.ts`, `host/topic-filter-dialog.ts`: pure topic/alias/visible-text matching, cancellable current-queue reads and the topic/free-text filter picker. Filtering never acquires or writes articles; see [acceptance scope](topic-filter.md).

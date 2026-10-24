@@ -3618,9 +3618,52 @@ describe('bounded Reader UI', () => {
     const more = f.view.contentEl.querySelector<HTMLButtonElement>('[aria-label="Show more"]')!;
     expect(more.textContent).toBe('');
     expect(more.querySelector('svg')?.getAttribute('data-icon')).toBe('chevrons-down');
+    const list = f.view.contentEl.querySelector<HTMLElement>('.reader-list')!;
+    const first = list.querySelector('.reader-list-item');
+    list.scrollTop = 123;
+    more.focus();
     more.click();
+    expect(list.querySelector('.reader-list-item')).toBe(first);
+    expect(list.scrollTop).toBe(123);
+    expect(document.activeElement).toBe(list.querySelectorAll('.reader-list-item')[50]);
     expect(f.view.contentEl.querySelectorAll('.reader-list-item')).toHaveLength(51);
     expect(f.view.contentEl.querySelector('[aria-label="Show more"]')).toBeNull();
+  });
+
+  it('reconciles metadata and renames without replacing list rows, focus or click destinations', async () => {
+    const f = hostFixture();
+    const first = await f.note('Reading/Inbox/A.md');
+    await f.note('Reading/Inbox/B.md');
+    f.view.showList();
+    const list = f.view.contentEl.querySelector<HTMLElement>('.reader-list')!;
+    const row = list.querySelector<HTMLButtonElement>('.reader-list-item')!;
+    list.scrollTop = 80;
+    row.focus();
+    let frame: FrameRequestCallback | undefined;
+    vi.spyOn(globalThis, 'requestAnimationFrame').mockImplementation((callback) => {
+      frame = callback;
+      return 1;
+    });
+    const raw = patchProperties(await f.vault.read(first), { title: 'Z updated' });
+    f.vault.bytes.set(first, raw);
+    f.store.catalog.update(first.path, readDocument(raw).properties);
+    await f.view.changed({ path: first.path, metadataChanged: true });
+    frame!(0);
+    expect(f.view.contentEl.querySelector('.reader-list')).toBe(list);
+    expect([...list.querySelectorAll('.reader-list-item')][1]).toBe(row);
+    expect(row.textContent).toBe('Z updated');
+    expect(list.scrollTop).toBe(80);
+    expect(document.activeElement).toBe(row);
+    const previousPath = first.path;
+    await f.vault.move(first, 'Reading/Inbox/Renamed.md');
+    f.store.catalog.rename(previousPath, first.path, readDocument(raw).properties);
+    await f.view.changed({ path: first.path, previousPath, metadataChanged: true });
+    frame!(0);
+    expect([...list.querySelectorAll('.reader-list-item')][1]).toBe(row);
+    const open = vi.spyOn(f.view, 'openArticle').mockResolvedValue();
+    row.click();
+    await f.probe.operations;
+    expect(open).toHaveBeenCalledWith(first.path, true);
   });
 
   it('opens Archive through the palette, resets old search, and preserves Archive/feed bytes and feeds access', async () => {
