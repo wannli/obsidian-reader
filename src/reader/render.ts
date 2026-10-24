@@ -136,7 +136,7 @@ export function renderBody(
     for (const link of reference.querySelectorAll<HTMLAnchorElement>('a')) {
       link.classList.add('reader-reference-pill');
       const name = link.textContent ?? 'note';
-      link.title = `Edit highlight notes · ${name}`;
+      link.title = `Edit highlight notes · ${name} (Enter when focused)`;
       const label = root.ownerDocument.createElement('span');
       label.className = 'reader-reference-label';
       label.append(...link.childNodes);

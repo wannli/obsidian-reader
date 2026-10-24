@@ -27,7 +27,7 @@ export function articleTopicPill(
     link.className = 'internal-link reader-reference-pill';
     link.href = topic.target.split('/').map(encodeURIComponent).join('/');
     link.dataset.readerTopic = topic.target;
-    link.title = `Open note · ${topic.label}`;
+    link.title = `Open note · ${topic.label} (Enter when focused)`;
     link.append(label);
     const icon = document.createElement('span');
     icon.className = 'reader-node-icon reader-reference-icon';

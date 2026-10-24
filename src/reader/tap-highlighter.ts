@@ -76,6 +76,7 @@ export class TapHighlighter {
     trigger.type = 'button';
     trigger.className = 'reader-icon-button reader-tap-highlight-trigger';
     setTooltip(trigger, 'Highlight mode (H)');
+    trigger.title = 'Highlight mode (H)';
     trigger.setAttribute('aria-label', 'Highlight mode');
     this.shortcut(trigger, 'h');
     setIcon(trigger, 'highlighter');
@@ -86,6 +87,7 @@ export class TapHighlighter {
     this.nodeTrigger.type = 'button';
     this.nodeTrigger.className = 'reader-icon-button reader-tap-node-trigger';
     setTooltip(this.nodeTrigger, 'Create node (C)');
+    this.nodeTrigger.title = 'Create node (C)';
     this.nodeTrigger.setAttribute('aria-label', 'Create node');
     this.shortcut(this.nodeTrigger, 'c');
     setIcon(this.nodeTrigger, 'file-plus-2');
@@ -313,8 +315,10 @@ export class TapHighlighter {
     const element = this.body.ownerDocument.createElement('button');
     element.type = 'button';
     element.className = 'reader-icon-button';
-    // A native title would mask Obsidian's tooltip (and its shortcut) on hover.
-    setTooltip(element, key ? `${label} (${key.toUpperCase()})` : label);
+    const tooltip = key ? `${label} (${key.toUpperCase()})` : label;
+    setTooltip(element, tooltip);
+    // Native hover can take precedence over Obsidian's tooltip. Keep both identical.
+    element.title = tooltip;
     element.setAttribute('aria-label', label);
     if (key) this.shortcut(element, key);
     setIcon(element, icon);
@@ -397,20 +401,28 @@ export class TapHighlighter {
             }
           });
           element.dataset.action = action.id;
-          const key = {
-            'link-note': 'a',
-            'convert-node': 'c',
-            'open-note': 'o',
-            'remove-highlight': 'r',
-            unlink: 'x',
-            'retry-note-updates': 't',
-            'cancel-send': 'b',
-          }[action.id];
-          if (key) {
-            this.shortcut(element, key);
-            setTooltip(element, `${action.label} (${key.toUpperCase()})`);
-            element.setAttribute('aria-label', action.label);
-          }
+          const extraNote = /^open-note-([1-9])$/.exec(action.id);
+          const key =
+            extraNote?.[1] ??
+            (
+              {
+                'link-note': 'a',
+                'convert-node': 'c',
+                'open-note': 'o',
+                'remove-highlight': 'r',
+                unlink: 'x',
+                'retry-note-updates': 't',
+                'cancel-send': 'b',
+              } as Record<string, string>
+            )[action.id];
+          if (key) this.shortcut(element, key);
+          // More than ten destinations still have a focused-button Enter shortcut.
+          const tooltip = key
+            ? `${action.label} (${key.toUpperCase()})`
+            : `${action.label} (Enter when focused)`;
+          setTooltip(element, tooltip);
+          element.title = tooltip;
+          element.setAttribute('aria-label', action.label);
           return element;
         }) ?? [];
       this.panel.replaceChildren(
