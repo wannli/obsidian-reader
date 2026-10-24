@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.18.3](https://github.com/wannli/obsidian-reader/compare/0.18.2...0.18.3) (2026-10-24)
+
+
+### Fixed
+
+* **reader:** show a single shortcut tooltip per button ([#56](https://github.com/wannli/obsidian-reader/issues/56)) ([579f587](https://github.com/wannli/obsidian-reader/commit/579f5878fda6763c3aa961c22e5aafd569aaea21))
+
 ## [0.18.2](https://github.com/wannli/obsidian-reader/compare/0.18.1...0.18.2) (2026-10-24)
 
 
