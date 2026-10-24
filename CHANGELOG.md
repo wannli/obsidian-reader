@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.19.0](https://github.com/wannli/obsidian-reader/compare/0.18.3...0.19.0) (2026-10-24)
+
+
+### Added
+
+* **reader:** add vim-style list and article shortcuts ([#60](https://github.com/wannli/obsidian-reader/issues/60)) ([96b59c0](https://github.com/wannli/obsidian-reader/commit/96b59c0796679b6ac936f687be15100c4a6ee955))
+
+
+### Fixed
+
+* **feeds:** select latest entries before deduplication ([fa72c48](https://github.com/wannli/obsidian-reader/commit/fa72c48e891ba9bf0ff98b9968f4a492f70e2740))
+* **work:** promote foreground jobs with fair fifo scheduling ([8637c1e](https://github.com/wannli/obsidian-reader/commit/8637c1ed572dafe2303740eb63ab0f0b6dbf1832))
+
 ## [0.18.3](https://github.com/wannli/obsidian-reader/compare/0.18.2...0.18.3) (2026-10-24)
 
 
