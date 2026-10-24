@@ -215,6 +215,17 @@ export class ArticleStore<File extends NoteFile> {
     this.assert(snapshot.file, snapshot.path);
     if (raw !== snapshot.raw) throw new ChangedNote();
   }
+  /** Freeze settings authority at request time, before entering any serialization lane. */
+  private folderGuard<Args extends unknown[]>(
+    guard: (...args: Args) => void,
+  ): (...args: Args) => void {
+    const generation = this.statusFolderRevision;
+    return (...args) => {
+      guard(...args);
+      if (generation !== this.statusFolderRevision)
+        throw new ChangedNote('Reader queue folders changed. Reopen the article and retry.');
+    };
+  }
   private async unique(folder: string, name: string, ownPath?: string): Promise<string> {
     for (let i = 0; i < 1_000; i++) {
       const path = `${folder ? `${folder}/` : ''}${i ? name.replace(/\.md$/, ` ${i + 1}.md`) : name}`;
@@ -407,13 +418,15 @@ export class ArticleStore<File extends NoteFile> {
   ): Promise<Snapshot<File>> {
     // Invalidate at request time, including no-op/failed moves queued behind acquisition.
     this.captures.delete(snapshot.file);
-    return this.writes.run(snapshot.file, () => this.moveNow(snapshot, queue, guard));
+    const check = this.folderGuard(guard);
+    return this.writes.run(snapshot.file, () => this.moveNow(snapshot, queue, check));
   }
   private async moveNow(
     snapshot: Snapshot<File>,
     queue: Queue,
     guard: () => void = () => {},
     relocate = true,
+    onSaved?: (saved: Snapshot<File>) => void,
   ): Promise<Snapshot<File>> {
     guard();
     this.captures.delete(snapshot.file);
@@ -424,6 +437,15 @@ export class ArticleStore<File extends NoteFile> {
       guard();
       return patchProperties(raw, { status });
     });
+    onSaved?.(saved);
+    try {
+      guard();
+    } catch (error) {
+      throw new Error(
+        `Status saved as ${status}, but the operation stopped: ${error instanceof Error ? error.message : String(error)}`,
+        { cause: error },
+      );
+    }
     // YAML commits first: a failed relocation never makes a retained article disposable.
     // The destination folder, not stale YAML, determines whether a move is needed.
     if (!relocate || !transition) return saved;
@@ -436,11 +458,14 @@ export class ArticleStore<File extends NoteFile> {
     guard: () => void = () => {},
   ): Promise<Snapshot<File>> {
     return this.creates.run('articles', async () => {
-      const name = saved.path.split('/').pop()!;
-      const target = await this.unique(folder, name, saved.path);
-      if (target === saved.path) return saved;
-      await this.validate(saved);
       try {
+        guard();
+        const name = saved.path.split('/').pop()!;
+        const target = await this.unique(folder, name, saved.path);
+        guard();
+        await this.validate(saved);
+        guard();
+        if (target === saved.path) return saved;
         await this.vault.move(saved.file, target, (current) => {
           guard();
           this.assert(saved.file, saved.path);
@@ -469,7 +494,8 @@ export class ArticleStore<File extends NoteFile> {
   }
   /** Retain first: interruption may leave Later, never an annotated disposable Feed article. */
   annotate(snapshot: Snapshot<File>, transform: (raw: string) => string): Promise<Snapshot<File>> {
-    return this.writes.run(snapshot.file, () => this.annotateNow(snapshot, transform));
+    const guard = this.folderGuard(() => {});
+    return this.writes.run(snapshot.file, () => this.annotateNow(snapshot, transform, guard));
   }
   private async annotateNow(
     snapshot: Snapshot<File>,
@@ -481,13 +507,16 @@ export class ArticleStore<File extends NoteFile> {
     // Validate before moving: invalid selections/cancelled pickers must not cause any mutation.
     guard();
     const proposed = transform(snapshot.raw);
-    if (proposed === snapshot.raw && !onSaved) return snapshot;
+    if (proposed === snapshot.raw && !onSaved) {
+      await this.validate(snapshot);
+      guard();
+      return snapshot;
+    }
     let current = snapshot;
     const promote = queueForPath(current.path, this.statusFolders) === 'Feed';
     const folder = this.statusFolders.later;
     if (promote) {
-      current = await this.moveNow(current, 'Later', guard, false);
-      onRetained?.(current);
+      current = await this.moveNow(current, 'Later', guard, false, onRetained);
     }
     if (current.body !== snapshot.body)
       throw new ChangedNote(
@@ -499,6 +528,7 @@ export class ArticleStore<File extends NoteFile> {
       return transform(raw);
     });
     onSaved?.(annotated);
+    guard();
     if (promote) return this.relocate(annotated, 'later', folder, guard);
     return annotated;
   }
@@ -522,6 +552,7 @@ export class ArticleStore<File extends NoteFile> {
       throw new Error(
         'A current typed-destination eligibility guard is required to set related nodes.',
       );
+    guard = this.folderGuard(guard);
     guard();
     const doc = requireArticle(snapshot.raw);
     const previous = Object.hasOwn(doc.properties, 'topics')
@@ -637,7 +668,8 @@ export class ArticleStore<File extends NoteFile> {
     // Freeze caller-owned inputs before serialization, including provider/lifetime authority.
     snapshot = { ...snapshot, properties: { ...snapshot.properties } };
     const { body, quoteMarkdown, blockId } = edit;
-    const { remember = true, mode = 'highlight', guard } = options;
+    const { remember = true, mode = 'highlight' } = options;
+    const guard = typeof options.guard === 'function' ? this.folderGuard(options.guard) : undefined;
     const paths = [...new Set(destinationPaths)];
     const removedPaths = [...new Set(options.removedDestinationPaths ?? [])];
     const created = new Set(options.createdPaths ?? []);
@@ -785,6 +817,7 @@ export class ArticleStore<File extends NoteFile> {
         // Never hold the source lane while acquiring a destination lane (or two destinations).
         for (const destination of destinations) {
           failed = destination;
+          guard('destination');
           await this.writes.run(destination.file, async () => {
             await this.validate(annotated);
             this.vault.assertWritable(annotated.file, annotated.raw);
@@ -808,13 +841,21 @@ export class ArticleStore<File extends NoteFile> {
           (destination.operation === 'remove' ? completedRemovals : completed).push(
             destination.path,
           );
+          // Completed writes remain successful. Recheck before dispatching the next target,
+          // not after the final native write has already completed.
         }
         return annotated;
       } catch (error) {
         if (!saved) throw error;
-        // A native rename can complete before rejecting; preserve the known saved bytes.
-        if (this.vault.file(saved.file.path) === saved.file)
-          saved = { ...saved, path: saved.file.path };
+        // A dispatched native rename can rewrite links before rejecting. Reconcile actual
+        // path and bytes, without allowing a replaced/removed note to hide known progress.
+        try {
+          const actual = await this.read(saved.file.path);
+          if (actual.file === saved.file) saved = actual;
+        } catch {
+          if (this.vault.file(saved.file.path) === saved.file)
+            saved = { ...saved, path: saved.file.path };
+        }
         throw new PartialCollectionError(
           saved,
           failed.path,
@@ -1003,6 +1044,7 @@ export class ArticleStore<File extends NoteFile> {
     now = new Date(),
     inUse: (file: File) => boolean = () => false,
   ): Promise<{ deleted: number; retained: number; promoted: number }> {
+    const guard = this.folderGuard(() => {});
     const result = { deleted: 0, retained: 0, promoted: 0 },
       cutoff = monthCutoff(now);
     for (const article of [...this.catalog.values()]) {
@@ -1017,14 +1059,16 @@ export class ArticleStore<File extends NoteFile> {
         continue;
       }
       try {
+        guard();
         const snapshot = await this.read(article.path);
+        guard();
         if (
           queueForPath(snapshot.path, this.statusFolders) !== 'Feed' ||
           snapshot.properties.status !== 'feed'
         )
           continue;
         if (protectedArticle(snapshot.body, snapshot.properties)) {
-          await this.move(snapshot, 'Archive');
+          await this.move(snapshot, 'Archive', guard);
           result.promoted++;
         } else if (
           publicationBefore(snapshot.properties.published, cutoff, filenameDay(snapshot.path))
@@ -1032,6 +1076,7 @@ export class ArticleStore<File extends NoteFile> {
           await this.trashNote(
             snapshot,
             () => {
+              guard();
               if (inUse(file)) throw new ChangedNote('Article is in use.');
             },
             false,
