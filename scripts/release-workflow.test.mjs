@@ -3,7 +3,6 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { spawnSync } from 'node:child_process';
 
-const ci = await readFile(new URL('../.github/workflows/ci.yml', import.meta.url), 'utf8');
 const release = await readFile(
   new URL('../.github/workflows/release.yml', import.meta.url),
   'utf8',
@@ -30,10 +29,8 @@ test('supported checks use metadata validation without handwritten release notes
     'npm run test:tooling',
     'npm run build',
   ]);
-  for (const workflow of [ci, release]) {
-    assert.equal(workflow.split('npm run validate:metadata').length - 1, 1);
-    assert.doesNotMatch(workflow, /validate:release|--write-notes|releases\//);
-  }
+  assert.match(release, /mise exec -- npm run check/);
+  assert.doesNotMatch(release, /validate:release|--write-notes|releases\//);
 });
 
 test('browser and native automation commands and dependencies are retired', () => {
@@ -51,31 +48,29 @@ test('browser and native automation commands and dependencies are retired', () =
     assert.equal(Object.hasOwn(pkg.scripts, name), false);
   assert.equal(pkg.scripts['vault:setup'], 'node scripts/setup-vault.mjs');
   assert.equal(pkg.scripts['vault:update'], 'node scripts/setup-vault.mjs --update-plugin');
-  assert.doesNotMatch(ci, /playwright install|test:browser|browser-failure-diagnostics/);
+  assert.doesNotMatch(release, /playwright install|test:browser|browser-failure-diagnostics/);
 });
 
-test('CI retains PR/manual checks without an independent tag publication path', () => {
-  const triggers = ci.split('\npermissions:')[0];
-  assert.match(triggers, /  pull_request:/);
+test('only Release checks the actual tag once before publishing', async () => {
+  const { readdir } = await import('node:fs/promises');
+  const workflows = await readdir(new URL('../.github/workflows/', import.meta.url));
+  assert.deepEqual(workflows.filter((name) => name.endsWith('.yml')).sort(), ['release.yml']);
+  const triggers = release.split('\nconcurrency:')[0];
+  assert.match(triggers, /  push:\n    branches: \[main\]/);
   assert.match(triggers, /  workflow_dispatch:/);
-  assert.doesNotMatch(triggers, /  push:/);
-  assert.doesNotMatch(ci, /\n  release:\n/);
-  for (const command of ['npm run typecheck', 'npm test', 'npm run test:tooling', 'npm run build'])
-    assert.equal(ci.split(command).length - 1, 1, command);
+  assert.doesNotMatch(triggers, /  pull_request:/);
+  assert.equal(release.split('npm run check').length - 1, 1);
+  assert.ok(
+    release.indexOf('npm run check') > release.indexOf('googleapis/release-please-action@v5'),
+  );
+  assert.doesNotMatch(release.split('      - name: Prepare release')[0], /npm ci|npm run check/);
 });
 
-test('main pushes check before Release Please, then recover exact-tag drafts independently', () => {
+test('main pushes prepare drafts, then check exact-tag drafts before publication', () => {
   assert.match(release, /push:\n    branches: \[main\]/);
   assert.match(release, /actions\/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1/);
   assert.match(release, /jdx\/mise-action@08ae2a091c038e1e05ec6f5115dc5c69d5a2a6b8/);
-  for (const command of ['npm run format:check', 'npm test', 'npm run test:tooling']) {
-    assert.equal(release.split(command).length - 1, 1);
-    assert.ok(release.indexOf(command) < release.indexOf('googleapis/release-please-action@v5'));
-  }
   assert.match(release, /googleapis\/release-please-action@v5/);
-  assert.ok(
-    release.indexOf('npm run build') < release.indexOf('googleapis/release-please-action@v5'),
-  );
   assert.match(release, /group: reader-release\n  cancel-in-progress: false/);
   assert.match(release, /if: \$\{\{ !inputs\.existing_tag \}\}/);
   assert.match(release, /MANUAL_TAG: \$\{\{ inputs\.existing_tag \}\}/);

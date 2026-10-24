@@ -31,16 +31,6 @@ jobs:
         with:
           persist_github_token: false
 
-      - name: Build and verify
-        run: |
-          mise exec -- npm ci
-          mise exec -- npm run format:check
-          mise exec -- npm run validate:metadata
-          mise exec -- npm run typecheck
-          mise exec -- npm test
-          mise exec -- npm run test:tooling
-          mise exec -- npm run build
-
       - name: Prepare release
         if: ${{ !inputs.existing_tag }}
         id: release
