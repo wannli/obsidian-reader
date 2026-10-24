@@ -37,7 +37,7 @@ This README describes the current source. An installed release may not include e
 
 1. Open Obsidian’s command palette and run Reader’s **Add URL** command.
 2. Paste an article URL. Reader saves it to **Inbox** and extracts readable text when online.
-3. Use **Open reading list** to return to your library. Select text in an article to highlight it, choose **Read later** to keep it on your list, or **Archive** to set it aside.
+3. Use **Open reading list** to return to your library. Select text in an article to highlight it, or use **Change status** to choose **Later** or **Archive**.
 
 To save several articles, run **Add articles from URLs** and enter URLs in the multiline field, separated by commas, semicolons or newlines (for example, `www.google.com,www.bing.com;www.brave.com`). Links beginning with `www.` use HTTPS. Reader checks all URLs before saving, deduplicates them and reuses existing articles. Cancelling or failing partway through leaves already saved articles in place.
 
@@ -52,7 +52,7 @@ Manual and browser-link captures go to `Reading/Inbox`; imported feed articles g
 | **Later**   | Articles you want to spend more time with            | Yes                                         |
 | **Archive** | Articles you want to keep, but not on your next list | Yes                                         |
 
-**Read later** keeps the article open. **Archive** and **Delete** advance to the next article in your original browsing list. Deletion uses recoverable Obsidian trash.
+Choosing a status from the article controls advances to the next article in your original browsing list (or returns to the list at the end). The command-palette **Change article status** action stays on the current article. **Delete** also advances and uses recoverable Obsidian trash.
 
 Highlighting or linking a passage in a Feed article moves it to Later before saving the annotation. **Simply opening or reading a Feed article does not keep it.** Choose Later or Archive if you want to retain it.
 
@@ -61,12 +61,12 @@ Only notes in the Feed folder with explicit `status: feed` can expire, one calen
 ### Find your way around
 
 - **Open reading list**, **Open Archive**, and **Manage feeds** are available from the command palette.
-- Use **Previous / Next** to browse articles and **List** to return to where you started.
+- Use **J/K** to browse articles on desktop and **List** to return to where you started.
 - Use native **Obsidian search** for general search, or filter a reading list by a **topic or phrase**. Topic filters include aliases, explicit topic assignments, and case-insensitive whole-word/phrase matches in article titles and saved bodies. Free text works without creating a topic note.
 - An active topic filter uses Obsidian's accent colour and displays **Reading list: topic** in the list and above articles opened from it. Click the active filter button to clear it; click it when inactive to open the picker. From an article, return to **List** first. Switching queues retains the filter; Previous/Next follows the filtered list.
 - Use **Open Markdown** to edit an article, or the bottom-bar **Related notes** multiselect to edit remembered typed destinations. Checked notes stay visible while searching; Apply confirms before closing. Creating a note delegates to compatible Fileclass Inline. Filtering is read-only; assigning related notes to a Feed article retains it in Later.
-- On desktop, single-letter button shortcuts work in Reader: **P/N** previous/next article, **T** related notes, **L** read later, **A** archive, **D** delete, **B** list, **H** Highlight mode, **C** Create node. In a paged article, **Z/X** step pages when those buttons are shown. On the list: **I/F/L** Inbox/Feed/Later, **U** Add URL, **T** filter by topic, **M** show more. **J/K** still navigate articles; **Up/PageUp** and **Down/PageDown** cross article boundaries and resume the saved position. Shortcuts pause in inputs, menus and dialogs.
-- On Boox/e-ink, enable **pagination (this device)** in Reader settings to use single-chevron touch page buttons or hardware Up/Down and PageUp/PageDown. A separate Reader-wide **Show article navigation in paged mode** setting, off by default and shown only when pagination is on, adds double-chevron Previous/Next article buttons. Non-paged article arrows are unchanged.
+- On desktop, **J/K** navigate articles; **T** opens related notes, **L/A** move to Later/Archive and advance, **D** deletes, **B** returns to the list, and **H/C** enter Highlight/Create node mode. The Change status control’s hover lists L/A, and the article title’s hover lists navigation keys. In a paged article, **Z/X** step pages. On the list: **I/F/L** Inbox/Feed/Later, **U** Add URL, **T** filter by topic, **M** show more. **Up/PageUp** and **Down/PageDown** cross article boundaries and resume the saved position. Shortcuts pause in inputs, menus and dialogs.
+- On Boox/e-ink, enable **pagination (this device)** in Reader settings to use up/down touch page buttons or hardware Up/Down and PageUp/PageDown. Left/right article-navigation arrows are removed in both modes.
 - On iPhone, **Copy reading-list link** opens the library. **Copy dog-ear link** opens the last article you opened in Reader, or the first (newest) Inbox article if none is marked. Each gives you a vault-aware link for a Shortcuts **URL → Open URLs → Add to Home Screen** shortcut. You can also use **Open dog-eared article** from the command palette.
 
 Lists follow the article's folder, not its YAML `status`. The four queue folders default to `Reading/Inbox`, `Reading/Stream` (Feed), `Reading/Later`, and `Reading/Treasury` (Archive), and can be changed in Reader settings. Folders must be distinct and cannot overlap. A folder move made outside Reader changes the list without rewriting YAML; a Reader status action updates YAML and moves the file. Applying settings does not move existing notes, and no automatic migration runs. `Templates/` and `.trash/` (including nested folders with those names) are excluded from Reader entirely. Moves respect Obsidian’s internal-link update preference; disabling it can leave links broken.

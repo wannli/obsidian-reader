@@ -108,7 +108,7 @@ Articles deleted outside Reader or before suppression was recorded can return wh
 - Four `statusFolders` destinations default to `Reading/Inbox`, `Reading/Stream`, `Reading/Later`, `Reading/Treasury`. Existing partial settings inherit missing defaults; paths must be nonempty, nonoverlapping, and outside Templates/.trash. Subscriptions are unaffected.
 - Native/synced YAML edits do not move articles. Initial indexing, body-only edits, and path-only moves never migrate or rewrite existing notes; only observed live new native Inbox captures receive placement. Unsafe editors and races block placement; no startup or settings-apply sweep or migration occurs.
 - Moves recheck identity, bytes, editor safety and late collisions, preserve filenames where available and add a collision suffix rather than overwrite. Native rename can rewrite links, so Reader rereads the result. Cross-device Sync and native I/O are not atomic transactions; disabled native link updates cannot guarantee link repair.
-- E-ink pagination is device-local (`obsidian-reader:eink` in local storage). Double-chevron article-button visibility is a separate Reader plugin-wide `showPagedArticleButtons` preference in plugin data, default off and effective only when this device has pagination on. Changing it preserves other plugin data; it adds no article property. `bookmark` travels with the note through existing vault sync.
+- E-ink pagination is device-local (`obsidian-reader:eink` in local storage). Touch page controls remain in paged mode; the former `showPagedArticleButtons` preference is preserved as inert plugin data, not displayed or migrated. It adds no article property. `bookmark` travels with the note through existing vault sync.
 
 ## Acceptance
 

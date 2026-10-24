@@ -548,7 +548,7 @@ describe('topic-filter view integration', () => {
     expect(f.view.contentEl.querySelector('[aria-label="Clear topic filter"]')).toBeNull();
     expect(f.view.contentEl.querySelector('.reader-topic-filter-state')).toBeNull();
     expect(f.view.getDisplayText()).toBe('Reader: A');
-    expect(f.probe.actions.querySelectorAll('button')).toHaveLength(7);
+    expect(f.probe.actions.querySelectorAll('button')).toHaveLength(4);
   });
 
   it('uses the staged Related notes multiselect and routes an empty Apply through setRelatedNodes', async () => {

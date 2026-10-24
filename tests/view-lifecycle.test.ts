@@ -354,7 +354,6 @@ function hostFixture(folders: ReaderFolders = defaultFolders) {
     store,
     signal: signal.signal,
     paged: false,
-    showPagedArticleButtons: false,
     ingestion: { acquire: vi.fn(async () => {}) },
     capture() {},
     feeds() {},
@@ -463,7 +462,11 @@ async function pluginFixture() {
 function actionName(button: Element): string {
   const label = button.getAttribute('aria-label') ?? button.textContent ?? '';
   if (label === 'Trash article and advance') return 'Delete';
-  if (label === 'Archive and advance') return 'Archive';
+  if (
+    label === 'Change article status and advance' ||
+    label.startsWith('Change status and advance ·')
+  )
+    return 'Change status';
   return label.replace(/ (?:page or article|article(?: and advance)?)$/, '');
 }
 function passageButton(view: ReaderView, label: string): HTMLButtonElement {
@@ -808,15 +811,12 @@ describe('automatic selection event ownership', () => {
     expect((await f.store.read(f.article.path)).body).toBe(f.body);
   });
 
-  it('mounts one aligned article column with eight persistent actions outside the scroller', () => {
+  it('mounts one aligned article column with six persistent actions outside the scroller', () => {
     const column = f.view.contentEl.querySelector('.reader-article')!;
     const actions = column.querySelector('.reader-actions')!;
     expect([...actions.querySelectorAll('button')].map(actionName)).toEqual([
-      'Previous',
-      'Next',
       'Related notes',
-      'Read later',
-      'Archive',
+      'Change status',
       'Delete',
       'List',
       'Highlight mode',
@@ -984,7 +984,7 @@ describe('automatic selection event ownership', () => {
       expectedHosted('==Alpha== phrase.\n\nBeta phrase.'),
     );
     tapAction('Done').click();
-    expect(f.view.contentEl.querySelectorAll('.reader-actions > button')).toHaveLength(9);
+    expect(f.view.contentEl.querySelectorAll('.reader-actions > button')).toHaveLength(6);
     expect(f.view.contentEl.querySelector('.reader-tap-highlight-actions')).toBeNull();
     expect(f.probe.tapMode).toBe(false);
     expect(f.surface.body.classList.contains('reader-tap-highlight-mode')).toBe(false);
@@ -1751,7 +1751,7 @@ describe('automatic selection event ownership', () => {
   );
 
   it.each(['Archive', 'Delete', 'Next'])(
-    'uses the real bottom %s action to advance, retaining recoverable trash semantics',
+    'uses the status picker, Delete button or J shortcut to advance via %s',
     async (label) => {
       const next = await f.note('Reading/Inbox/Z next.md');
       await f.view.openArticle(f.article.path, true);
@@ -1761,24 +1761,32 @@ describe('automatic selection event ownership', () => {
         [...f.view.contentEl.querySelectorAll<HTMLButtonElement>('.reader-actions button')]
           .find((button) => actionName(button) === name)!
           .click();
-      click(label);
+      if (label === 'Archive') {
+        mocks.choose.mockResolvedValueOnce('Archive');
+        click('Change status');
+      } else if (label === 'Next') {
+        const event = new KeyboardEvent('keydown', { key: 'j', cancelable: true });
+        f.view.key(event);
+        expect(event.defaultPrevented).toBe(true);
+      } else click(label);
+      if (label === 'Archive') await Promise.resolve(); // Picker resolves before finish queues its operation.
       await f.probe.operations;
       expect(f.view.file).toBe(next);
-      expect(f.vault.trashed).toEqual(label === 'Delete' ? [originalPath] : []);
-      if (label !== 'Delete') {
-        expect(await f.vault.read(f.article)).toBe(
-          patchProperties(original, {
-            dog_ear: undefined,
-            ...(label === 'Archive' ? { status: 'archive' } : {}),
-          }),
-        );
-        expect(f.article.path).toBe(
-          label === 'Next' ? originalPath : 'Reading/Treasury/Selection.md',
-        );
-      }
-      click('Next');
+      expect(f.vault.trashed).toEqual([]); // Protected annotated article is retained.
+      expect(await f.vault.read(f.article)).toBe(
+        patchProperties(original, {
+          dog_ear: undefined,
+          ...(label === 'Next' ? {} : { status: 'archive' }),
+        }),
+      );
+      expect(f.article.path).toBe(
+        label === 'Next' ? originalPath : 'Reading/Treasury/Selection.md',
+      );
+      const nextKey = new KeyboardEvent('keydown', { key: 'j', cancelable: true });
+      f.view.key(nextKey);
+      expect(nextKey.defaultPrevented).toBe(true);
       await f.probe.operations;
-      expect(f.view.file).toBeUndefined(); // Last-article Next returns to the list.
+      expect(f.view.file).toBeUndefined(); // Last-article J returns to the list.
       expect(f.view.contentEl.querySelector('.reader-list')).not.toBeNull();
     },
   );
@@ -2469,7 +2477,7 @@ describe('desktop button shortcuts', () => {
     const b = await f.note('Reading/Inbox/B.md');
     await f.note('Reading/Inbox/C.md');
     await f.view.openArticle(b.path, true);
-    expect(press(f.view, 'p').defaultPrevented).toBe(true);
+    expect(press(f.view, 'k').defaultPrevented).toBe(true);
     await f.probe.operations;
     expect(f.view.file).toBe(a);
     expect(press(f.view, 'b').defaultPrevented).toBe(true);
@@ -2481,6 +2489,25 @@ describe('desktop button shortcuts', () => {
     expect(press(f.view, 'u').defaultPrevented).toBe(true);
     expect(capture).toHaveBeenCalledOnce();
   });
+  it.each([
+    ['l', 'Later', 'later'],
+    ['a', 'Archive', 'archive'],
+  ] as const)(
+    '%s chooses %s directly and advances rather than opening the picker',
+    async (key, destination, savedStatus) => {
+      const f = hostFixture();
+      const first = await f.note('Reading/Inbox/A.md');
+      const next = await f.note('Reading/Inbox/B.md');
+      await f.view.openArticle(first.path, true);
+      expect(press(f.view, key).defaultPrevented).toBe(true);
+      await f.probe.operations;
+      expect(f.view.file).toBe(next);
+      expect(first.path).toBe(`Reading/${destination === 'Later' ? 'Later' : 'Treasury'}/A.md`);
+      expect((await f.store.read(first.path)).properties.status).toBe(savedStatus);
+      expect(mocks.choose).not.toHaveBeenCalled();
+      expect(f.store.catalog.article(first.path)?.status).toBe(savedStatus);
+    },
+  );
   it('guards repeats, mobile, modifiers and typing', async () => {
     const f = hostFixture();
     const b = await f.note('Reading/Inbox/B.md');
@@ -2497,6 +2524,26 @@ describe('desktop button shortcuts', () => {
     input.dispatchEvent(event);
     expect(event.defaultPrevented).toBe(false);
     expect(archive).not.toHaveBeenCalled();
+  });
+  it('does not navigate or change status through shortcuts while a dialog or selection is active', async () => {
+    const f = hostFixture();
+    const first = await f.note('Reading/Inbox/A.md', 'Article content');
+    await f.note('Reading/Inbox/B.md');
+    await f.view.openArticle(first.path, true);
+    const move = vi.spyOn(f.store, 'move');
+    f.probe.dialog = true;
+    for (const key of ['j', 'k', 'l', 'a']) expect(press(f.view, key).defaultPrevented).toBe(false);
+    f.probe.dialog = false;
+    const selection = document.getSelection()!;
+    const range = document.createRange();
+    range.selectNodeContents(
+      f.probe.surface.body.appendChild(document.createTextNode('select me')),
+    );
+    selection.addRange(range);
+    for (const key of ['j', 'k', 'l', 'a']) expect(press(f.view, key).defaultPrevented).toBe(false);
+    selection.removeAllRanges();
+    expect(move).not.toHaveBeenCalled();
+    expect(f.view.file).toBe(first);
   });
 });
 
@@ -2522,7 +2569,6 @@ describe('article keyboard boundaries', () => {
       const previous = route === 'Previous' || route === 'PageUp',
         target = previous ? a : b;
       f.host.paged = true;
-      f.host.showPagedArticleButtons = true;
       await f.view.openArticle((previous ? b : a).path, true);
       if (route === 'list') {
         await f.view.readingList();
@@ -2530,9 +2576,12 @@ describe('article keyboard boundaries', () => {
           .find((row) => row.textContent === 'B')!
           .click();
       } else if (route === 'Next' || route === 'Previous') {
-        [...f.view.contentEl.querySelectorAll<HTMLButtonElement>('.reader-actions button')]
-          .find((button) => actionName(button) === route)!
-          .click();
+        const key = new KeyboardEvent('keydown', {
+          key: route === 'Next' ? 'j' : 'k',
+          cancelable: true,
+        });
+        f.view.key(key);
+        expect(key.defaultPrevented).toBe(true);
       } else {
         f.probe.surface.atBoundary.mockReturnValue(true);
         f.view.key(new KeyboardEvent('keydown', { key: route, cancelable: true }));
@@ -2544,51 +2593,42 @@ describe('article keyboard boundaries', () => {
       );
     },
   );
-  it.each(['Next', 'Previous'])(
-    'uses %s for articles, never pages, in paged mode',
-    async (label) => {
-      const f = hostFixture();
-      f.host.paged = true;
-      f.host.showPagedArticleButtons = true;
-      const a = await f.note('Reading/Inbox/A.md'),
-        b = await f.note('Reading/Inbox/B.md'),
-        c = await f.note('Reading/Inbox/C.md');
-      await f.view.openArticle(b.path, true);
-      f.probe.surface.atBoundary.mockReturnValue(false);
-      f.probe.surface.canPage.mockReturnValue(true);
-      const button = [
-        ...f.view.contentEl.querySelectorAll<HTMLButtonElement>('.reader-actions button'),
-      ].find((item) => actionName(item) === label)!;
-      expect(button.disabled).toBe(false);
-      expect(button.getAttribute('aria-label')).toBe(`${label} article`);
-      button.click();
-      await f.probe.operations;
-      expect(f.view.file).toBe(label === 'Next' ? c : a);
-      expect(f.probe.surface.page).not.toHaveBeenCalled();
-    },
-  );
+  it.each([
+    ['j', 'Next'],
+    ['k', 'Previous'],
+  ] as const)('uses %s for %s articles, never pages, in paged mode', async (key, label) => {
+    const f = hostFixture();
+    f.host.paged = true;
+    const a = await f.note('Reading/Inbox/A.md'),
+      b = await f.note('Reading/Inbox/B.md'),
+      c = await f.note('Reading/Inbox/C.md');
+    await f.view.openArticle(b.path, true);
+    f.probe.surface.atBoundary.mockReturnValue(false);
+    f.probe.surface.canPage.mockReturnValue(true);
+    expect(f.view.contentEl.querySelector(`[aria-label="${label} article"]`)).toBeNull();
+    const event = new KeyboardEvent('keydown', { key, cancelable: true });
+    f.view.key(event);
+    expect(event.defaultPrevented).toBe(true);
+    await f.probe.operations;
+    expect(f.view.file).toBe(label === 'Next' ? c : a);
+    expect(f.probe.surface.page).not.toHaveBeenCalled();
+  });
 
   it('offers separate touch page controls that never navigate articles', async () => {
     const f = hostFixture();
     f.host.paged = true;
-    f.host.showPagedArticleButtons = true;
     const a = await f.note('Reading/Inbox/A.md');
     await f.note('Reading/Inbox/B.md');
     await f.view.openArticle(a.path, true);
     const controls = () => [
       ...f.view.contentEl.querySelectorAll<HTMLButtonElement>('.reader-actions button'),
     ];
-    expect(controls().map(actionName).slice(0, 4)).toEqual([
-      'Previous',
-      'Next',
-      'Previous page',
-      'Next page',
-    ]);
+    expect(controls().map(actionName).slice(0, 2)).toEqual(['Previous page', 'Next page']);
     expect(
       controls()
-        .slice(0, 4)
+        .slice(0, 2)
         .map((button) => button.querySelector('svg')?.dataset.icon),
-    ).toEqual(['chevrons-left', 'chevrons-right', 'chevron-left', 'chevron-right']);
+    ).toEqual(['chevron-up', 'chevron-down']);
     for (const [label, direction] of [
       ['Next page', 1],
       ['Previous page', -1],
@@ -2602,7 +2642,7 @@ describe('article keyboard boundaries', () => {
     }
   });
 
-  it('hides only paged-mode article arrows by default and refreshes controls without reopening', async () => {
+  it('keeps page controls in paged mode and refreshes without reopening', async () => {
     const f = hostFixture();
     f.host.paged = true;
     const a = await f.note('Reading/Inbox/A.md');
@@ -2616,42 +2656,39 @@ describe('article keyboard boundaries', () => {
       'Previous page',
       'Next page',
       'Related notes',
-      'Read later',
-      'Archive',
+      'Change status',
       'Delete',
       'List',
       'Highlight mode',
       'Create node',
     ]);
-    expect(column.classList.contains('reader-has-page-actions')).toBe(false);
-    expect(actions.classList.contains('reader-paged-actions')).toBe(false);
+    expect(column.classList.contains('reader-has-page-actions')).toBe(true);
+    expect(actions.classList.contains('reader-paged-actions')).toBe(true);
     actions.querySelector<HTMLButtonElement>('[aria-label="Next page"]')!.click();
     expect(f.probe.surface.page).toHaveBeenCalledWith(1);
     expect(f.view.file).toBe(a);
-    f.host.showPagedArticleButtons = true;
     f.view.refreshArticleControls();
-    expect(names().slice(0, 4)).toEqual(['Previous', 'Next', 'Previous page', 'Next page']);
+    expect(names().slice(0, 2)).toEqual(['Previous page', 'Next page']);
     expect(column.classList.contains('reader-has-page-actions')).toBe(true);
     expect(actions.classList.contains('reader-paged-actions')).toBe(true);
     expect(f.probe.surface).toBe(surface);
-    f.host.showPagedArticleButtons = false;
     f.view.refreshArticleControls();
-    expect(names()).toHaveLength(9);
+    expect(names()).toHaveLength(8);
     expect(f.view.file).toBe(a);
     expect(f.probe.surface).toBe(surface);
   });
 
-  it('disables Previous on the first article even when there are earlier pages', async () => {
+  it('disables Previous page at the first page even when there are other articles', async () => {
     const f = hostFixture();
     f.host.paged = true;
-    f.host.showPagedArticleButtons = true;
     const a = await f.note('Reading/Inbox/A.md');
     await f.note('Reading/Inbox/B.md');
     await f.view.openArticle(a.path, true);
-    f.probe.surface.canPage.mockReturnValue(true);
+    f.probe.surface.atBoundary.mockReturnValue(true);
+    f.view.refreshArticleControls();
     const button = [
       ...f.view.contentEl.querySelectorAll<HTMLButtonElement>('.reader-actions button'),
-    ].find((item) => actionName(item) === 'Previous')!;
+    ].find((item) => actionName(item) === 'Previous page')!;
     expect(button.disabled).toBe(true);
   });
 
@@ -3638,39 +3675,30 @@ describe('bounded Reader UI', () => {
         libraryStyle.border,
       ];
       const article = await f.note('Reading/Inbox/Article.md');
-      f.host.showPagedArticleButtons = true; // The plugin-wide setting never removes nonpaged arrows.
       await f.view.openArticle(article.path, true);
       const buttons = [
         ...f.view.contentEl.querySelectorAll<HTMLButtonElement>('.reader-actions button'),
       ];
       expect(
         buttons.map((button) => button.querySelector('svg')?.getAttribute('data-icon')),
-      ).toEqual([
-        'chevron-left',
-        'chevron-right',
-        'tags',
-        'clock',
-        'archive',
-        'trash-2',
-        'list',
-        'highlighter',
-        'file-plus-2',
-      ]);
+      ).toEqual(['tags', 'list-filter', 'trash-2', 'list', 'highlighter', 'file-plus-2']);
       expect(buttons.map((button) => button.getAttribute('aria-label'))).toEqual([
-        'Previous article',
-        'Next article',
         'Related notes',
-        'Read later',
-        'Archive and advance',
+        'Change status and advance · L: Later · A: Archive',
         'Trash article and advance',
         'List',
         'Highlight mode',
         'Create node',
       ]);
-      expect(setTooltip).toHaveBeenCalledWith(buttons[2], 'Related notes (T)');
-      expect(setTooltip).toHaveBeenCalledWith(buttons[3], 'Read later (L)');
-      expect(setTooltip).toHaveBeenCalledWith(buttons[4], 'Archive (A)');
-      expect(buttons[0].disabled).toBe(true);
+      expect(setTooltip).toHaveBeenCalledWith(buttons[0], 'Related notes (T)');
+      expect(setTooltip).toHaveBeenCalledWith(
+        buttons[1],
+        'Change status and advance · L: Later · A: Archive',
+      );
+      expect(setTooltip).toHaveBeenCalledWith(
+        f.probe.surface.title,
+        'J: next article · K: previous article · ↑/↓ or Page Up/Down at article edges',
+      );
       for (const button of buttons) {
         const css = window.getComputedStyle(button);
         expect(button.textContent).toBe('');
@@ -3805,10 +3833,9 @@ describe('Reader mobile control styling', () => {
       await f.view.openArticle(article.path, true);
       const actions =
         f.view.contentEl.querySelectorAll<HTMLButtonElement>('.reader-actions button');
-      expect(actions).toHaveLength(9);
+      expect(actions).toHaveLength(6);
       for (const button of actions) checkIcon(button, '100%');
-      expect(actions[0].disabled).toBe(true);
-      expect(window.getComputedStyle(actions[0]).opacity).toBe('0.45');
+      expect(actions[0].disabled).toBe(false);
       actions[1].focus();
       expect(document.activeElement).toBe(actions[1]);
       // JSDOM does not resolve theme-variable focus outlines; check their CSSOM
@@ -3833,15 +3860,9 @@ describe('Reader mobile control styling', () => {
 });
 
 describe('leaf-scoped floating Reader layout', () => {
-  it.each(
-    [390, 1280].flatMap((width) =>
-      [false, true].flatMap((paged) =>
-        [false, true].map((showPagedArticleButtons) => ({ width, paged, showPagedArticleButtons })),
-      ),
-    ),
-  )(
-    'uses full-pane CSS with compact 5/8/10-action overlays (width=$width, paged=$paged, arrows=$showPagedArticleButtons)',
-    async ({ width, paged, showPagedArticleButtons }) => {
+  it.each([390, 1280].flatMap((width) => [false, true].map((paged) => ({ width, paged }))))(
+    'uses full-pane CSS with 5/6/8-action overlays (width=$width, paged=$paged)',
+    async ({ width, paged }) => {
       const f = hostFixture();
       const file = await f.note('Reading/Inbox/Title.md');
       const raw = patchProperties(await f.vault.read(file), {
@@ -3857,7 +3878,6 @@ describe('leaf-scoped floating Reader layout', () => {
       );
       f.view.contentEl.style.width = `${width}px`;
       f.host.paged = paged;
-      f.host.showPagedArticleButtons = showPagedArticleButtons;
       try {
         f.view.showList();
         const list = f.view.contentEl.querySelector('.reader-list')!;
@@ -3873,8 +3893,8 @@ describe('leaf-scoped floating Reader layout', () => {
         await f.view.openArticle(file.path, true);
         const column = f.view.contentEl.querySelector('.reader-article')!;
         const actions = column.querySelector('.reader-bottom-controls')!;
-        const expanded = paged && showPagedArticleButtons;
-        expect(actions.querySelectorAll('button')).toHaveLength(expanded ? 11 : 9);
+        const expanded = paged;
+        expect(actions.querySelectorAll('button')).toHaveLength(expanded ? 8 : 6);
         expect(column.classList.contains('reader-has-page-actions')).toBe(expanded);
         expect(actions.classList.contains('reader-paged-actions')).toBe(expanded);
         expect(actions.parentElement).toBe(column);
@@ -3923,7 +3943,7 @@ describe('leaf-scoped floating Reader layout', () => {
         ).toContain('108px');
         expect(
           rule('.reader-actions.reader-paged-actions').getPropertyValue('grid-template-columns'),
-        ).toBe('repeat(5, 44px)');
+        ).toBe('repeat(4, 44px)');
         expect(rule('.reader-viewport').getPropertyValue('padding-inline-end')).toBe('');
         expect(rule('.reader-viewport').getPropertyValue('scrollbar-gutter')).toBe('stable');
         expect(
@@ -4303,7 +4323,9 @@ describe('folder-authoritative queue presentation', () => {
     expect(surface.setBody).not.toHaveBeenCalled();
     expect(surface.dispose).not.toHaveBeenCalled();
     expect(f.view.getState()).toEqual({ file: article.path, queue: 'Inbox' });
-    expect(f.view.contentEl.querySelector('[aria-label="Archive and advance"]')).not.toBeNull();
+    expect(
+      f.view.contentEl.querySelector('[aria-label^="Change status and advance"]'),
+    ).not.toBeNull();
   });
 
   it.each([undefined, 'words'])(
@@ -4403,7 +4425,7 @@ describe('browsing context and presentation', () => {
     f.view.stopForUnload();
   });
   it.each(['Inbox', 'Feed', 'Later', 'Archive'] as const)(
-    'Read later moves from %s without advancing or losing the original browsing context',
+    'command-palette move to Later stays on the article from %s',
     async (queue) => {
       const folders = { ...defaultFolders, articles: 'Queues/Articles' };
       const f = hostFixture(folders);
@@ -4416,17 +4438,18 @@ describe('browsing context and presentation', () => {
       surface.marker = 'Article A';
       const move = vi.spyOn(f.store, 'move');
       f.host.ingestion.acquire.mockClear();
-      const laterButton = () =>
-        f.view.contentEl.querySelector<HTMLButtonElement>(
-          '[aria-label="Read later"], [aria-label="Saved to Later"]',
-        )!;
-      const clickLater = () => laterButton().click();
-      expect(laterButton().getAttribute('aria-label')).toBe(
-        queue === 'Later' ? 'Saved to Later' : 'Read later',
+      expect(
+        f.view.contentEl.querySelector('[aria-label^="Change status and advance"]'),
+      ).not.toBeNull();
+      mocks.choose.mockResolvedValueOnce('Later');
+      await f.probe.move();
+      expect(mocks.choose).toHaveBeenCalledWith(
+        f.app,
+        'Change article status…',
+        ['Inbox', 'Later', 'Feed', 'Archive'],
+        expect.any(Function),
+        expect.any(AbortSignal),
       );
-      clickLater();
-      await f.probe.operations;
-      expect(mocks.choose).not.toHaveBeenCalled();
       expect(move).toHaveBeenCalledWith(expect.anything(), 'Later');
       expect(article.path).toBe('Reading/Later/A.md');
       expect((await f.store.read(article.path)).properties.status).toBe('later');
@@ -4437,11 +4460,9 @@ describe('browsing context and presentation', () => {
       expect(saved.body).toBe('Article A');
       expect(saved.properties.bookmark).toBe('Article A');
       expect(f.host.ingestion.acquire).toHaveBeenCalledWith(article.path);
-      expect(laterButton().getAttribute('aria-label')).toBe('Saved to Later');
-      expect(laterButton().querySelector('svg')?.getAttribute('data-icon')).toBe('clock-check');
       expect(mocks.notice).toHaveBeenCalledWith('Saved to Later');
-      clickLater();
-      await f.probe.operations;
+      mocks.choose.mockResolvedValueOnce('Later');
+      await f.probe.move();
       expect(article.path).toBe('Reading/Later/A.md');
       expect((await f.store.read(article.path)).properties.status).toBe('later');
       await f.view.navigate(1);
@@ -4451,18 +4472,24 @@ describe('browsing context and presentation', () => {
     },
   );
 
-  it('rejects Read later when the displayed source has changed', async () => {
+  it('rejects a status choice when the displayed source has changed', async () => {
     const f = hostFixture();
     const article = await f.note('Reading/Inbox/A.md');
     await f.view.openArticle(article.path, true);
     const external = createDocument({ type: 'article' }, 'External edit');
     f.vault.bytes.set(article, external);
-    f.view.contentEl.querySelector<HTMLButtonElement>('[aria-label="Read later"]')!.click();
+    mocks.choose.mockResolvedValueOnce('Later');
+    f.view.contentEl
+      .querySelector<HTMLButtonElement>('[aria-label^="Change status and advance"]')!
+      .click();
+    await Promise.resolve(); // Let the selected choice queue the guarded write.
     await expect(f.probe.operations).rejects.toThrow();
     expect(article.path).toBe('Reading/Inbox/A.md');
     expect(await f.vault.read(article)).toBe(external);
     expect(f.view.file).toBe(article);
-    expect(f.view.contentEl.querySelector('[aria-label="Saved to Later"]')).toBeNull();
+    expect(
+      f.view.contentEl.querySelector('[aria-label^="Change status and advance"]'),
+    ).not.toBeNull();
     expect(mocks.notice).not.toHaveBeenCalledWith('Saved to Later');
   });
 
@@ -4471,33 +4498,36 @@ describe('browsing context and presentation', () => {
     const article = await f.note('Reading/Inbox/A.md');
     await f.view.openArticle(article.path, true);
     f.vault.failMove = true;
-    f.view.contentEl.querySelector<HTMLButtonElement>('[aria-label="Read later"]')!.click();
+    mocks.choose.mockResolvedValueOnce('Later');
+    f.view.contentEl
+      .querySelector<HTMLButtonElement>('[aria-label^="Change status and advance"]')!
+      .click();
+    await Promise.resolve();
     await expect(f.probe.operations).rejects.toThrow('Move failed');
     expect((await f.store.read(article.path)).properties.status).toBe('later');
     expect(article.path).toBe('Reading/Inbox/A.md');
-    expect(f.view.contentEl.querySelector('[aria-label="Saved to Later"]')).toBeNull();
+    expect(
+      f.view.contentEl.querySelector('[aria-label^="Change status and advance"]'),
+    ).not.toBeNull();
     expect(mocks.notice).not.toHaveBeenCalledWith('Saved to Later');
   });
 
-  it('updates the Later indicator on external folder moves, not misleading YAML changes', async () => {
+  it('keeps the status picker after external folder moves and YAML changes without remounting', async () => {
     const f = hostFixture();
     const article = await f.note('Reading/Inbox/A.md');
     await f.view.openArticle(article.path, true);
     const surface = f.probe.surface;
-    const expectLater = (saved: boolean) => {
-      const label = saved ? 'Saved to Later' : 'Read later';
-      const button = f.view.contentEl.querySelector(`[aria-label="${label}"]`);
-      expect(button).not.toBeNull();
-      expect(button?.querySelector('svg')?.getAttribute('data-icon')).toBe(
-        saved ? 'clock-check' : 'clock',
-      );
+    const expectControls = () => {
+      expect(
+        f.view.contentEl.querySelector('[aria-label^="Change status and advance"]'),
+      ).not.toBeNull();
       expect(f.probe.surface).toBe(surface);
     };
     // YAML alone cannot retain an Inbox article.
     await f.vault.process(article, (raw) => patchProperties(raw, { status: 'later' }));
     f.store.catalog.update(article.path, readDocument(await f.vault.read(article)).properties);
     await f.view.changed({ path: article.path, metadataChanged: true });
-    expectLater(false);
+    expectControls();
     // Folder moves change queue membership without rewriting the stale YAML.
     for (const folder of ['Later', 'Treasury', 'Later', 'Outside']) {
       const previousPath = article.path;
@@ -4508,12 +4538,12 @@ describe('browsing context and presentation', () => {
         readDocument(await f.vault.read(article)).properties,
       );
       await f.view.changed({ path: article.path, previousPath, metadataChanged: true });
-      expectLater(folder === 'Later');
+      expectControls();
       if (folder === 'Later') {
         await f.vault.process(article, (raw) => patchProperties(raw, { status: 'archive' }));
         f.store.catalog.update(article.path, readDocument(await f.vault.read(article)).properties);
         await f.view.changed({ path: article.path, metadataChanged: true });
-        expectLater(true);
+        expectControls();
       }
     }
     expect(mocks.notice).not.toHaveBeenCalledWith('Saved to Later');
@@ -4540,7 +4570,13 @@ describe('browsing context and presentation', () => {
     expect(f.view.getDisplayText()).toBe('Reader: A');
     await f.probe.finish('next');
     expect(f.view.file).toBe(b);
-    await f.probe.finish('keep');
+    mocks.choose.mockResolvedValueOnce('Archive');
+    f.view.contentEl
+      .querySelector<HTMLButtonElement>('[aria-label^="Change status and advance"]')!
+      .click();
+    await Promise.resolve();
+    await f.probe.operations;
+    expect(f.view.file).toBeUndefined();
     expect(b.path).toBe('Reading/Treasury/B.md');
     expect(f.vault.bytes.get(a)).toBe(rawA);
     expect(f.vault.bytes.get(b)).toBe(patchProperties(rawB!, { status: 'archive', dog_ear: true }));
@@ -4949,7 +4985,6 @@ describe('Nodes v2 linked creation', () => {
     await f.note('Reading/Inbox/B.md');
     await f.note('Notes/Existing.md', 'Keep existing note', 'topic');
     f.host.paged = true;
-    f.host.showPagedArticleButtons = true;
     await f.view.onOpen(); // Install Reader's actual DOM handlers, not calls to private navigation.
     await f.view.openArticle(f.article.path, true);
     const plugin = new ReaderPlugin(f.app, {} as any);
@@ -4970,6 +5005,8 @@ describe('Nodes v2 linked creation', () => {
         if (signal) expect(signal.aborted).toBe(true);
         expect(f.view.contentEl.querySelector('[aria-label="Done"]')).toBeNull();
       }
+      if (route === 'footer' && ['Read later', 'Archive'].includes(label))
+        mocks.choose.mockResolvedValueOnce(label === 'Read later' ? 'Later' : 'Archive');
       if (route === 'command') {
         const id = { 'Move…': 'move', 'Topics…': 'topics', 'Open Markdown': 'open-markdown' }[
           label
@@ -5006,7 +5043,9 @@ describe('Nodes v2 linked creation', () => {
       } else {
         const parent: HTMLElement = route === 'fallback' ? f.view.contentEl : f.probe.actions;
         const button = [...parent.querySelectorAll('button')].find(
-          (button) => actionName(button) === label,
+          (button) =>
+            actionName(button) ===
+            (['Read later', 'Archive'].includes(label) ? 'Change status' : label),
         );
         expect(button).toBeDefined();
         expect(button!.disabled).toBe(false);
@@ -5408,9 +5447,9 @@ describe('Nodes v2 linked creation', () => {
         expect(requestSignal.aborted).toBe(true); // No queue or microtask may precede abort.
         expect(f.probe.tapMode).toBe(false);
         expect(f.view.contentEl.querySelector('[aria-label="Done"]')).toBeNull();
-        expect(passageLabels(f.view).map((label) => label.replace(/ article$/, ''))).toContain(
-          'Read later',
-        );
+        expect(
+          passageLabels(f.view).some((label) => label.startsWith('Change status and advance')),
+        ).toBe(true);
         await creation;
         await f.probe.operations;
         await expect(late(f.node)).rejects.toThrow('request has finished');
@@ -5501,12 +5540,10 @@ describe('Nodes v2 linked creation', () => {
   it.each(
     ['before', 'after'].flatMap((phase) =>
       [
-        ['footer', 'Next'],
         ['footer', 'Read later'],
         ['footer', 'Archive'],
         ['footer', 'Delete'],
         ['footer', 'List'],
-        ['footer', 'Previous'],
         ['command', 'Move…'],
         ['command', 'Topics…'],
         ['command', 'Open Markdown'],
@@ -5553,15 +5590,19 @@ describe('Nodes v2 linked creation', () => {
         await creation;
         await f.probe.operations;
         // Reach the destination before releasing the uncooperative provider.
-        if (['Next', 'Previous', 'Archive', 'Delete'].includes(label))
+        if (['Next', 'Previous', 'Archive', 'Read later', 'Delete'].includes(label))
           expect(f.view.file?.path).toBe(neighbour);
         if (label === 'Read later') {
           expect(f.article.path).toBe('Reading/Later/A.md');
           expect((await f.store.read(f.article.path)).properties.status).toBe('later');
-          expect(f.view.file).toBe(f.article);
-          expect(mocks.choose).not.toHaveBeenCalled();
+          expect(mocks.choose).toHaveBeenCalledWith(
+            f.app,
+            'Change article status…',
+            ['Inbox', 'Later', 'Feed', 'Archive'],
+            expect.any(Function),
+            expect.any(AbortSignal),
+          );
           expect(f.api.createNodeForLink).toHaveBeenCalledTimes(1);
-          expect(f.probe.readingQueue.neighbour(1, () => true)).toBe(neighbour);
         }
         if (label === 'List') expect(f.view.file).toBeUndefined();
         if (label === 'Move…') expect(mocks.choose).toHaveBeenCalled();
@@ -5644,7 +5685,7 @@ describe('Nodes v2 linked creation', () => {
   );
 
   it.each([
-    ['footer', 'Next'],
+    ['footer', 'List'],
     ['link', 'internal'],
   ])(
     'drains an already-dispatched callback write before the %s / %s UI leaves, without rollback',
@@ -5747,7 +5788,7 @@ describe('Nodes v2 linked creation', () => {
   );
 
   it.each([
-    ['footer', 'Next'],
+    ['footer', 'List'],
     ['link', 'internal'],
     ['command', 'Open Markdown'],
     ['menu', 'Remove highlight (article only)'],

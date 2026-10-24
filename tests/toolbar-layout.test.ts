@@ -30,18 +30,14 @@ describe('leaf-owned bottom toolbar alignment contract', () => {
     expect(controls).toContain('left: 50%;');
     expect(controls).toContain('transform: translateX(-50%);');
     expect(rule('.reader-toolbar')).toContain('repeat(5, 44px)');
-    expect(rule('.reader-actions')).toContain('repeat(7, 44px)');
-    expect(rule('.reader-actions.reader-paged-actions')).toContain('repeat(5, 44px)');
+    expect(rule('.reader-actions')).toContain('repeat(6, 44px)');
+    expect(rule('.reader-actions.reader-paged-actions')).toContain('repeat(4, 44px)');
     expect(rule('.reader-article.reader-has-page-actions')).toContain(
       '--reader-controls-clearance: calc(108px + var(--reader-controls-bottom));',
     );
     expect(css).toContain('@container reader-pane (min-width: 460px)');
-    expect(css).toContain('grid-template-columns: repeat(9, 44px);');
+    expect(css).toContain('grid-template-columns: repeat(8, 44px);');
     expect(css).toContain('@container reader-pane (max-width: 350px)');
-    expect(css).toContain('@container reader-pane (max-width: 260px)');
-    expect(css).toContain(
-      '--reader-controls-clearance: calc(156px + var(--reader-controls-bottom));',
-    );
     expect(css).toContain('grid-template-columns: repeat(4, 44px);');
     expect(css).toContain(
       '--reader-controls-clearance: calc(108px + var(--reader-controls-bottom));',

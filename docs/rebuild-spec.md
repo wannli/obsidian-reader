@@ -52,12 +52,12 @@
 - Reading-list rows show full titles without URL subtitles or an embedded search field; use native Obsidian search. Preserve source URL metadata and core search capabilities.
 - Previous/next follows the originating browsing queue, even after changing an article's status.
 - Explicit status changes preserve file identity, content, bookmark and links while moving the path to the destination queue folder. Normal transitions: Inbox → Later/Archive, Feed → Later/Archive, Later → Archive, Archive → Later; manual changes are reversible.
-- UI: one aligned title/content area, flat reading-list rows, no “End of article” label or action divider. Compact leaf-owned floating bottom controls use accessible labels and 44px targets: Previous, Next, Read later, Archive, Delete, List. Archive uses an archive icon, not the bookmark icon.
+- UI: one aligned title/content area, flat reading-list rows, no “End of article” label or action divider. Compact leaf-owned floating bottom controls use accessible labels and 44px targets: Related notes, Change status (opens the queue picker), Delete, List, and the two tap-mode triggers. Article navigation uses keyboard shortcuts instead of left/right article controls; paged touch page controls remain.
 - Floating controls stay within the Reader pane, with safe-area and final-content clearance. Desktop uses the available pane width, and scrollbars must not overlap text.
 - Right-side indicators show opened-before (existing usable `bookmark`, not completion) and highlights (derived Markdown). Use bounded, cancellable reads; no whole-vault body scan, new YAML fields, timestamps, sidecars or persisted read/annotation history.
 - Archive and subscription-management buttons are absent from the main view; Open Archive and Manage feeds commands retain access without deleting data.
 - Open reading list and Copy reading-list link commands share a navigation-only URI route using the current device’s encoded vault name; clipboard access is explicit and write-only. Open dog-eared article and Copy dog-ear link use the same vault-aware route (`view=dog-ear`); without a valid pointer they open the newest Inbox article.
-- Read later (clock) writes `status: later`, stays open and preserves browsing context. Archive writes `status: archive` and advances; Delete uses recoverable trash and advances. Previous/Next retain the original browsing context; List returns to it.
+- Choosing any queue through the article status control writes the chosen status, moves the article and advances (or returns to the list at the end). The explicit Change article status command stays on the article. Desktop L/A directly choose Later/Archive and advance. Delete uses recoverable trash and advances. Keyboard previous/next retain the original browsing context; List returns to it.
 - Open Markdown, Related notes and explicit Change article status remain context-aware commands, not duplicate article buttons. Visually avoid a repeated leading title without rewriting authored Markdown/headings.
 - Ordinary highlights must remain visible when the host does not define its optional highlight-colour variable; preserve native theme integration with a safe fallback.
 - Deletion uses recoverable Obsidian trash, never permanent removal.
@@ -68,8 +68,8 @@
 - Desktop j/k navigates articles, except while typing or interacting with menus/dialogs.
 - Use native typography, themes, menus, and pickers; no Reader theme/type settings.
 - Hide the floating mobile navigation bar only while Reader is active; restore it on normal notes/exit/unload, without hiding capture/keyboard controls.
-- Boox pagination supports previous/next device buttons and touch buttons, without animations. Up/PageUp at the article start opens the previous article; Down/PageDown at its end opens the next. Preserve ordinary scrolling/paging, guard editing/modal/selection input, and prevent held-key skipping.
-- Pagination itself is device-local, not shared through vault sync. A separate Reader plugin setting, default off, reveals double-chevron article navigation only while pagination is enabled; single-chevron touch page buttons remain available. Non-paged article arrows are unchanged.
+- Boox pagination supports previous/next device buttons and touch page buttons, without animations. Up/PageUp at the article start opens the previous article; Down/PageDown at its end opens the next. Preserve ordinary scrolling/paging, guard editing/modal/selection input, and prevent held-key skipping.
+- Pagination itself is device-local, not shared through vault sync. Up/down touch page buttons remain available in paged mode; the former left/right article controls are removed.
 
 ## Approved annotations and Nodes integration
 

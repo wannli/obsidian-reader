@@ -122,10 +122,9 @@ beforeEach(() => {
 });
 const row = (name: string) => ui.settings.find((setting) => setting.name === name);
 
-it('shows the plugin-wide article switch only on paginated devices, without losing staged folder edits', async () => {
+it('keeps device-local pagination without an article navigation setting or losing staged folder edits', async () => {
   const savePaged = vi.fn();
   const saveFolders = vi.fn(async () => {});
-  const saveArticleButtons = vi.fn(async () => {});
   const settings = new ReaderSettings(
     {} as App,
     {} as Plugin,
@@ -133,58 +132,20 @@ it('shows the plugin-wide article switch only on paginated devices, without losi
     false,
     saveFolders,
     savePaged,
-    defaultStatusFolders,
-    vi.fn(),
-    false,
-    saveArticleButtons,
   );
   settings.display();
-  const articles = row('Show article navigation in paged mode');
-  expect(articles.settingEl.style.display).toBe('none');
-  expect(articles.toggle.value).toBe(false);
+  expect(row('Show article navigation in paged mode')).toBeUndefined();
   row('Feed subscriptions').input.change('Staged/Subscriptions');
   row('Boox / e-ink pagination (this device)').toggle.change(true);
-  expect(articles.settingEl.style.display).toBe('');
-  await articles.toggle.change(true);
-  expect(saveArticleButtons).toHaveBeenCalledExactlyOnceWith(true);
   expect(savePaged).toHaveBeenCalledExactlyOnceWith(true);
   await row('Apply folder locations').buttons[0].click();
   expect(saveFolders).toHaveBeenCalledExactlyOnceWith({
     ...defaultFolders,
     feeds: 'Staged/Subscriptions',
   });
-  await articles.toggle.change(false);
-  expect(saveArticleButtons).toHaveBeenLastCalledWith(false);
-  row('Boox / e-ink pagination (this device)').toggle.change(false);
-  expect(articles.settingEl.style.display).toBe('none');
   settings.display();
-  expect(row('Show article navigation in paged mode').toggle.value).toBe(false);
-});
-
-it('rolls back the article switch when plugin-wide persistence fails', async () => {
-  const save = vi.fn(async () => {
-    throw new Error('Disk full');
-  });
-  const settings = new ReaderSettings(
-    {} as App,
-    {} as Plugin,
-    defaultFolders,
-    true,
-    vi.fn(),
-    vi.fn(),
-    defaultStatusFolders,
-    vi.fn(),
-    false,
-    save,
-  );
-  settings.display();
-  const control = row('Show article navigation in paged mode').toggle;
-  control.setValue(true);
-  await control.change(true);
-  expect(control.value).toBe(false);
-  expect(ui.notices.at(-1)).toBe('Disk full');
-  settings.display();
-  expect(row('Show article navigation in paged mode').toggle.value).toBe(false);
+  expect(row('Boox / e-ink pagination (this device)').toggle.value).toBe(true);
+  expect(row('Show article navigation in paged mode')).toBeUndefined();
 });
 
 it('shows only the feed subscription creation destination and preserves the legacy article setting', async () => {

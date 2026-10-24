@@ -110,7 +110,6 @@ interface ReaderHost {
   ingestion: Ingestion;
   signal: AbortSignal;
   paged: boolean;
-  showPagedArticleButtons: boolean;
   capture(): void;
   feeds(): void;
   edit(view: ReaderView, file: TFile): Promise<void>;
@@ -980,10 +979,7 @@ export class ReaderView extends ItemView {
         this.readingQueue.select(snapshot.path);
       }
       const column = this.contentEl.createDiv({
-        cls:
-          this.host.paged && this.host.showPagedArticleButtons
-            ? 'reader-article reader-has-page-actions'
-            : 'reader-article',
+        cls: this.host.paged ? 'reader-article reader-has-page-actions' : 'reader-article',
       });
       const surface = new ReadingSurface(
         column,
@@ -997,6 +993,10 @@ export class ReaderView extends ItemView {
       );
       this.surface = surface;
       this.articleTitle = surface.title;
+      setTooltip(
+        surface.title,
+        'J: next article · K: previous article · ↑/↓ or Page Up/Down at article edges',
+      );
       if (this.filteredOrigin && this.topicFilter) {
         const context = surface.title.ownerDocument.createElement('div');
         context.className = 'reader-article-context';
@@ -1012,10 +1012,9 @@ export class ReaderView extends ItemView {
       this.status = column.createDiv({ cls: 'reader-status', attr: { role: 'status' } });
       column.prepend(this.status); // Feedback stays clear of the floating controls.
       this.actions = column.createEl('nav', {
-        cls:
-          this.host.paged && this.host.showPagedArticleButtons
-            ? 'reader-actions reader-paged-actions reader-bottom-controls'
-            : 'reader-actions reader-bottom-controls',
+        cls: this.host.paged
+          ? 'reader-actions reader-paged-actions reader-bottom-controls'
+          : 'reader-actions reader-bottom-controls',
         attr: { 'aria-label': 'Article actions' },
       });
       this.controls();
@@ -1054,7 +1053,7 @@ export class ReaderView extends ItemView {
   }
   refreshArticleControls(): void {
     if (!this.actions || !this.surface) return;
-    const expanded = this.surface.paged && this.host.showPagedArticleButtons;
+    const expanded = this.surface.paged;
     this.actions.classList.toggle('reader-paged-actions', expanded);
     this.actions.parentElement?.classList.toggle('reader-has-page-actions', expanded);
     this.controls();
@@ -1102,24 +1101,6 @@ export class ReaderView extends ItemView {
     this.tapHighlighter?.dispose();
     this.tapHighlighter = undefined;
     this.actions.empty();
-    if (!this.surface.paged || this.host.showPagedArticleButtons) {
-      for (const [label, direction] of [
-        ['Previous', -1],
-        ['Next', 1],
-      ] as const) {
-        const button = this.button(
-          this.actions,
-          label,
-          () => (direction === 1 ? this.finish('next') : this.navigate(-1)),
-          `${this.surface.paged ? 'chevrons' : 'chevron'}-${direction === -1 ? 'left' : 'right'}`,
-          direction === -1 ? 'p' : 'n',
-        );
-        button.disabled =
-          direction === -1 &&
-          !this.readingQueue.neighbour(-1, (path) => !!this.host.store.catalog.article(path));
-        button.setAttribute('aria-label', `${label} article`);
-      }
-    }
     if (this.surface.paged) {
       for (const [label, direction] of [
         ['Previous page', -1],
@@ -1132,25 +1113,21 @@ export class ReaderView extends ItemView {
             this.surface?.page(direction);
             this.controls();
           },
-          direction === -1 ? 'chevron-left' : 'chevron-right',
+          direction === -1 ? 'chevron-up' : 'chevron-down',
           direction === -1 ? 'z' : 'x',
         );
         button.disabled = this.surface.atBoundary(direction);
       }
     }
     this.button(this.actions, 'Related notes', () => this.topics(), 'tags', 't');
-    const savedForLater = this.host.store.catalog.article(this.snapshot.path)?.queue === 'Later';
-    this.button(
+    const statusButton = this.button(
       this.actions,
-      savedForLater ? 'Saved to Later' : 'Read later',
-      () => this.move('Later'),
-      savedForLater ? 'clock-check' : 'clock',
-      'l',
+      'Change status and advance',
+      () => this.changeStatus(),
+      'list-filter',
     );
-    this.button(this.actions, 'Archive', () => this.finish('keep'), 'archive', 'a').setAttribute(
-      'aria-label',
-      'Archive and advance',
-    );
+    statusButton.setAttribute('aria-label', 'Change article status and advance');
+    setTooltip(statusButton, 'Change status and advance · L: Later · A: Archive');
     this.button(this.actions, 'Delete', () => this.finish('delete'), 'trash-2', 'd').setAttribute(
       'aria-label',
       'Trash article and advance',
@@ -1775,7 +1752,19 @@ export class ReaderView extends ItemView {
       if (next) await this.openArticleNow(next);
     }, false);
   }
-  private finish(action: 'keep' | 'next' | 'delete'): Promise<void> {
+  private async changeStatus(destination?: Queue): Promise<void> {
+    this.cancelNodeCreation();
+    const snapshot = this.snapshot,
+      generation = this.generation,
+      signal = this.articleLifetime.signal;
+    if (!snapshot) return;
+    const target =
+      destination ??
+      (await choose(this.app, 'Change article status…', [...queues], (queue) => queue, signal));
+    if (target && !signal.aborted && this.current(snapshot, generation))
+      await this.finish('next', target);
+  }
+  private finish(action: 'next' | 'delete', destination?: Queue): Promise<void> {
     this.cancelNodeCreation();
     return this.operation(async () => {
       await this.prepareToLeave();
@@ -1787,9 +1776,12 @@ export class ReaderView extends ItemView {
         1,
         (path) => !!this.host.store.catalog.article(path),
       );
-      if (action === 'keep') await this.host.store.move(snapshot, 'Archive');
-      else if (action === 'delete') await this.host.store.trash(snapshot);
+      const moved = destination ? await this.host.store.move(snapshot, destination) : undefined;
+      if (action === 'delete') await this.host.store.trash(snapshot);
       if (!this.current(snapshot, generation) || this.stopping) return;
+      if (destination === 'Later') new Notice('Saved to Later');
+      if (moved && (destination === 'Inbox' || destination === 'Later'))
+        void this.host.ingestion.acquire(moved.path).catch((error) => this.error(error));
       this.snapshot = undefined;
       this.surface?.dispose();
       this.surface = undefined;
@@ -3166,9 +3158,17 @@ export class ReaderView extends ItemView {
       this.containerEl.ownerDocument.querySelector('.modal-container,.menu')
     )
       return;
-    // Route letters through the currently visible controls, not duplicate action logic.
-    // This also works after the first tap in Highlight/Create node mode: the tap
-    // range is transient and the enabled Sentence/Paragraph buttons own saving.
+    // Route letters through visible controls, except status destinations grouped
+    // under one button. Tap mode keeps its own contextual letter shortcuts.
+    if (!Platform.isMobile && !event.repeat && !this.tapMode && this.snapshot) {
+      if (event.key === 'l' || event.key === 'a') {
+        event.preventDefault();
+        void this.changeStatus(event.key === 'l' ? 'Later' : 'Archive').catch((error) =>
+          this.error(error),
+        );
+        return;
+      }
+    }
     if (!Platform.isMobile && !event.repeat && /^[a-z]$/.test(event.key)) {
       const button = Array.from(
         this.contentEl.querySelectorAll<HTMLButtonElement>('button[data-reader-key]'),
@@ -3214,8 +3214,11 @@ export class ReaderView extends ItemView {
       this.surface?.page(direction);
       this.controls();
     } else if (['j', 'k'].includes(event.key)) {
+      if (event.repeat) return;
       event.preventDefault();
-      void this.navigate(event.key === 'j' ? 1 : -1).catch((error) => this.error(error));
+      void (event.key === 'j' ? this.finish('next') : this.navigate(-1)).catch((error) =>
+        this.error(error),
+      );
     }
   }
   protects(file: TFile): boolean {

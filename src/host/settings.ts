@@ -98,8 +98,6 @@ export class ReaderSettings extends PluginSettingTab {
     private savePaged: (value: boolean) => void,
     private statusFolders: StatusFolders = defaultStatusFolders,
     private saveStatusFolders: (folders: StatusFolders) => Promise<void> = async () => {},
-    private showPagedArticleButtons = false,
-    private savePagedArticleButtons: (value: boolean) => Promise<void> = async () => {},
   ) {
     super(app, plugin);
   }
@@ -189,7 +187,6 @@ export class ReaderSettings extends PluginSettingTab {
         }
       }),
     );
-    let articleButtons: Setting;
     new Setting(this.containerEl)
       .setName('Boox / e-ink pagination (this device)')
       .setDesc(
@@ -198,28 +195,9 @@ export class ReaderSettings extends PluginSettingTab {
       .addToggle((control) =>
         control.setValue(this.paged).onChange((value) => {
           this.paged = value;
-          articleButtons.settingEl.style.display = value ? '' : 'none';
           this.savePaged(value);
         }),
       );
-    articleButtons = new Setting(this.containerEl)
-      .setName('Show article navigation in paged mode')
-      .setDesc(
-        'Show double-chevron Previous/Next article buttons alongside the page buttons. This is a Reader plugin setting; pagination itself stays device-local.',
-      )
-      .addToggle((control) =>
-        control.setValue(this.showPagedArticleButtons).onChange(async (value) => {
-          try {
-            await this.savePagedArticleButtons(value);
-            this.showPagedArticleButtons = value;
-            control.setValue(value);
-          } catch (error) {
-            control.setValue(this.showPagedArticleButtons);
-            new Notice(error instanceof Error ? error.message : String(error));
-          }
-        }),
-      );
-    articleButtons.settingEl.style.display = this.paged ? '' : 'none';
     this.containerEl.createEl('p', {
       text: 'Feeds import only when you click Sync or run Refresh feeds. Only explicit Feed status expires after one calendar month; adding highlights or links keeps Feed articles in Later. Saved text works offline; remote images need a connection.',
     });
