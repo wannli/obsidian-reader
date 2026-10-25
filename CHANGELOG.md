@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.21.1](https://github.com/wannli/obsidian-reader/compare/0.21.0...0.21.1) (2026-10-25)
+
+
+### Fixed
+
+* **picker:** expose inline creation in all three note flows ([9181007](https://github.com/wannli/obsidian-reader/commit/918100755f76c685891d1625a8121946f99b60a9))
+* **reader:** restore 0.20.0 behavior after 0.21.0 ([533b708](https://github.com/wannli/obsidian-reader/commit/533b7081cf98888bb613179af354bccb531e6630))
+* **tests:** keep validation current with updated tooling ([d15cfd6](https://github.com/wannli/obsidian-reader/commit/d15cfd629881a3d023b484efeb50ec1fbaa1df4b))
+
 ## [0.21.0](https://github.com/wannli/obsidian-reader/compare/0.20.0...0.21.0) (2026-10-25)
 
 
