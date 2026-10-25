@@ -47,7 +47,7 @@ All destinations for one highlight share a single pill using Obsidian’s native
 
 ## Typed destination selection
 
-Reader owns the picker. Fileclass Inline supplies public API v2 discovery, classes/icons, creation and required-field completion; Reader never copies schemas/forms or calls private provider APIs.
+Reader owns the yellow highlight, green note-link and blue Related notes pickers. Type a new title to see Create choices above existing results; select one Fileclass and press Enter to create directly. Fileclass Inline supplies public API v2 discovery, classes/icons, creation and required-field completion; Reader never copies schemas/forms or calls private provider APIs. An older provider without embedded creation shows an update message and can still select existing notes.
 
 - Only current registered Fileclass members are eligible, validated with `classes.includes(...)`, including multi-class notes. A primary `type` or arbitrary YAML string is not proof. All types means all Fileclasses, not all files.
 - Show clear primary titles with separately styled muted types; add path context only when otherwise ambiguous. Creation rows remain compact even for long selected passages, while preserving the full query and accessible action name. Search/alias/fuzzy reuse remains explicit. Draft checks survive search/type filters; Apply/Cancel is staged and cancellation performs no write.

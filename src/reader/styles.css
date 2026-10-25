@@ -68,6 +68,13 @@ body.is-mobile.reader-mobile-active .mobile-navbar {
   border-color: rgba(var(--color-green-rgb, 46, 139, 87), 0.38) !important;
   background: rgba(var(--color-green-rgb, 46, 139, 87), 0.13) !important;
 }
+.reader-view button.reader-related-trigger {
+  border-color: rgba(var(--color-blue-rgb, 45, 109, 190), 0.38) !important;
+  background: rgba(var(--color-blue-rgb, 45, 109, 190), 0.13) !important;
+}
+.reader-view button.reader-related-trigger:not(:disabled):hover {
+  background: rgba(var(--color-blue-rgb, 45, 109, 190), 0.22) !important;
+}
 .reader-view button.reader-tap-highlight-trigger:not(:disabled):hover,
 .reader-view
   .reader-tap-highlight-toolbar:not(.reader-tap-node-toolbar)
@@ -735,7 +742,14 @@ dialog.reader-image-viewer,
 .reader-highlight-picker-modal.reader-picker-node {
   --reader-picker-rgb: var(--color-green-rgb, 46, 139, 87);
 }
-.reader-highlight-picker-modal:is(.reader-picker-highlight, .reader-picker-node) {
+.reader-highlight-picker-modal.reader-picker-related {
+  --reader-picker-rgb: var(--color-blue-rgb, 45, 109, 190);
+}
+.reader-highlight-picker-modal:is(
+  .reader-picker-highlight,
+  .reader-picker-node,
+  .reader-picker-related
+) {
   border: 1px solid rgba(var(--reader-picker-rgb), 0.28);
   background-image: linear-gradient(
     rgba(var(--reader-picker-rgb), 0.055),
@@ -743,16 +757,29 @@ dialog.reader-image-viewer,
     transparent
   );
 }
-.reader-highlight-picker-modal:is(.reader-picker-highlight, .reader-picker-node) .modal-title {
+.reader-highlight-picker-modal:is(
+    .reader-picker-highlight,
+    .reader-picker-node,
+    .reader-picker-related
+  )
+  .modal-title {
   color: var(--text-normal);
   border-inline-start: 3px solid rgba(var(--reader-picker-rgb), 0.65);
   padding-inline-start: var(--size-4-2);
 }
-.reader-highlight-picker-modal:is(.reader-picker-highlight, .reader-picker-node)
+.reader-highlight-picker-modal:is(
+    .reader-picker-highlight,
+    .reader-picker-node,
+    .reader-picker-related
+  )
   .reader-highlight-picker-search {
   border-bottom-color: rgba(var(--reader-picker-rgb), 0.4);
 }
-.reader-highlight-picker-modal:is(.reader-picker-highlight, .reader-picker-node)
+.reader-highlight-picker-modal:is(
+    .reader-picker-highlight,
+    .reader-picker-node,
+    .reader-picker-related
+  )
   .reader-highlight-picker-footer
   .mod-cta {
   background: rgba(var(--reader-picker-rgb), 0.18);

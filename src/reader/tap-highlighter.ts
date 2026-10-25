@@ -10,6 +10,7 @@ export interface TapToolbarAction {
 }
 
 interface TapHighlightOptions {
+  trailingControls?: readonly HTMLElement[];
   active: boolean;
   mode?: 'highlight' | 'node';
   canUndo: boolean;
@@ -92,6 +93,7 @@ export class TapHighlighter {
     this.nodeTrigger.querySelector('svg')?.setAttribute('aria-hidden', 'true');
     this.nodeTrigger.addEventListener('click', () => this.setActive(true, true, 'node'), events);
     toolbar.append(this.nodeTrigger);
+    for (const control of options.trailingControls ?? []) toolbar.append(control);
     this.normal = [...toolbar.childNodes];
     this.normalGrid = toolbar.style.getPropertyValue('grid-template-columns');
     this.normalGridPriority = toolbar.style.getPropertyPriority('grid-template-columns');

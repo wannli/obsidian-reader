@@ -139,11 +139,12 @@ function open(options: HighlightHostPickerOptions = {}) {
 // Every case also asserts no standalone creation, linked creation, shared picker, or writes.
 describe('existing typed highlight notes', () => {
   it('scopes faint picker accents to highlight or node intent, leaving related notes neutral', async () => {
-    for (const tone of ['highlight', 'node', 'neutral'] as const) {
+    for (const tone of ['highlight', 'node', 'related', 'neutral'] as const) {
       const { choice } = open({ tone });
       const modal = document.querySelector('.reader-highlight-picker-modal')!;
       expect(modal.classList.contains('reader-picker-highlight')).toBe(tone === 'highlight');
       expect(modal.classList.contains('reader-picker-node')).toBe(tone === 'node');
+      expect(modal.classList.contains('reader-picker-related')).toBe(tone === 'related');
       button('Cancel').click();
       expect(await choice).toBeNull();
     }
@@ -1246,4 +1247,37 @@ it('keeps one modal alive while the provider uses its creation surface', async (
   result.completion.close();
   expect(result.completion.signal.aborted).toBe(true);
   expect(document.querySelectorAll('.reader-highlight-picker-modal')).toHaveLength(0);
+});
+
+it.each(['highlight', 'node', 'related'] as const)(
+  'creates a typed note from the %s picker without opening another dialog',
+  async (tone) => {
+    const { choice } = open({ tone, multiple: true, query: 'A new title', keepCreationOpen: true });
+    expect(document.querySelector('.reader-highlight-picker-results')?.firstElementChild).toBe(
+      create('concept'),
+    );
+    filter('topic');
+    expect(creates()).toHaveLength(1);
+    searchInput().focus();
+    key(searchInput(), 'Enter');
+    const result = await choice;
+    expect(result).toMatchObject({ kind: 'create', title: 'A new title', type: 'topic' });
+    if (result?.kind !== 'create' || !result.completion) throw new Error('Missing completion');
+    expect(document.querySelectorAll('.reader-highlight-picker-modal')).toHaveLength(1);
+    result.completion.close();
+  },
+);
+
+it('explains why a legacy provider cannot create in the same dialog', async () => {
+  const { choice } = open({
+    query: 'A new title',
+    allowCreate: false,
+    creationUnavailable: 'Update Fileclass Inline to create notes in this dialog.',
+  });
+  expect(creates()).toHaveLength(0);
+  expect(document.querySelector('.reader-highlight-picker-results')?.textContent).toContain(
+    'Update Fileclass Inline',
+  );
+  button('Cancel').click();
+  expect(await choice).toBeNull();
 });

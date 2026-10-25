@@ -28,11 +28,12 @@ export interface HighlightHostPickerOptions {
   preferredPaths?: readonly string[];
   signal?: AbortSignal;
   allowCreate?: boolean;
+  creationUnavailable?: string;
   multiple?: boolean;
   selectedPaths?: string[];
   minSelection?: number;
   actionLabel?: string;
-  tone?: 'highlight' | 'node' | 'neutral';
+  tone?: 'highlight' | 'node' | 'related' | 'neutral';
   allowPickFromArticle?: boolean;
 }
 
@@ -101,7 +102,7 @@ export function chooseHighlightHost(
       onOpen(): void {
         this.setTitle(options.title ?? 'Add highlight to notes');
         this.modalEl.classList.add('reader-highlight-picker-modal', 'prompt');
-        if (options.tone === 'highlight' || options.tone === 'node')
+        if (options.tone === 'highlight' || options.tone === 'node' || options.tone === 'related')
           this.modalEl.classList.add(`reader-picker-${options.tone}`);
         this.contentEl.classList.add('reader-highlight-picker');
         if (options.description)
@@ -114,7 +115,7 @@ export function chooseHighlightHost(
         );
         const search = append(searchWrap, 'input', 'reader-highlight-picker-search prompt-input');
         search.type = 'search';
-        search.placeholder = 'Search notes or enter a new title';
+        search.placeholder = 'Find a note or type a title to create';
         search.setAttribute('aria-label', 'Search typed notes');
         search.value = nodeChoiceSeed(options.query);
         const filter = append(controls, 'select', 'reader-highlight-picker-type-filter dropdown');
@@ -500,6 +501,10 @@ export function chooseHighlightHost(
               row.addEventListener('click', () => create(type.type, title));
             }
           }
+          // Keep creation above a long list of fuzzy matches, in DOM and tab order.
+          results.prepend(...results.querySelectorAll('.reader-highlight-picker-create-row'));
+          if (!canCreate && title && options.creationUnavailable)
+            append(results, 'p', 'reader-picker-description', options.creationUnavailable);
           if (!visible.length && !results.children.length)
             append(
               results,
@@ -575,7 +580,22 @@ export function chooseHighlightHost(
             if (event.repeat) return;
             if (event.key === 'Enter' && multiple && !query() && confirm && !confirm.disabled)
               apply();
-            else results.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus();
+            else {
+              const creation = [
+                ...results.querySelectorAll<HTMLButtonElement>(
+                  '.reader-highlight-picker-create-row:not(:disabled)',
+                ),
+              ];
+              const exactReuse = exact.find((node) =>
+                ['Exact title', 'Exact alias'].includes(nodeChoiceMatch(node, query()) ?? ''),
+              );
+              if (exactReuse) focusRow(exactReuse.path);
+              else if (query() && creation.length === 1) creation[0].click();
+              else
+                (
+                  creation[0] ?? results.querySelector<HTMLButtonElement>('button:not(:disabled)')
+                )?.focus();
+            }
           }
         });
         results.addEventListener('keydown', (event) => {

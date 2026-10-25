@@ -1026,7 +1026,14 @@ export class ReaderView extends ItemView {
         button.disabled = this.surface.atBoundary(direction);
       }
     }
-    this.button(this.actions, 'Related notes', () => this.topics(), 'tags', 't');
+    const relatedButton = this.button(
+      this.actions,
+      'Related notes',
+      () => this.topics(),
+      'tags',
+      't',
+    );
+    relatedButton.classList.add('reader-related-trigger');
     const statusButton = this.button(
       this.actions,
       'Change status and advance',
@@ -1042,7 +1049,7 @@ export class ReaderView extends ItemView {
       'Trash article and advance',
     );
     this.button(this.actions, 'List', () => this.readingList(), 'list', 'b');
-    this.setupTapHighlighter();
+    this.setupTapHighlighter(relatedButton);
     this.updateStatus();
   }
   private updatePagingControls(): void {
@@ -1057,11 +1064,12 @@ export class ReaderView extends ItemView {
       if (button) button.disabled = this.surface.atBoundary(direction);
     }
   }
-  private setupTapHighlighter(): void {
+  private setupTapHighlighter(relatedButton: HTMLElement): void {
     if (!this.surface || !this.actions) return;
     const surface = this.surface;
     this.tapHighlighter = new TapHighlighter(surface.viewport, surface.body, this.actions, {
       active: this.tapMode,
+      trailingControls: [relatedButton],
       mode: this.tapKind,
       canUndo: !!this.tapUndo,
       modeChanged: (active, mode) => {
@@ -1767,7 +1775,7 @@ export class ReaderView extends ItemView {
             {
               title: 'Related notes',
               description: 'One selected note receives new highlights automatically.',
-              tone: 'neutral',
+              tone: 'related',
               multiple: true,
               selectedPaths,
               minSelection: 0,
@@ -1915,7 +1923,7 @@ export class ReaderView extends ItemView {
       selectedPaths?: string[];
       minSelection?: number;
       actionLabel?: string;
-      tone?: 'highlight' | 'node' | 'neutral';
+      tone?: 'highlight' | 'node' | 'related' | 'neutral';
       allowCreate?: boolean;
       onCreateAttempt?: (existing: NodeResult[]) => void;
       onSelected?: (nodes: NodeResult[]) => void;
@@ -2118,6 +2126,10 @@ export class ReaderView extends ItemView {
                 actionLabel: options.actionLabel ?? 'Add highlight',
                 tone: options.tone ?? 'highlight',
                 allowCreate: options.allowCreate !== false && api.embeddedCreation === true,
+                creationUnavailable:
+                  options.allowCreate !== false && api.embeddedCreation !== true
+                    ? 'Update Fileclass Inline to create notes in this dialog.'
+                    : undefined,
                 keepCreationOpen: api.embeddedCreation === true,
                 allowPickFromArticle: !!options.onPickFromArticle,
                 signal: request.controller.signal,

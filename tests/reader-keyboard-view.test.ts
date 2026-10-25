@@ -334,12 +334,12 @@ describe('article keyboard boundaries', () => {
     expect(names()).toEqual([
       'Previous page',
       'Next page',
-      'Related notes',
       'Change status',
       'Delete',
       'List',
       'Highlight mode',
       'Link or create note',
+      'Related notes',
     ]);
     expect(column.classList.contains('reader-has-page-actions')).toBe(true);
     expect(actions.classList.contains('reader-paged-actions')).toBe(true);
