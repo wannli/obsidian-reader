@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { App } from 'obsidian';
+import { Platform, type App } from 'obsidian';
 import type { NodeResult, NodesApi } from '../src/host/nodes';
 import { chooseHighlightHost, type HighlightHostPickerOptions } from '../src/host/highlight-picker';
 
@@ -14,6 +14,7 @@ const modalState = vi.hoisted(() => ({
   document: undefined as Document | undefined,
 }));
 vi.mock('obsidian', () => ({
+  Platform: { isMobile: false },
   Modal: class {
     ownerDocument = modalState.document ?? document;
     modalEl = this.ownerDocument.createElement('div');
@@ -1208,4 +1209,25 @@ describe('optional choose-from-article intent', () => {
     secondary.click();
     expect(source.api.getNode).toHaveBeenCalledTimes(reads);
   });
+});
+
+it('applies checked destinations from a nonempty search using Mod+Enter', async () => {
+  const { choice } = open({ multiple: true });
+  row(exact.path).click();
+  search('Recall');
+  searchInput().dispatchEvent(
+    new KeyboardEvent('keydown', { key: 'Enter', ctrlKey: true, bubbles: true }),
+  );
+  expect(await choice).toEqual({ kind: 'existing-many', nodes: [exact] });
+});
+it('does not focus a text input automatically on touch devices', async () => {
+  Object.assign(Platform, { isMobile: true });
+  try {
+    const { choice } = open({ multiple: true });
+    expect(document.activeElement).not.toBe(searchInput());
+    button('Cancel').click();
+    expect(await choice).toBeNull();
+  } finally {
+    Object.assign(Platform, { isMobile: false });
+  }
 });

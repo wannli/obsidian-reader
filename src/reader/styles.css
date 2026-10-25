@@ -974,3 +974,35 @@ dialog.reader-image-viewer,
 .reader-highlight-picker [hidden] {
   display: none !important;
 }
+
+/* Compact, content-sized pickers: keep actions reachable on phones and e-ink. */
+.reader-highlight-picker-modal,
+.reader-topic-modal {
+  width: min(440px, calc(100vw - 24px));
+  max-height: calc(100dvh - 24px);
+  box-sizing: border-box;
+}
+.reader-highlight-picker-modal.prompt {
+  max-height: calc(100dvh - 24px);
+}
+.reader-highlight-picker,
+.reader-topic-modal .reader-topic-picker {
+  max-height: min(65dvh, 480px);
+}
+.reader-highlight-picker-results,
+.reader-topic-list {
+  max-height: min(36dvh, 264px);
+}
+.reader-highlight-picker-footer {
+  flex-wrap: wrap;
+}
+.reader-highlight-picker-footer button,
+.reader-topic-footer button,
+.reader-highlight-picker-search {
+  min-height: 44px;
+}
+.reader-picker-description {
+  margin: 0;
+  font-size: var(--font-ui-small);
+  color: var(--text-muted);
+}

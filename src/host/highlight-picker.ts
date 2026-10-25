@@ -1,4 +1,4 @@
-import { Modal, setIcon, type App } from 'obsidian';
+import { Modal, Platform, setIcon, type App } from 'obsidian';
 import {
   hasNodeClass,
   nodeChoiceMatch,
@@ -16,6 +16,7 @@ export type HighlightHostChoice =
 
 export interface HighlightHostPickerOptions {
   title?: string;
+  description?: string;
   query?: string;
   preferredPaths?: readonly string[];
   signal?: AbortSignal;
@@ -79,6 +80,8 @@ export function chooseHighlightHost(
         if (options.tone === 'highlight' || options.tone === 'node')
           this.modalEl.classList.add(`reader-picker-${options.tone}`);
         this.contentEl.classList.add('reader-highlight-picker');
+        if (options.description)
+          append(this.contentEl, 'p', 'reader-picker-description', options.description);
         const controls = append(this.contentEl, 'div', 'reader-highlight-picker-controls');
         const searchWrap = append(
           controls,
@@ -525,6 +528,17 @@ export function chooseHighlightHost(
             if (active()) finish({ kind: 'pick-in-article', nodes });
           }),
         );
+        this.contentEl.addEventListener(
+          'keydown',
+          (event) => {
+            if (event.key === 'Enter' && (event.ctrlKey || event.metaKey) && multiple) {
+              event.preventDefault();
+              event.stopPropagation();
+              if (!event.repeat && !event.isComposing && confirm && !confirm.disabled) apply();
+            }
+          },
+          { capture: true },
+        );
         search.addEventListener('input', refresh);
         filter.addEventListener('change', refresh);
         search.addEventListener('keydown', (event) => {
@@ -557,7 +571,12 @@ export function chooseHighlightHost(
         });
         clearError();
         refresh();
-        if (active()) search.focus();
+        if (active()) {
+          if (Platform.isMobile) {
+            this.contentEl.tabIndex = -1;
+            this.contentEl.focus();
+          } else search.focus();
+        }
       }
       onClose(): void {
         options.signal?.removeEventListener('abort', abort);
