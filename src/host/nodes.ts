@@ -19,7 +19,13 @@ export interface NodesApi {
     signal?: AbortSignal;
   }): Promise<NodeResult | null>;
   createNodeForLink?(
-    options: { type?: string; suggestedTitle?: string; sourcePath: string; signal?: AbortSignal },
+    options: {
+      type?: string;
+      suggestedTitle?: string;
+      sourcePath: string;
+      signal?: AbortSignal;
+      acceptSuggestedTitle?: boolean;
+    },
     link: (node: NodeResult) => Promise<void>,
   ): Promise<NodeResult | null>;
   pickNodeForLink?(

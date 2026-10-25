@@ -66,6 +66,21 @@ type PendingSelection = {
   >;
   readonly body: string;
 };
+type RenderedPassage = NonNullable<ReturnType<typeof selectedPassage>>;
+/** Keep sentence punctuation in the article, outside a newly linked typed note. */
+function trimTypedPassage(selection: RenderedPassage): RenderedPassage | undefined {
+  const leading = /^[\s\p{P}]*/u.exec(selection.quote)?.[0] ?? '';
+  const rest = selection.quote.slice(leading.length);
+  const trailing = /[\s\p{P}]*$/u.exec(rest)?.[0] ?? '';
+  const quote = rest.slice(0, rest.length - trailing.length);
+  if (!quote) return;
+  return {
+    ...selection,
+    quote,
+    before: selection.before + leading,
+    after: trailing + selection.after,
+  };
+}
 type BrowsingContext = { queue: Queue; paths: string[]; filtered?: boolean };
 type HighlightRemoval = {
   paths: string[];
@@ -91,13 +106,13 @@ export class ReaderView extends ItemView {
   private surface?: ReadingSurface;
   private tapHighlighter?: TapHighlighter;
   private passageActions?: readonly TapToolbarAction[];
+  private selectedPassage?: { snapshot: Snapshot<TFile>; from: number; to: number };
   private passageIntent = 0;
   private sendSource?: {
     snapshot: Snapshot<TFile>;
     passage: Passage;
     generation: number;
     draft: NodeResult[];
-    mode: 'selected' | 'explicit';
   };
   private tapMode = false;
   private tapKind: 'highlight' | 'node' = 'highlight';
@@ -280,6 +295,7 @@ export class ReaderView extends ItemView {
     this.generation++;
     this.clearSend();
     this.passageActions = undefined;
+    this.selectedPassage = undefined;
     this.tapHighlighter?.dispose();
     this.tapHighlighter = undefined;
     this.tapMode = false;
@@ -343,6 +359,7 @@ export class ReaderView extends ItemView {
     if (this.snapshot?.body !== snapshot.body) {
       this.automatic = undefined;
       this.lastSelection = '';
+      this.selectedPassage = undefined;
       this.tapHighlighter?.reset();
       this.clearTapUndo();
     }
@@ -1022,7 +1039,6 @@ export class ReaderView extends ItemView {
         button.disabled = this.surface.atBoundary(direction);
       }
     }
-    this.button(this.actions, 'Related notes', () => this.topics(), 'tags', 't');
     const statusButton = this.button(
       this.actions,
       'Change status and advance',
@@ -1038,6 +1054,8 @@ export class ReaderView extends ItemView {
       'Trash article and advance',
     );
     this.button(this.actions, 'List', () => this.readingList(), 'list', 'b');
+    const related = this.button(this.actions, 'Related notes', () => this.topics(), 'tags', 't');
+    related.classList.add('reader-related-notes');
     this.setupTapHighlighter();
     this.updateStatus();
   }
@@ -1058,10 +1076,12 @@ export class ReaderView extends ItemView {
     const surface = this.surface;
     this.tapHighlighter = new TapHighlighter(surface.viewport, surface.body, this.actions, {
       active: this.tapMode,
+      normalTail: this.actions.querySelector<HTMLElement>('.reader-related-notes') ?? undefined,
       mode: this.tapKind,
       canUndo: !!this.tapUndo && Date.now() <= this.tapUndoUntil,
       modeChanged: (active, mode) => {
         this.tapMode = active;
+        if (!active) this.selectedPassage = undefined;
         if (active) this.tapKind = mode === 'node' ? 'node' : 'highlight';
         this.invalidateSelection();
         this.automatic = undefined;
@@ -1335,13 +1355,15 @@ export class ReaderView extends ItemView {
   }
   private saveTapNode(root: HTMLElement, range: Range): Promise<void> {
     // Capture exactly the same rendered, block-scoped tap range as Highlight mode.
-    const selection = selectedPassage(root, range),
+    const original = selectedPassage(root, range),
+      selection = original && trimTypedPassage(original),
       snapshot = this.snapshot,
       displayed = this.surface?.displayedBody,
       generation = this.generation,
       signal = this.articleLifetime.signal;
-    if (!selection || !snapshot)
+    if (!original || !snapshot)
       return Promise.reject(new Error('Tap a word in the current article first.'));
+    if (!selection) return Promise.reject(new Error('Choose words rather than only punctuation.'));
     return this.operation(async () => {
       await this.positionWrite;
       const base = this.snapshot;
@@ -1360,7 +1382,7 @@ export class ReaderView extends ItemView {
         base,
         selection.quote,
         {
-          title: 'Create node from passage',
+          title: 'Create typed note from passage',
           actionLabel: 'Link passage',
           tone: 'node',
           multiple: false,
@@ -1959,6 +1981,7 @@ export class ReaderView extends ItemView {
     const snapshot = this.snapshot,
       generation = this.generation;
     if (!snapshot) return;
+    this.selectedPassage = undefined;
     this.cancelNodeCreation();
     await this.flush();
     if (!this.stopping && this.current(snapshot, generation))
@@ -2268,6 +2291,7 @@ export class ReaderView extends ItemView {
             {
               type: choice.type,
               suggestedTitle: choice.title,
+              acceptSuggestedTitle: true,
               sourcePath: request.source.path,
               signal: request.controller.signal,
             },
@@ -2299,18 +2323,14 @@ export class ReaderView extends ItemView {
     for (const mark of this.surface?.body.querySelectorAll('.reader-send-source') ?? [])
       mark.classList.remove('reader-send-source');
   }
-  private armSend(
-    passage: Passage,
-    draft: NodeResult[] = [],
-    mode: 'selected' | 'explicit' = 'explicit',
-  ): void {
+  private armSend(passage: Passage, draft: NodeResult[] = []): void {
     const snapshot = this.snapshot;
     if (!snapshot) return;
     this.assertDisplayed(snapshot);
     this.clearSend();
     const generation = this.generation;
     if (!this.tapHighlighter?.active) this.tapHighlighter?.setActive(true);
-    this.sendSource = { snapshot, passage, generation, draft, mode };
+    this.sendSource = { snapshot, passage, generation, draft };
     this.surface?.body.classList.add('reader-send-active');
     const index = this.passages(snapshot.body).findIndex(
       (item) => item.from === passage.from && item.to === passage.to,
@@ -2322,7 +2342,6 @@ export class ReaderView extends ItemView {
         (!mark.hasAttribute('data-reader-passage') && ordinal === index)
       )
         mark.classList.add('reader-send-source');
-    if (mode === 'selected') return;
     this.passageActions = [
       {
         id: 'cancel-send',
@@ -2359,42 +2378,15 @@ export class ReaderView extends ItemView {
     const element = event.target instanceof Element ? event.target : undefined;
     const link = element?.closest<HTMLAnchorElement>('a.internal-link[href]');
     if (!link || !this.surface?.body.contains(link) || this.surface.selection()) return false;
-    const reference = link.closest('.reader-reference-group');
-    if (!reference && this.sendSource?.mode !== 'explicit') return false;
-    // A highlighted link chooses that highlight's hosts; a pill chooses its exact node.
-    if (this.sendSource && !reference && element?.closest('mark')) return false;
+    // Marked link text still selects its highlight; the separate reference link opens its note.
+    if (element?.closest('mark') && !link.closest('.reader-reference-group')) return false;
     event.preventDefault();
     try {
       const target = nativeLinkPath(link.getAttribute('href')!);
       if (!target) throw new Error('This is not a safe vault-note destination.');
-      if (event.ctrlKey || event.metaKey || event.button === 1) {
-        void this.openLinked(target, true).catch((error) => this.error(error));
-      } else if (this.sendSource) {
-        const nodes = this.typedDestinations([target]);
-        if (nodes.length !== 1)
-          throw new Error(
-            'Choose a typed Fileclass note. This link is not an eligible destination.',
-          );
-        this.sendToNodes(nodes);
-      } else {
-        const source = this.snapshot;
-        if (!source) throw new Error('The article is no longer open.');
-        this.assertDisplayed(source);
-        const index = reference?.getAttribute('data-reader-passage');
-        const passage =
-          index && /^\d+$/.test(index) ? this.passages(source.body)[Number(index)] : undefined;
-        if (!passage)
-          throw new Error(
-            'This reference cannot be matched safely to a highlight. Open Markdown to edit it.',
-          );
-        this.passageMenu(passage, event);
-        const edit = this.passageActions?.find((action) => action.id === 'link-note');
-        if (!edit || edit.disabled)
-          throw new Error(
-            'Editing highlight destinations requires Fileclass Inline public Nodes API v2.',
-          );
-        void Promise.resolve(edit.run()).catch((error) => this.error(error));
-      }
+      void this.openLinked(target, event.ctrlKey || event.metaKey || event.button === 1).catch(
+        (error) => this.error(error),
+      );
     } catch (error) {
       this.error(error);
     }
@@ -2436,8 +2428,7 @@ export class ReaderView extends ItemView {
         throw new Error('The source highlight changed. Choose its destinations again.');
       await this.editPassage(send.snapshot, send.passage, 'highlight', epoch, intent, {
         ...(nodes.length === 1 ? { direct: nodes } : { limited: nodes }),
-        include: send.mode === 'explicit' ? send.draft : [],
-        addOnly: send.mode === 'selected',
+        include: send.draft,
       });
     }).catch((error) => this.error(error));
   }
@@ -2541,8 +2532,17 @@ export class ReaderView extends ItemView {
         );
       const passage = source[index];
       if (passage) {
-        if (this.sendSource?.mode === 'explicit') this.sendToPassage(passage);
-        else this.passageMenu(passage, event);
+        if (this.sendSource) this.sendToPassage(passage);
+        else if (
+          this.selectedPassage?.snapshot === this.snapshot &&
+          this.selectedPassage.from === passage.from &&
+          this.selectedPassage.to === passage.to
+        ) {
+          this.selectedPassage = undefined;
+          const add = this.passageActions?.find((action) => action.id === 'link-note');
+          if (add && !add.disabled)
+            void Promise.resolve(add.run()).catch((error) => this.error(error));
+        } else this.passageMenu(passage, event);
       }
     } catch (error) {
       this.error(error);
@@ -2726,7 +2726,6 @@ export class ReaderView extends ItemView {
       const selected = edit ? this.passageAfterWrite(edit.body, expected, saved.body) : undefined;
       if (selected) {
         this.passageMenu(selected);
-        if (choice?.addOnly) this.armSend(selected, [], 'selected');
       }
     };
     const saved = await this.withHighlightHost(
@@ -2821,6 +2820,9 @@ export class ReaderView extends ItemView {
       this.passageIntent++;
       this.cancelNodeCreation();
     }
+    this.selectedPassage = event
+      ? { snapshot: this.snapshot, from: passage.from, to: passage.to }
+      : undefined;
     const intent = this.passageIntent;
     const actions: TapToolbarAction[] = [];
     const snapshot = this.snapshot!,
@@ -2897,51 +2899,23 @@ export class ReaderView extends ItemView {
         },
       });
     const api = nodesApi(this.app);
-    const references = passageHosts(snapshot.body, passage);
-    const hosts = [
-      ...new Set(references.length ? references : passage.target ? [passage.target] : []),
-    ];
-    for (const [index, host] of hosts.entries())
-      action(
-        index ? `open-note-${index}` : 'open-note',
-        hosts.length === 1 ? 'Open note' : `Open ${host.replace(/\.md$/i, '').split('/').pop()}`,
-        'file-symlink',
-        () => this.openLinked(host),
-        false,
-      );
-    const pick = (mode: 'highlight' | 'mention', epoch: number) =>
-      this.editPassage(snapshot, passage, mode, epoch, intent);
+    const pick = (epoch: number) => this.editPassage(snapshot, passage, 'highlight', epoch, intent);
     if (api) {
-      action('link-note', 'Add highlight to notes…', 'highlighter', (epoch) =>
-        pick('highlight', epoch),
-      );
-      action('convert-node', 'Convert to note link…', 'file-symlink', (epoch) =>
-        pick('mention', epoch),
-      );
+      action('link-note', 'Add highlight to notes…', 'file-input', (epoch) => pick(epoch));
     } else {
       actions.push({
         id: 'link-note',
         label: 'Add highlight to notes… (requires Fileclass Inline v2)',
-        icon: 'link',
-        disabled: true,
-        run() {},
-      });
-      actions.push({
-        id: 'convert-node',
-        label: 'Convert to note link… (requires Fileclass Inline v2)',
-        icon: 'file-symlink',
+        icon: 'file-input',
         disabled: true,
         run() {},
       });
     }
-    if (hosts.length)
-      action('unlink', 'Remove references (article only)', 'unlink', () => apply('unlink'));
     action('remove-highlight', 'Remove highlight (article only)', 'eraser', () => apply('remove'));
     this.tapHighlighter?.setActive(true);
     this.tapHighlighter?.reset();
     this.passageActions = actions;
     this.tapHighlighter?.refreshActions();
-    if (event) this.armSend(passage, [], 'selected');
   }
   private cancelNodeCreation(): void {
     // Explicit navigation/action intent only, never save/render/position/background flush.

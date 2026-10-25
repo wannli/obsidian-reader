@@ -40,7 +40,7 @@ describe('native-sized Fileclass reference tags', () => {
     const icon = link.querySelector('.reader-reference-icon')!;
     expect(link.firstElementChild).toBe(icon);
     expect(icon.nextElementSibling).toBe(link.querySelector('.reader-reference-label'));
-    expect(link.title).toBe('Edit highlight notes · Trust (Enter when focused)');
+    expect(link.title).toBe('Open Trust (Enter when focused)');
     expect(link.closest('[data-reader-decoration]')?.getAttribute('data-reader-decoration')).toBe(
       'reference',
     );
@@ -206,7 +206,7 @@ describe('native-sized Fileclass reference tags', () => {
     expect(pills[0].nextSibling?.textContent).toBe(' ');
     expect(pills[0].nextSibling?.nextSibling).toBe(pills[1]);
     expect(pills[0].querySelector('.reader-reference-label')?.textContent).toBe(label);
-    expect(pills[0].title).toBe(`Edit highlight notes · ${label} (Enter when focused)`);
+    expect(pills[0].title).toBe(`Open ${label} (Enter when focused)`);
     for (const pill of pills) {
       expect(pill.classList.contains('internal-link')).toBe(true);
       expect(pill.classList.contains('tag')).toBe(false);

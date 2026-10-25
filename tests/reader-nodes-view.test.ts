@@ -167,13 +167,7 @@ describe('Nodes v2 linked creation', () => {
           [...f.view.contentEl.querySelectorAll<HTMLButtonElement>('[data-action]')].map(
             (button) => button.dataset.action,
           ),
-        ).toEqual([
-          ...(linked ? ['open-note'] : []),
-          'link-note',
-          'convert-node',
-          ...(linked ? ['unlink'] : []),
-          'remove-highlight',
-        ]);
+        ).toEqual(['link-note', 'remove-highlight']);
         for (const button of f.view.contentEl.querySelectorAll('.reader-actions button')) {
           expect(button.textContent).toBe('');
           expect(button.querySelector('svg')).not.toBeNull();
@@ -219,6 +213,7 @@ describe('Nodes v2 linked creation', () => {
           {
             type: 'topic',
             suggestedTitle: 'Typed topic',
+            acceptSuggestedTitle: true,
             sourcePath: f.article.path,
             signal: expect.any(AbortSignal),
           },
@@ -267,20 +262,17 @@ describe('Nodes v2 linked creation', () => {
     expect(f.vault.trashed).toEqual([]);
   });
 
-  it.each(['Remove references (article only)', 'Remove highlight (article only)'])(
-    'never removes or rewrites the linked file through %s',
-    async (label) => {
-      const f = await fixture(linkedBody),
-        targetBefore = await f.vault.read(f.target);
-      await menu(f.view, label);
-      expect((await f.store.read(f.article.path)).body).toBe(
-        `${label === 'Remove highlight (article only)' ? 'words' : '==words=='} ^${paragraphAnchors(linkedBody)[0].blockId}`,
-      );
-      expect(f.vault.file(f.target.path)).toBe(f.target);
-      expect(await f.vault.read(f.target)).toBe(targetBefore);
-      expect(f.vault.trashed).toEqual([]);
-    },
-  );
+  it('never removes or rewrites the linked file when removing a highlight', async () => {
+    const f = await fixture(linkedBody),
+      targetBefore = await f.vault.read(f.target);
+    await menu(f.view, 'Remove highlight (article only)');
+    expect((await f.store.read(f.article.path)).body).toBe(
+      `words ^${paragraphAnchors(linkedBody)[0].blockId}`,
+    );
+    expect(f.vault.file(f.target.path)).toBe(f.target);
+    expect(await f.vault.read(f.target)).toBe(targetBefore);
+    expect(f.vault.trashed).toEqual([]);
+  });
 
   it.each([
     ['topic', 'Other'],
@@ -559,12 +551,9 @@ describe('Nodes v2 linked creation', () => {
 
   it.each(
     ['before', 'after'].flatMap((phase) =>
-      [
-        'Add highlight to notes…',
-        'Add highlight to notes…',
-        'Remove references (article only)',
-        'Remove highlight (article only)',
-      ].map((label) => ({ phase, label })),
+      ['Add highlight to notes…', 'Add highlight to notes…', 'Remove highlight (article only)'].map(
+        (label) => ({ phase, label }),
+      ),
     ),
   )(
     'supersedes a never-settling picker through the actual $label passage button $phase commit',
@@ -596,10 +585,7 @@ describe('Nodes v2 linked creation', () => {
         await creation;
         await f.probe.operations;
         await expect(late(f.node)).rejects.toThrow('request has finished');
-        const changesPassage = [
-          'Remove references (article only)',
-          'Remove highlight (article only)',
-        ].includes(label);
+        const changesPassage = label === 'Remove highlight (article only)';
         expect(collect).toHaveBeenCalledTimes(phase === 'after' ? 1 : 0);
         expect(annotate).toHaveBeenCalledTimes(changesPassage ? 1 : 0);
 
@@ -607,11 +593,7 @@ describe('Nodes v2 linked creation', () => {
         const expectedSource = phase === 'after' ? f.linkedBody : originalLinkedBody;
         expect((await f.store.read(f.article.path)).body).toBe(
           changesPassage
-            ? changePassage(
-                expectedSource,
-                passages(expectedSource)[0],
-                label === 'Remove highlight (article only)' ? 'remove' : 'unlink',
-              )
+            ? changePassage(expectedSource, passages(expectedSource)[0], 'remove')
             : expectedSource,
         );
 
@@ -639,10 +621,8 @@ describe('Nodes v2 linked creation', () => {
         ['link', 'internal'],
         ['link', 'new-leaf'],
         ['link', 'external'],
-        ['menu', 'Open note'],
         ['menu', 'Add highlight to notes…'],
         ['menu', 'Add highlight to notes…'],
-        ['menu', 'Remove references (article only)'],
         ['menu', 'Remove highlight (article only)'],
       ].map(([route, label]) => ({ phase, route, label })),
     ),
@@ -718,9 +698,8 @@ describe('Nodes v2 linked creation', () => {
               }),
             { interval: 1 },
           );
-        if (['internal', 'new-leaf', 'Open note'].includes(label)) {
-          const path =
-            label === 'Open note' && phase === 'before' ? 'Notes/Existing.md' : f.target.path;
+        if (['internal', 'new-leaf'].includes(label)) {
+          const path = f.target.path;
           await vi.waitFor(
             () =>
               expect(f.opened.openFile).toHaveBeenCalledWith(f.vault.file(path), { active: true }),
@@ -739,21 +718,14 @@ describe('Nodes v2 linked creation', () => {
         }
         providerRelease.resolve();
         await vi.mocked(f.api.createNodeForLink).mock.results[0].value;
-        const changesPassage = [
-          'Remove references (article only)',
-          'Remove highlight (article only)',
-        ].includes(label);
+        const changesPassage = label === 'Remove highlight (article only)';
         expect(collect).toHaveBeenCalledTimes(phase === 'after' ? 1 : 0);
         expect(annotate).toHaveBeenCalledTimes(changesPassage ? 1 : 0);
 
         const expectedSource = phase === 'after' ? f.linkedBody : originalLinkedBody;
         expect((await f.store.read(f.article.path)).body).toBe(
           changesPassage
-            ? changePassage(
-                expectedSource,
-                passages(expectedSource)[0],
-                label === 'Remove highlight (article only)' ? 'remove' : 'unlink',
-              )
+            ? changePassage(expectedSource, passages(expectedSource)[0], 'remove')
             : expectedSource,
         );
 

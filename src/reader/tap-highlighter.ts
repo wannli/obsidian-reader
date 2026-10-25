@@ -11,6 +11,7 @@ export interface TapToolbarAction {
 
 interface TapHighlightOptions {
   active: boolean;
+  normalTail?: HTMLElement;
   mode?: 'highlight' | 'node';
   canUndo: boolean;
   modeChanged(active: boolean, mode?: 'node'): void;
@@ -81,7 +82,7 @@ export class TapHighlighter {
     setIcon(trigger, 'highlighter');
     trigger.querySelector('svg')?.setAttribute('aria-hidden', 'true');
     trigger.addEventListener('click', () => this.setActive(true, true, 'highlight'), events);
-    toolbar.append(trigger);
+    toolbar.insertBefore(trigger, options.normalTail ?? null);
     this.nodeTrigger = doc.createElement('button');
     this.nodeTrigger.type = 'button';
     this.nodeTrigger.className = 'reader-icon-button reader-tap-node-trigger';
@@ -91,7 +92,7 @@ export class TapHighlighter {
     setIcon(this.nodeTrigger, 'file-plus-2');
     this.nodeTrigger.querySelector('svg')?.setAttribute('aria-hidden', 'true');
     this.nodeTrigger.addEventListener('click', () => this.setActive(true, true, 'node'), events);
-    toolbar.append(this.nodeTrigger);
+    toolbar.insertBefore(this.nodeTrigger, options.normalTail ?? null);
     this.normal = [...toolbar.childNodes];
     this.normalGrid = toolbar.style.getPropertyValue('grid-template-columns');
     this.normalGridPriority = toolbar.style.getPropertyPriority('grid-template-columns');
@@ -195,7 +196,7 @@ export class TapHighlighter {
         )
           return;
         if (this.down && this.down.root !== this.body.firstChild) return;
-        if (this.mode === 'highlight' && options.onTarget?.(event)) return;
+        if (options.onTarget?.(event)) return;
         const word = this.picker.wordAt(event.clientX, event.clientY);
         if (!word) return;
         if (!this.first) {
@@ -397,22 +398,15 @@ export class TapHighlighter {
             }
           });
           element.dataset.action = action.id;
-          const extraNote = /^open-note-([1-9])$/.exec(action.id);
-          const key =
-            extraNote?.[1] ??
-            (
-              {
-                'link-note': 'a',
-                'convert-node': 'c',
-                'open-note': 'o',
-                'remove-highlight': 'r',
-                unlink: 'x',
-                'retry-note-updates': 't',
-                'cancel-send': 'b',
-              } as Record<string, string>
-            )[action.id];
+          const key = (
+            {
+              'link-note': 'a',
+              'remove-highlight': 'r',
+              'retry-note-updates': 't',
+              'cancel-send': 'b',
+            } as Record<string, string>
+          )[action.id];
           if (key) this.shortcut(element, key);
-          // More than ten destinations still have a focused-button Enter shortcut.
           const tooltip = key
             ? `${action.label} (${key.toUpperCase()})`
             : `${action.label} (Enter when focused)`;

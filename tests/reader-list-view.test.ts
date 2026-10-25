@@ -194,23 +194,23 @@ describe('bounded Reader UI', () => {
       ];
       expect(
         buttons.map((button) => button.querySelector('svg')?.getAttribute('data-icon')),
-      ).toEqual(['tags', 'list-filter', 'trash-2', 'list', 'highlighter', 'file-plus-2']);
+      ).toEqual(['list-filter', 'trash-2', 'list', 'highlighter', 'file-plus-2', 'tags']);
       expect(buttons.map((button) => button.getAttribute('aria-label'))).toEqual([
-        'Related notes',
         'Change status and advance · S: choose · L: Later · A: Archive',
         'Trash article and advance',
         'List',
         'Highlight mode',
         'Create node',
+        'Related notes',
       ]);
-      expect(setTooltip).toHaveBeenCalledWith(buttons[0], 'Related notes (T)');
+      expect(setTooltip).toHaveBeenCalledWith(buttons[5], 'Related notes (T)');
       expect(setTooltip).toHaveBeenCalledWith(
-        buttons[1],
+        buttons[0],
         'Change status and advance · S: choose · L: Later · A: Archive',
       );
       expect(buttons.every((button) => !button.hasAttribute('title'))).toBe(true);
-      expect(setTooltip).toHaveBeenCalledWith(buttons[4], 'Highlight mode (H)');
-      expect(setTooltip).toHaveBeenCalledWith(buttons[5], 'Create node (C)');
+      expect(setTooltip).toHaveBeenCalledWith(buttons[3], 'Highlight mode (H)');
+      expect(setTooltip).toHaveBeenCalledWith(buttons[4], 'Create node (C)');
       expect(setTooltip).toHaveBeenCalledWith(
         f.probe.surface.title,
         'J/K: next/previous article · Space: page · D/U: half-page · gg/G: top/bottom · Q: list · ?: shortcuts',
@@ -220,7 +220,11 @@ describe('bounded Reader UI', () => {
         expect(button.textContent).toBe('');
         expect(css.minWidth).toBe('44px');
         expect(css.minHeight).toBe('44px');
-        if (!button.matches('.reader-tap-highlight-trigger,.reader-tap-node-trigger'))
+        if (
+          !button.matches(
+            '.reader-tap-highlight-trigger,.reader-tap-node-trigger,.reader-related-notes',
+          )
+        )
           expect([css.padding, css.borderRadius, css.backgroundColor, css.border]).toEqual(
             treatment,
           );
@@ -230,6 +234,8 @@ describe('bounded Reader UI', () => {
           expect(style.textContent).toContain(`.reader-view button.${button.classList[1]}`);
         }
       }
+      expect(style.textContent).toContain('.reader-view button.reader-related-notes');
+      expect(style.textContent).toContain('--color-blue-rgb');
       expect(style.textContent.match(/\.reader-actions \{[^}]+\}/)?.[0]).not.toContain('border');
       const hr = f.probe.surface.body.appendChild(document.createElement('hr'));
       const navbar = document.body.createDiv({ cls: 'mobile-navbar' });

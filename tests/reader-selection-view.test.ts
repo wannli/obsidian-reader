@@ -121,12 +121,12 @@ describe('automatic selection event ownership', () => {
     const column = f.view.contentEl.querySelector('.reader-article')!;
     const actions = column.querySelector('.reader-actions')!;
     expect([...actions.querySelectorAll('button')].map(actionName)).toEqual([
-      'Related notes',
       'Change status',
       'Delete',
       'List',
       'Highlight mode',
       'Create node',
+      'Related notes',
     ]);
     expect(actions.parentElement).toBe(f.surface.viewport.parentElement);
     expect(f.surface.viewport.contains(actions)).toBe(false);
@@ -519,7 +519,7 @@ describe('automatic selection event ownership', () => {
     expectNoPassagePopup();
   });
 
-  it('refreshes destination/unlink passage actions against the saved body and Remove preserves the words', async () => {
+  it('refreshes destination actions against the saved body and Remove preserves the words', async () => {
     const target = await f.note('Nodes/One.md', 'Keep the target', 'topic');
     const node: NodeResult = {
       path: target.path,
@@ -570,17 +570,10 @@ describe('automatic selection event ownership', () => {
       originLink(f.article.path, blockId, f.article.basename),
     ).raw;
     expect(await f.vault.read(target)).toBe(collected);
-    passageButton(f.view, 'Remove references (article only)').click();
-    await tapSettled();
-    const unlinked = changePassage(linked, passages(linked)[0], 'unlink');
-    expect((await f.store.read(f.article.path)).body).toBe(unlinked);
-    expect(passageLabels(f.view).filter((label) => label !== 'Undo')).toEqual(
-      expectedPassageActions(),
-    );
     passageButton(f.view, 'Remove highlight (article only)').click();
     await tapSettled();
     expect((await f.store.read(f.article.path)).body).toBe(
-      changePassage(unlinked, passages(unlinked)[0], 'remove'),
+      changePassage(linked, passages(linked)[0], 'remove'),
     );
     expect((await f.store.read(f.article.path)).properties.topics).toEqual([
       '[[Nodes/Default]]',
@@ -1711,16 +1704,5 @@ describe('commit-time annotation targets', () => {
     cancel!();
     await pending;
     expect((await f.store.read(article.path)).properties.topics).toBeUndefined();
-  });
-
-  it('preserves rich words when unlinking a Markdown-linked highlight', async () => {
-    const f = hostFixture(),
-      article = await f.note(
-        'Reading/Inbox/A.md',
-        '==[**formatted words**](/Notes/URI%20Path.md)==',
-      );
-    await f.view.openArticle(article.path);
-    await menu(f.view, 'Remove references (article only)');
-    expect((await f.store.read(article.path)).body).toBe('==**formatted words**==');
   });
 });

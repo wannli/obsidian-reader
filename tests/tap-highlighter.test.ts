@@ -387,7 +387,7 @@ it('renders generic icon-only passage actions, Undo and Done in the same panel',
     expect(element.textContent).toBe('');
     expect(element.classList.contains('reader-icon-button')).toBe(true);
     expect(element.getAttribute('aria-label')).toBe(action.label);
-    const shortcut = { unlink: 'X', 'remove-highlight': 'R' }[action.id];
+    const shortcut = { 'remove-highlight': 'R' }[action.id];
     const tooltip = shortcut
       ? `${action.label} (${shortcut})`
       : `${action.label} (Enter when focused)`;
@@ -404,25 +404,14 @@ it('renders generic icon-only passage actions, Undo and Done in the same panel',
   expect(f.toolbar.querySelector('.reader-tap-highlight-hint')).toBeNull();
 });
 
-it('labels multiple note destinations with working keys and a focused Enter fallback', () => {
-  const actions = [
-    passageAction('open-note', 'Open first'),
-    passageAction('open-note-1', 'Open second'),
-    passageAction('open-note-9', 'Open tenth'),
-    passageAction('open-note-10', 'Open eleventh'),
-  ];
+it('gives an action without a shortcut a focused Enter fallback', () => {
+  const actions = [passageAction('custom', 'Custom action')];
   const f = fixture({ passageActions: () => actions });
-  for (const [index, action] of actions.entries()) {
-    const key = ['O', '1', '9', undefined][index];
-    const element = button(f.toolbar, action.label);
-    expect(element.hasAttribute('title')).toBe(false);
-    expect(setTooltip).toHaveBeenCalledWith(
-      element,
-      key ? `${action.label} (${key})` : `${action.label} (Enter when focused)`,
-    );
-    expect(element.getAttribute('aria-keyshortcuts')).toBe(key ?? null);
-    expect(element.dataset.readerKey).toBe(key?.toLowerCase());
-  }
+  const element = button(f.toolbar, 'Custom action');
+  expect(element.hasAttribute('title')).toBe(false);
+  expect(setTooltip).toHaveBeenCalledWith(element, 'Custom action (Enter when focused)');
+  expect(element.getAttribute('aria-keyshortcuts')).toBeNull();
+  expect(element.dataset.readerKey).toBeUndefined();
 });
 
 it('reuses the current action set and buttons across refresh, Undo availability and layout changes', () => {

@@ -68,6 +68,10 @@ body.is-mobile.reader-mobile-active .mobile-navbar {
   border-color: rgba(var(--color-green-rgb, 46, 139, 87), 0.38) !important;
   background: rgba(var(--color-green-rgb, 46, 139, 87), 0.13) !important;
 }
+.reader-view button.reader-related-notes {
+  border-color: rgba(var(--color-blue-rgb, 59, 130, 246), 0.38) !important;
+  background: rgba(var(--color-blue-rgb, 59, 130, 246), 0.13) !important;
+}
 .reader-view button.reader-tap-highlight-trigger:not(:disabled):hover,
 .reader-view
   .reader-tap-highlight-toolbar:not(.reader-tap-node-toolbar)
@@ -77,6 +81,9 @@ body.is-mobile.reader-mobile-active .mobile-navbar {
 .reader-view button.reader-tap-node-trigger:not(:disabled):hover,
 .reader-view .reader-tap-node-toolbar button.reader-icon-button:not(:disabled):hover {
   background: rgba(var(--color-green-rgb, 46, 139, 87), 0.22) !important;
+}
+.reader-view button.reader-related-notes:not(:disabled):hover {
+  background: rgba(var(--color-blue-rgb, 59, 130, 246), 0.22) !important;
 }
 .reader-view button.reader-icon-button:disabled {
   opacity: 0.45;

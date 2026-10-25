@@ -493,16 +493,14 @@ function expectNoPassagePopup() {
   expect(mocks.menuShown).not.toHaveBeenCalled();
 }
 
-function expectedPassageActions({ linked = false, provider = true, undo = false } = {}): string[] {
+function expectedPassageActions({
+  provider = true,
+  undo = false,
+}: { linked?: boolean; provider?: boolean; undo?: boolean } = {}): string[] {
   return [
-    ...(linked ? ['Open note'] : []),
     ...(provider
-      ? ['Add highlight to notes…', 'Convert to note link…']
-      : [
-          'Add highlight to notes… (requires Fileclass Inline v2)',
-          'Convert to note link… (requires Fileclass Inline v2)',
-        ]),
-    ...(linked ? ['Remove references (article only)'] : []),
+      ? ['Add highlight to notes…']
+      : ['Add highlight to notes… (requires Fileclass Inline v2)']),
     'Remove highlight (article only)',
     ...(undo ? ['Undo'] : []),
     'Done',
