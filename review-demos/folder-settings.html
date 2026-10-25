@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Reader folder settings — review simulation</title>
+  <style>
+    :root { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: #dedede; background: #171717; }
+    * { box-sizing: border-box; }
+    body { margin: 0; }
+    button, input { font: inherit; }
+    button { cursor: pointer; }
+    .banner { padding: 14px 22px; background: #242424; border-bottom: 1px solid #3b3b3b; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+    .banner strong { color: #f2f2f2; }
+    .banner small { color: #a7a7a7; }
+    .controls { display: flex; gap: 6px; margin-left: auto; }
+    .controls button { background: #303030; border: 1px solid #555; color: #ddd; border-radius: 6px; padding: 8px 12px; min-height: 40px; }
+    .controls button[aria-pressed="true"] { background: #6555aa; border-color: #8875d5; color: white; }
+    .stage { min-height: calc(100vh - 70px); padding: 36px 22px; display: flex; justify-content: center; align-items: flex-start; background: radial-gradient(circle at 50% 0, #24222b, #171717 70%); }
+    .device { width: min(100%, 820px); min-height: 680px; background: #202020; border: 1px solid #454545; box-shadow: 0 18px 48px #0008; overflow: visible; }
+    .device.phone { width: 390px; min-height: 780px; border-radius: 32px; border: 7px solid #0c0c0c; }
+    .device.boox { width: 600px; background: #f5f5f1; color: #222; border: 7px solid #242424; border-radius: 10px; filter: grayscale(1); }
+    .chrome { height: 48px; border-bottom: 1px solid #383838; padding: 12px 18px; color: #aaa; font-size: 13px; display: flex; gap: 12px; }
+    .boox .chrome { border-color: #bbb; color: #555; }
+    .phone .chrome { padding-left: 18px; }
+    main { padding: 28px 30px 50px; }
+    h1 { margin: 0 0 10px; font-size: 26px; font-weight: 650; }
+    h2 { font-size: 18px; margin: 36px 0 8px; padding-bottom: 8px; border-bottom: 1px solid #484848; }
+    p { color: #aaa; line-height: 1.5; font-size: 14px; margin: 0 0 18px; }
+    .boox p { color: #555; }
+    .setting { display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 11px 0; border-bottom: 1px solid #353535; min-height: 64px; }
+    .boox .setting, .boox h2 { border-color: #bbb; }
+    label { font-size: 14px; font-weight: 520; flex: 0 0 180px; }
+    .field { position: relative; display: flex; align-items: center; gap: 7px; flex: 1; min-width: 0; }
+    input { width: 100%; min-width: 0; height: 42px; padding: 0 12px; border: 1px solid #555; border-radius: 6px; background: #303030; color: #e9e9e9; outline: none; }
+    input:focus { border-color: #a895f4; box-shadow: 0 0 0 2px #9b86eb44; }
+    .boox input { color: #111; background: white; border-color: #777; }
+    .choose, .apply { min-height: 42px; border-radius: 6px; color: #e7e7e7; border: 1px solid #555; background: #363636; padding: 0 13px; white-space: nowrap; }
+    .choose:hover, .apply:hover { background: #444; }
+    .apply.primary { background: #705cba; border-color: #705cba; color: white; }
+    .boox .choose, .boox .apply { color: #111; background: #e7e7e2; border-color: #777; }
+    .boox .apply.primary { color: white; background: #444; }
+    .action { display: flex; justify-content: flex-end; padding: 14px 0 6px; }
+    .suggestions { position: absolute; z-index: 10; top: calc(100% + 3px); left: 0; right: 0; max-height: 240px; overflow: auto; border: 1px solid #6b6190; background: #292929; border-radius: 7px; box-shadow: 0 12px 28px #0008; padding: 4px; }
+    .suggestions button { display: block; width: 100%; min-height: 44px; text-align: left; color: #ddd; border: 0; background: transparent; border-radius: 4px; padding: 8px 10px; overflow-wrap: anywhere; }
+    .suggestions button:hover, .suggestions button.active { background: #56487d; color: white; }
+    .boox .suggestions { background: white; border-color: #555; }
+    .boox .suggestions button { color: #111; }
+    .boox .suggestions button:hover, .boox .suggestions button.active { background: #d1d1d1; }
+    .status { min-height: 30px; margin-top: 18px; padding: 10px 12px; border-left: 3px solid #a895f4; background: #2c2935; color: #ddd; font-size: 13px; line-height: 1.4; }
+    .boox .status { background: #e5e5e0; color: #222; border-color: #666; }
+    .hint { margin-top: 16px; font-size: 12px; color: #929292; }
+    .modalback { position: fixed; z-index: 20; inset: 0; background: #0009; display: grid; place-items: center; padding: 20px; }
+    .modal { width: min(460px, 100%); max-height: 80vh; overflow: auto; background: #292929; border: 1px solid #666; border-radius: 10px; padding: 18px; box-shadow: 0 20px 60px #000a; }
+    .modal h2 { margin: 0 0 14px; }
+    .modal input { margin-bottom: 10px; }
+    .modal button { display: block; width: 100%; min-height: 44px; text-align: left; padding: 9px; color: #ddd; background: transparent; border: 0; border-radius: 4px; }
+    .modal button:hover, .modal button:focus { background: #56487d; }
+    .modal .close { text-align: right; color: #aaa; }
+    .phone main { padding: 20px 18px 50px; }
+    .phone .setting { display: block; padding: 10px 0 13px; }
+    .phone label { display: block; margin-bottom: 8px; }
+    .phone .field { width: 100%; }
+    .phone .choose { font-size: 12px; padding: 0 8px; }
+    .phone h2 { margin-top: 28px; }
+    .boox main { padding: 24px; }
+    @media (max-width: 580px) { .banner { padding: 12px; } .controls { margin-left: 0; } .stage { padding: 14px 8px; } .device:not(.phone):not(.boox) main { padding: 20px; } .device:not(.phone):not(.boox) .setting { display: block; } .device:not(.phone):not(.boox) label { display: block; margin-bottom: 8px; } }
+  </style>
+</head>
+<body>
+  <div class="banner">
+    <div><strong>Reader folder settings</strong> <small>Interactive simulation · synthetic folders · no vault writes</small></div>
+    <div class="controls" aria-label="Simulation controls">
+      <button data-mode="before" aria-pressed="false">Before · 0.21.1</button>
+      <button data-mode="after" aria-pressed="true">After · proposal</button>
+      <button data-device="desktop" aria-pressed="true">Desktop</button>
+      <button data-device="phone" aria-pressed="false">iPhone</button>
+      <button data-device="boox" aria-pressed="false">Boox</button>
+    </div>
+  </div>
+  <div class="stage"><div id="device" class="device desktop">
+    <div class="chrome"><span>☰</span><span>Settings</span><span>›</span><span>Reader</span></div>
+    <main>
+      <h1>Reader</h1>
+      <p>New articles go to their queue folder below (manual captures to Inbox, imported entries to Feed). Choose where new feed subscription notes are created. Applying settings never moves existing files or changes their Markdown.</p>
+      <div id="feed"></div>
+      <div class="action"><button class="apply primary" data-apply="feed">Apply folders</button></div>
+      <h2>Article queue folders</h2>
+      <p>An article’s folder determines its reading list, even when its YAML status disagrees. The four folders must be distinct and cannot overlap or be inside Templates or .trash. Reader moves articles when you explicitly change their status; applying settings does not move existing notes.</p>
+      <div id="queues"></div>
+      <div class="action"><button class="apply" data-apply="queue">Apply mappings</button></div>
+      <div id="status" class="status" role="status">Try the After flow: focus a folder field, type “Library”, use ↓ and Enter, then Apply mappings. For a new path, type it directly and Apply.</div>
+      <div class="hint">In this simulation, Apply updates only the displayed demo state. No Reader setting or note is changed.</div>
+    </main>
+  </div></div>
+  <script>
+    const folders = ['Reading', 'Reading/Inbox', 'Reading/Stream', 'Reading/Later', 'Reading/Treasury', 'Reading/Feeds', 'Library', 'Library/Inbox', 'Library/Stream', 'Library/Later', 'Library/Treasury', 'Subscriptions'];
+    const initial = { feeds:'Reading/Feeds', inbox:'Reading/Inbox', feed:'Reading/Stream', later:'Reading/Later', archive:'Reading/Treasury' };
+    const draft = { ...initial }, saved = { ...initial };
+    let mode = 'after', device = 'desktop', activeInput = null, activeIndex = 0;
+    const status = (message) => { document.querySelector('#status').textContent = message; };
+    const escapeHtml = (value) => value.replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+    function row(key, label) {
+      return `<div class="setting"><label for="field-${key}">${label}</label><div class="field"><input id="field-${key}" data-key="${key}" type="text" value="${escapeHtml(draft[key])}" autocomplete="off" aria-label="${label}" aria-autocomplete="list" aria-expanded="false">${mode === 'before' ? `<button class="choose" data-choose="${key}">Choose folder</button>` : ''}<div class="suggestions" hidden role="listbox"></div></div></div>`;
+    }
+    function render() {
+      closeSuggestions();
+      document.querySelector('#feed').innerHTML = row('feeds','Feed subscriptions');
+      document.querySelector('#queues').innerHTML = [row('inbox','inbox folder'),row('feed','feed folder'),row('later','later folder'),row('archive','archive folder')].join('');
+      document.querySelectorAll('[data-mode]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.mode === mode)));
+      document.querySelectorAll('[data-device]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.device === device)));
+      document.querySelector('#device').className = `device ${device}`;
+    }
+    function closeSuggestions() {
+      if (activeInput && activeInput.isConnected) { activeInput.setAttribute('aria-expanded','false'); activeInput.parentElement.querySelector('.suggestions').hidden = true; }
+      activeInput = null;
+    }
+    function showSuggestions(input) {
+      if (mode !== 'after') return;
+      if (activeInput && activeInput !== input) closeSuggestions();
+      activeInput = input;
+      const list = input.parentElement.querySelector('.suggestions');
+      const matches = ['/'].concat(folders).filter((path) => path.toLowerCase().includes(input.value.toLowerCase())).slice(0,30);
+      activeIndex = 0;
+      list.innerHTML = matches.map((path,i) => `<button type="button" role="option" data-path="${escapeHtml(path === '/' ? '' : path)}" class="${i===0?'active':''}" aria-selected="${i===0}">${path === '/' ? 'Vault root' : escapeHtml(path)}</button>`).join('');
+      list.hidden = matches.length === 0;
+      input.setAttribute('aria-expanded',String(matches.length > 0));
+    }
+    function selectSuggestion(path) {
+      if (!activeInput) return;
+      const key = activeInput.dataset.key;
+      activeInput.value = path;
+      draft[key] = path;
+      activeInput.focus();
+      closeSuggestions();
+      status(`${path} selected for ${key === 'feeds' ? 'Feed subscriptions' : key}. This is staged; use its Apply button to save.`);
+    }
+    function validPath(path, allowRoot) {
+      if (path === '') return allowRoot ? '' : 'Queue folders cannot be vault root.';
+      if (/[\\:*?"<>|\[\]#^\x00-\x1f\x7f]/.test(path) || path.split('/').some((part) => !part || part === '.' || part === '..' || part !== part.trim() || part.endsWith('.'))) return 'Choose a portable vault-relative folder without unsafe path segments.';
+      if (path.split('/').some((part) => /^(templates|\.trash)$/i.test(part))) return 'Folders must be outside Templates and .trash.';
+      return '';
+    }
+    function apply(group) {
+      const keys = group === 'feed' ? ['feeds'] : ['inbox','feed','later','archive'];
+      for (const key of keys) { const error = validPath(draft[key], group === 'feed'); if (error) { status(`Could not apply: ${error}`); return; } }
+      if (group === 'queue') for (let i=0;i<keys.length;i++) for (let j=i+1;j<keys.length;j++) { const a=draft[keys[i]].toLowerCase(), b=draft[keys[j]].toLowerCase(); if (a===b || a.startsWith(b+'/') || b.startsWith(a+'/')) { status('Could not apply: Queue folders must not overlap.'); return; } }
+      keys.forEach((key) => saved[key] = draft[key]);
+      status(group === 'feed' ? `Feed subscription destination applied: ${saved.feeds}. Reader would return to its reading list. Existing files stay in place.` : `Queue mappings applied: ${keys.map((key)=>`${key} → ${saved[key]}`).join(' · ')}. Existing files stay in place.`);
+    }
+    document.addEventListener('click', (event) => {
+      const button = event.target.closest('button');
+      if (button?.dataset.mode) { mode=button.dataset.mode; render(); status(mode==='after' ? 'After: focus an input for anchored suggestions; use ↓ and Enter, or type any valid new path, then Apply.' : 'Before: click Choose folder to open a separate picker modal; typed paths and explicit Apply already work.'); return; }
+      if (button?.dataset.device) { device=button.dataset.device; render(); return; }
+      if (button?.dataset.apply) { closeSuggestions(); apply(button.dataset.apply); return; }
+      if (button?.dataset.choose) { closeSuggestions(); openModal(button.dataset.choose); return; }
+      if (button?.dataset.path !== undefined) { selectSuggestion(button.dataset.path); return; }
+      if (!event.target.closest('.field')) closeSuggestions();
+    });
+    document.addEventListener('focusin', (event) => { if (event.target.matches('input[data-key]')) showSuggestions(event.target); });
+    document.addEventListener('input', (event) => { if (event.target.matches('input[data-key]')) { draft[event.target.dataset.key]=event.target.value; showSuggestions(event.target); status('Path staged. Apply is still required.'); } });
+    document.addEventListener('keydown', (event) => {
+      if (event.target.matches('input[data-key]') && mode==='after') {
+        const list=event.target.parentElement.querySelector('.suggestions'); const options=[...list.querySelectorAll('[data-path]')];
+        if (event.key==='ArrowDown' || event.key==='ArrowUp') { event.preventDefault(); if (list.hidden) showSuggestions(event.target); else if (options.length) { activeIndex=(activeIndex+(event.key==='ArrowDown'?1:-1)+options.length)%options.length; options.forEach((option,i)=>{option.classList.toggle('active',i===activeIndex);option.setAttribute('aria-selected',String(i===activeIndex));}); options[activeIndex].scrollIntoView({block:'nearest'}); } }
+        if (event.key==='Enter' && !list.hidden && options.length) { event.preventDefault(); selectSuggestion(options[activeIndex].dataset.path); }
+        if (event.key==='Escape') { closeSuggestions(); }
+      }
+      if (event.key==='Escape' && document.querySelector('.modalback')) document.querySelector('.modalback').remove();
+    });
+    function openModal(key) {
+      const backdrop=document.createElement('div'); backdrop.className='modalback';
+      backdrop.innerHTML=`<div class="modal" role="dialog" aria-modal="true" aria-label="Choose a vault folder"><button class="close">Close ×</button><h2>Choose a vault folder</h2><input aria-label="Search folders" placeholder="Search folders"><div class="modaloptions"></div></div>`;
+      document.body.append(backdrop);
+      const search=backdrop.querySelector('input'), options=backdrop.querySelector('.modaloptions');
+      function fill() { options.innerHTML=folders.filter((path)=>path.toLowerCase().includes(search.value.toLowerCase())).map((path)=>`<button data-modal-path="${escapeHtml(path)}">${escapeHtml(path)}</button>`).join(''); }
+      fill(); search.focus(); search.addEventListener('input',fill);
+      backdrop.addEventListener('click',(event)=>{ if(event.target===backdrop || event.target.closest('.close')) {backdrop.remove();return;} const selected=event.target.closest('[data-modal-path]'); if(selected) {draft[key]=selected.dataset.modalPath; document.querySelector(`#field-${key}`).value=draft[key]; backdrop.remove();status(`${draft[key]} selected in modal for ${key}. Apply is still required.`);} });
+    }
+    render();
+  </script>
+</body>
+</html>
