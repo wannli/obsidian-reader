@@ -955,7 +955,7 @@ describe('browsing context and presentation', () => {
       expect(mocks.choose).toHaveBeenCalledWith(
         f.app,
         'Change article status…',
-        ['Inbox', 'Later', 'Feed', 'Archive'],
+        ['Inbox', 'Later', 'Feed', 'Archive'].filter((item) => item !== queue),
         expect.any(Function),
         expect.any(AbortSignal),
       );

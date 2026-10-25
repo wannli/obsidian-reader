@@ -1010,7 +1010,8 @@ describe('native suggestion presentation', () => {
       modal.querySelector('.reader-highlight-picker-results')!.classList.contains('prompt-results'),
     ).toBe(true);
     const footer = modal.querySelector('.reader-highlight-picker-footer')!;
-    expect([...footer.children].every((element) => element.tagName === 'BUTTON')).toBe(true);
+    expect(footer.querySelector('.reader-picker-count')?.textContent).toBe('0 selected');
+    expect(footer.querySelectorAll('button').length).toBeGreaterThan(0);
     expect(footer.querySelector('input, select, .reader-highlight-picker-result')).toBeNull();
     expect(
       rows().every((element) => element.tagName === 'BUTTON' && element.type === 'button'),

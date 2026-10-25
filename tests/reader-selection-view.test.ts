@@ -388,38 +388,26 @@ describe('commit-time annotation targets', () => {
     expect((await f.store.read(article.path)).body).toBe('==words==');
   });
 
-  it('rechecks topic identity and type at commit time and keeps the rejected draft for Cancel', async () => {
+  it('rechecks topic identity and type at commit time without reopening the picker', async () => {
     const f = hostFixture(),
       article = await f.note('Reading/Inbox/A.md'),
       target = await f.note('Topics/One.md', '', 'topic');
     const api = enableTypedTopics(f);
     await f.view.openArticle(article.path);
     const before = await f.vault.read(article);
-    let cancel: (() => void) | undefined;
-    let draft: string[] = [];
-    mocks.highlightPicker
-      .mockResolvedValueOnce({ kind: 'existing-many', nodes: [api.getNode(target.path)!] })
-      .mockImplementationOnce(async (_app, current, options) => {
-        expect(current).toBe(api);
-        draft = options.selectedPaths;
-        return new Promise<null>((resolve) => {
-          cancel = () => resolve(null);
-        });
-      });
+    mocks.highlightPicker.mockResolvedValueOnce({
+      kind: 'existing-many',
+      nodes: [api.getNode(target.path)!],
+    });
     const original = f.vault.process.bind(f.vault);
     vi.spyOn(f.vault, 'process').mockImplementation(async (file, transform) => {
       f.cache.set(target, { frontmatter: { type: 'person' } });
       return original(file, transform);
     });
-    const pending = f.probe.topics();
-    for (let i = 0; i < 100 && !cancel; i++) await Promise.resolve();
+    await f.probe.topics();
     expect(mocks.notice).toHaveBeenCalledWith(expect.stringContaining('typed destination changed'));
-    expect(draft).toEqual([target.path]);
-    expect(mocks.highlightPicker).toHaveBeenCalledTimes(2);
+    expect(mocks.highlightPicker).toHaveBeenCalledTimes(1);
     expect(await f.vault.read(article)).toBe(before);
-    expect(cancel).toBeDefined();
-    cancel!();
-    await pending;
     expect((await f.store.read(article.path)).properties.topics).toBeUndefined();
   });
 

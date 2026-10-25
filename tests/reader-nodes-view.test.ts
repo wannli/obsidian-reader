@@ -687,7 +687,7 @@ describe('Nodes v2 linked creation', () => {
           expect(mocks.choose).toHaveBeenCalledWith(
             f.app,
             'Change article status…',
-            ['Inbox', 'Later', 'Feed', 'Archive'],
+            ['Later', 'Feed', 'Archive'],
             expect.any(Function),
             expect.any(AbortSignal),
           );
