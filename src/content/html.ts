@@ -43,9 +43,17 @@ export function fragment(html: string, base: string, vaultLinks = false): Docume
     '[hidden],[aria-hidden],[style]',
   )) {
     const style = node.style ?? document.createElement('span').style;
+    const declarations = node.getAttribute('style') ?? '';
+    // Some host CSS parsers drop uppercase declarations. Check only explicit
+    // hidden values from the original attribute before sanitizing it away.
+    const rawHidden =
+      /(?:^|;)\s*(?:display\s*:\s*none|visibility\s*:\s*(?:hidden|collapse)|content-visibility\s*:\s*hidden)(?:\s*!important)?\s*(?:;|$)/i.test(
+        declarations,
+      );
     if (
       node.hasAttribute('hidden') ||
       node.getAttribute('aria-hidden')?.trim().toLowerCase() === 'true' ||
+      rawHidden ||
       style.display.toLowerCase() === 'none' ||
       ['hidden', 'collapse'].includes(style.visibility.toLowerCase()) ||
       style.getPropertyValue('content-visibility').toLowerCase() === 'hidden'

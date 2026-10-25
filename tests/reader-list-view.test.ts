@@ -289,7 +289,7 @@ describe('Reader mobile control styling', () => {
       ).toBe('var(--text-normal)');
       const row = rule('.reader-view > .reader-list > button.reader-list-item');
       expect(row.getPropertyValue('font-size')).toBe('var(--font-ui-medium)');
-      expect(rule('.reader-list-title').getPropertyValue('min-width')).toBe('0');
+      expect(parseFloat(rule('.reader-list-title').getPropertyValue('min-width'))).toBe(0);
       expect(rule('.reader-row-indicator').getPropertyValue('flex')).toBe('0 0 auto');
     } finally {
       style.remove();
@@ -323,7 +323,7 @@ describe('Reader mobile control styling', () => {
       const rowStyle = window.getComputedStyle(row);
       expect(row.firstChild?.textContent).toBe(title);
       expect(row.querySelector('small')).toBeNull();
-      expect(rowStyle.borderRadius).toBe('0');
+      expect(parseFloat(rowStyle.borderRadius)).toBe(0);
       expect(rowStyle.backgroundColor).toBe('rgba(0, 0, 0, 0)');
       expect(rowStyle.boxShadow).toBe('none');
       expect(rowStyle.height).toBe('auto');

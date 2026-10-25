@@ -60,9 +60,12 @@ function expectCue(mark: HTMLElement) {
   const computed = getComputedStyle(mark);
   expect(computed.textDecorationLine).toBe('underline');
   expect(computed.textDecorationStyle).toBe('solid');
-  expect(computed.textDecorationColor.toLowerCase()).toBe('currentcolor');
+  // Newer jsdom resolves currentColor to the actual foreground value.
+  expect(['currentcolor', computed.color.toLowerCase()]).toContain(
+    computed.textDecorationColor.toLowerCase(),
+  );
   expect(computed.textDecorationThickness).toBe('2px');
-  expect(computed.textUnderlineOffset).toBe('0.12em');
+  expect(['0.12em', '1.92px']).toContain(computed.textUnderlineOffset);
 }
 
 it.each(
