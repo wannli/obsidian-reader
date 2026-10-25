@@ -729,13 +729,12 @@ describe('Nodes v2 linked creation', () => {
           expect(f.app.workspace.getLeaf).toHaveBeenCalledWith(label === 'new-leaf');
         }
         if (label === 'external') {
-          expect(mocks.confirmWebLink).toHaveBeenCalledWith(
-            f.app,
+          expect(mocks.confirmWebLink).not.toHaveBeenCalled();
+          expect(f.web).toHaveBeenCalledWith(
             'https://example.test/article',
-            expect.any(Function),
-            expect.any(Array),
+            '_blank',
+            'noopener,noreferrer',
           );
-          expect(f.web).not.toHaveBeenCalled();
         }
         providerRelease.resolve();
         await vi.mocked(f.api.createNodeForLink).mock.results[0].value;
@@ -1296,17 +1295,31 @@ describe('Reader web-link capture', () => {
     await f.view.openArticle(article.path);
     f.probe.surface.body.innerHTML = `<a href="${href}">publisher</a>`;
     const event = { target: f.probe.surface.body.querySelector('a'), preventDefault: vi.fn() };
+    vi.spyOn(window, 'open').mockReturnValue(null);
     f.probe.clicked(event);
     expect(event.preventDefault).toHaveBeenCalled();
+    expect(window.open).toHaveBeenCalledWith(href, '_blank', 'noopener,noreferrer');
+    const source = f.probe.snapshot,
+      generation = f.probe.generation;
     return {
       ...f,
       article,
-      save: mocks.confirmWebLink.mock.lastCall![2] as (signal: AbortSignal) => Promise<void>,
+      save: (_signal: AbortSignal) => f.probe.saveWebLink(href, source, generation),
     };
   }
-  it('asks before saving and acquires in Inbox without changing the current article', async () => {
+  it('offers saving from the keyboard context menu without a dialog', async () => {
+    const f = await fixture();
+    const link = f.probe.surface.body.querySelector('a');
+    const event = new KeyboardEvent('keydown', { key: 'ContextMenu', cancelable: true });
+    Object.defineProperty(event, 'target', { value: link });
+    f.probe.linkMenu(event);
+    expect(event.defaultPrevented).toBe(true);
+    expect(mocks.menus.at(-1)?.has('Save to Inbox')).toBe(true);
+    expect(mocks.confirmWebLink).not.toHaveBeenCalled();
+  });
+  it('opens without a modal and explicitly saves to Inbox without changing the article', async () => {
     const f = await fixture('HTTPS://publisher.test/story');
-    expect(mocks.confirmWebLink).toHaveBeenCalledOnce();
+    expect(mocks.confirmWebLink).not.toHaveBeenCalled();
     expect(f.vault.files.size).toBe(1);
     const surface = f.probe.surface;
     await f.save(new AbortController().signal);
@@ -1368,12 +1381,11 @@ describe('Reader web-link capture', () => {
     expect(passageLabels(f.view)).toEqual(expectedPassageActions({ provider: false }));
     expectNoPassagePopup();
   });
-  it.each(['modal', 'navigation', 'unload', 'source edit', 'source delete'] as const)(
+  it.each(['navigation', 'unload', 'source edit', 'source delete'] as const)(
     'rejects a stale %s confirmation',
     async (kind) => {
       const f = await fixture(),
         modal = new AbortController();
-      if (kind === 'modal') modal.abort();
       if (kind === 'navigation') await f.view.readingList();
       if (kind === 'unload') f.signal.abort();
       if (kind === 'source edit') {

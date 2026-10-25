@@ -1,5 +1,6 @@
 import {
   ItemView,
+  Menu,
   Notice,
   Platform,
   parseLinktext,
@@ -38,7 +39,7 @@ import {
   replacePassageHosts,
   type HostedHighlight,
 } from '../core/hosted-highlights';
-import { choose, confirmWebLink } from '../host/dialogs';
+import { choose } from '../host/dialogs';
 import type { Ingestion } from '../host/ingestion';
 import { nodesApi, type NodesApi, type NodeResult } from '../host/nodes';
 import { chooseHighlightHost } from '../host/highlight-picker';
@@ -226,6 +227,16 @@ export class ReaderView extends ItemView {
       { ...options, capture: true },
     );
     this.contentEl.addEventListener('click', (event) => this.clicked(event), options);
+    this.contentEl.addEventListener('contextmenu', (event) => this.linkMenu(event), options);
+    this.contentEl.addEventListener(
+      'keydown',
+      (event) => {
+        if (event.key === 'ContextMenu' || (event.key === 'F10' && event.shiftKey)) {
+          this.linkMenu(event);
+        }
+      },
+      options,
+    );
     this.contentEl.addEventListener(
       'auxclick',
       (event) => {
@@ -2372,41 +2383,60 @@ export class ReaderView extends ItemView {
       );
     } else if (/^https?:/i.test(href)) {
       this.cancelNodeCreation();
-      const signal = this.articleLifetime.signal,
-        source = this.snapshot,
-        surface = this.surface,
-        generation = this.generation;
-      if (!source) return;
-      confirmWebLink(
-        this.app,
-        href,
-        async (modalSignal) => {
-          const guard = () => {
-            if (
-              signal.aborted ||
-              modalSignal.aborted ||
-              this.stopping ||
-              !this.current(source, generation) ||
-              this.surface !== surface ||
-              this.snapshot?.body !== source.body ||
-              this.host.store.vault.file(source.file.path) !== source.file
-            )
-              throw new Error('Reader capture was cancelled.');
-            this.assertDisplayed(source);
-          };
-          guard();
-          const file = await this.host.store.capture({ url: href }, new Date(), guard);
-          guard();
-          // Capture owns new-note status; duplicates retain their status and placement.
-          // Save/capture stays in the current article and its original browsing context.
-          void this.host.ingestion.acquire(file.path, true).catch((error) => {
-            if (!signal.aborted) this.error(error);
-          });
-          new Notice('Article saved.');
-        },
-        [signal, this.host.signal],
-      );
+      window.open(href, '_blank', 'noopener,noreferrer');
     }
+  }
+  private linkMenu(event: MouseEvent | KeyboardEvent): void {
+    const element = event.target instanceof Element ? event.target : undefined;
+    const link = element?.closest<HTMLAnchorElement>('a[href]');
+    if (!link || !this.surface?.body.contains(link) || this.surface.selection()) return;
+    const href = link.getAttribute('href')!;
+    if (!/^https?:/i.test(href)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const source = this.snapshot,
+      generation = this.generation;
+    if (!source) return;
+    const menu = new Menu();
+    menu.addItem((item) =>
+      item
+        .setTitle('Save to Inbox')
+        .setIcon('inbox')
+        .onClick(() => {
+          void this.saveWebLink(href, source, generation).catch((error) => this.error(error));
+        }),
+    );
+    if (event instanceof MouseEvent) menu.showAtMouseEvent(event);
+    else {
+      const rect = link.getBoundingClientRect();
+      menu.showAtPosition({ x: rect.left, y: rect.bottom });
+    }
+  }
+  private async saveWebLink(
+    href: string,
+    source: Snapshot<TFile>,
+    generation: number,
+  ): Promise<void> {
+    const signal = this.articleLifetime.signal;
+    const guard = () => {
+      if (
+        signal.aborted ||
+        this.host.signal.aborted ||
+        this.host.store.vault.file(source.file.path) !== source.file ||
+        this.stopping ||
+        !this.current(source, generation) ||
+        this.snapshot?.body !== source.body
+      )
+        throw new Error('Reader capture was cancelled.');
+      this.assertDisplayed(source);
+    };
+    guard();
+    const file = await this.host.store.capture({ url: href }, new Date(), guard);
+    guard();
+    void this.host.ingestion.acquire(file.path, true).catch((error) => {
+      if (!signal.aborted) this.error(error);
+    });
+    new Notice('Article saved.');
   }
   private selectPassageMark(mark: Element, event: MouseEvent): void {
     if (!this.snapshot || !this.surface?.body.contains(mark) || this.surface.selection()) return;

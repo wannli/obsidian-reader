@@ -74,6 +74,9 @@ vi.mock('obsidian', () => {
     addItem(build: (item: any) => void) {
       let title = '';
       const item = {
+        setIcon() {
+          return item;
+        },
         setTitle(value: string) {
           title = value;
           return item;
@@ -90,6 +93,9 @@ vi.mock('obsidian', () => {
     addSeparator() {
       this.items.set('---', () => {});
       return this;
+    }
+    showAtPosition(position: unknown) {
+      mocks.menuShown(position);
     }
     showAtMouseEvent(event: MouseEvent) {
       mocks.menuShown(event);
