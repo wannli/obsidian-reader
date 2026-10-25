@@ -11,6 +11,7 @@ const ui = vi.hoisted(() => ({
 vi.mock('../src/host/dialogs', () => ({ input: vi.fn() }));
 vi.mock('obsidian', () => {
   class Text {
+    inputEl = {} as HTMLInputElement;
     value = '';
     change: (value: string) => void = () => {};
     setValue(value: string) {
@@ -61,6 +62,18 @@ vi.mock('obsidian', () => {
       constructor(message: string) {
         ui.notices.push(message);
       }
+    },
+    AbstractInputSuggest: class {
+      constructor(
+        public app: unknown,
+        public input: any,
+      ) {}
+      onSelect(callback: any) {
+        this.input.select = callback;
+        return this;
+      }
+      setValue() {}
+      close() {}
     },
     FuzzySuggestModal: class {
       constructor(public app: unknown) {
@@ -155,8 +168,7 @@ it('shows only the feed subscription creation destination and preserves the lega
   settings.display();
   expect(ui.settings.filter((setting) => setting.input)).toHaveLength(5);
   expect(row('Articles')).toBeUndefined();
-  row('Feed subscriptions').buttons[0].click();
-  ui.picker.onChooseItem({ path: 'Subscriptions' });
+  row('Feed subscriptions').input.inputEl.select({ path: 'Subscriptions' });
   expect(row('Feed subscriptions').input.value).toBe('Subscriptions');
   expect(save).not.toHaveBeenCalled();
   await row('Apply folder locations').buttons[0].click();
@@ -252,8 +264,7 @@ it('shows the four default queue destinations and applies a staged mapping as on
   for (const [status, folder] of Object.entries(defaultStatusFolders))
     expect(row(`${status} folder`).input.value).toBe(folder);
   row('later folder').input.change('Library/Later');
-  row('archive folder').buttons[0].click();
-  ui.picker.onChooseItem({ path: 'Library/Treasury' });
+  row('archive folder').input.inputEl.select({ path: 'Library/Treasury' });
   expect(save).not.toHaveBeenCalled();
   await row('Apply status folders').buttons[0].click();
   expect(save).toHaveBeenCalledExactlyOnceWith({

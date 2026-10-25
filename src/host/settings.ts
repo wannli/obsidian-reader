@@ -1,6 +1,6 @@
 import { Modal, Notice, PluginSettingTab, Setting, type App, type Plugin } from 'obsidian';
 import { folderKeys, folderLabels, validateFolders, type ReaderFolders } from '../core/folders';
-import { FolderPicker } from './folder-picker';
+import { FolderSuggest } from './folder-picker';
 import type { Ingestion } from './ingestion';
 import type { ArticleStore } from '../core/store';
 import type { TFile } from 'obsidian';
@@ -114,14 +114,10 @@ export class ReaderSettings extends PluginSettingTab {
         control.setValue(candidate[key]).onChange((value) => {
           candidate[key] = value;
         });
-        setting.addButton((button) =>
-          button.setButtonText('Choose folder').onClick(() => {
-            new FolderPicker(this.app, (path) => {
-              candidate[key] = path;
-              control.setValue(path);
-            }).open();
-          }),
-        );
+        new FolderSuggest(this.app, control.inputEl, (path) => {
+          candidate[key] = path;
+          control.setValue(path);
+        });
       });
     }
     new Setting(this.containerEl)
@@ -162,14 +158,10 @@ export class ReaderSettings extends PluginSettingTab {
         control.setValue(mappings[status]).onChange((value) => {
           mappings[status] = value;
         });
-        setting.addButton((button) =>
-          button.setButtonText('Choose folder').onClick(() => {
-            new FolderPicker(this.app, (path) => {
-              mappings[status] = path;
-              control.setValue(path);
-            }).open();
-          }),
-        );
+        new FolderSuggest(this.app, control.inputEl, (path) => {
+          mappings[status] = path;
+          control.setValue(path);
+        });
       });
     }
     new Setting(this.containerEl).setName('Apply status folders').addButton((button) =>
