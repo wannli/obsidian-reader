@@ -36,6 +36,9 @@ import {
   originLink,
   rememberOrigin,
   removeQuotation,
+  quotationReceipt,
+  undoQuotation,
+  type CollectedQuotation,
 } from './quotation';
 import { defaultFolders, type ReaderFolders } from './folders';
 import {
@@ -88,7 +91,13 @@ export interface HighlightCollectionEdit {
   blockId: string;
 }
 export type HighlightCollectionPhase = 'source' | 'destination';
+export interface QuotationReceipt {
+  file: NoteFile;
+  path: string;
+  quotation: CollectedQuotation;
+}
 export interface HighlightCollectionOptions {
+  onQuotationAdded?: (receipt: QuotationReceipt) => void;
   created?: boolean;
   remember?: boolean;
   mode?: 'highlight' | 'mention';
@@ -710,6 +719,7 @@ export class ArticleStore<File extends NoteFile> {
           file,
           link: vaultLink(path.replace(/\.md$/iu, '')),
           raw: undefined as string | undefined,
+          added: false,
         };
       });
       let saved: Snapshot<File> | undefined;
@@ -747,14 +757,16 @@ export class ArticleStore<File extends NoteFile> {
           ).raw;
         }
         const origin = originLink(source.path, blockId);
-        let next =
+        const appended =
           mode === 'highlight'
             ? appendQuotation(raw, quoteMarkdown, originLink(source.path, blockId, title), {
                 path: source.path,
                 title,
                 collectedOn: collectedDate,
-              }).raw
-            : raw;
+              })
+            : { raw, added: false };
+        destination.added = appended.added;
+        let next = appended.raw;
         if (created.has(destination.path)) next = rememberOrigin(next, origin);
         return next;
       };
@@ -836,7 +848,23 @@ export class ArticleStore<File extends NoteFile> {
               return updateDestination(destination, current, annotated);
             };
             if (update(expected) === expected) update(await this.vault.read(destination.file));
-            else await this.vault.process(destination.file, update);
+            else {
+              const result = await this.vault.process(destination.file, update);
+              if (destination.operation === 'collect' && destination.added) {
+                const title =
+                  text(annotated.properties.title) ||
+                  annotated.path.split('/').pop()!.replace(/\.md$/iu, '');
+                options.onQuotationAdded?.({
+                  file: destination.file,
+                  path: destination.path,
+                  quotation: quotationReceipt(
+                    result,
+                    quoteMarkdown,
+                    originLink(annotated.path, blockId, title),
+                  ),
+                });
+              }
+            }
           });
           (destination.operation === 'remove' ? completedRemovals : completed).push(
             destination.path,
@@ -867,6 +895,43 @@ export class ArticleStore<File extends NoteFile> {
           failed.operation,
         );
       }
+    });
+  }
+  /** Undo only quotations proven newly added by this in-memory operation. */
+  undoHighlight(
+    snapshot: Snapshot<File>,
+    body: string,
+    receipts: readonly QuotationReceipt[],
+    guard: () => void,
+  ): Promise<{ snapshot: Snapshot<File>; retained: string[] }> {
+    return this.collections.run('collection', async () => {
+      guard();
+      const saved = await this.annotate(snapshot, (raw) => {
+        guard();
+        return replaceBody(raw, snapshot.body, body);
+      });
+      const retained: string[] = [];
+      for (const receipt of receipts) {
+        try {
+          const file = this.vault.file(receipt.path);
+          if (!file || file !== receipt.file) throw new ChangedNote();
+          await this.writes.run(file, async () => {
+            this.assert(file, receipt.path);
+            const expected = await this.vault.read(file);
+            this.vault.assertWritable(file, expected);
+            undoQuotation(expected, receipt.quotation);
+            await this.vault.process(file, (current) => {
+              this.assert(file, receipt.path);
+              this.vault.assertWritable(file, current);
+              if (current !== expected) throw new ChangedNote();
+              return undoQuotation(current, receipt.quotation);
+            });
+          });
+        } catch {
+          retained.push(receipt.path);
+        }
+      }
+      return { snapshot: saved, retained };
     });
   }
   /** One serialized local transition; native Sync cannot make two-note writes atomic. */

@@ -27,6 +27,7 @@ import {
   type ArticleStore,
   type HighlightCollectionPhase,
   type Snapshot,
+  type QuotationReceipt,
 } from '../core/store';
 import {
   convertPassage,
@@ -95,9 +96,13 @@ export class ReaderView extends ItemView {
   };
   private tapMode = false;
   private tapKind: 'highlight' | 'node' = 'highlight';
-  private tapUndo?: { snapshot: Snapshot<TFile>; before: string; passage: Passage };
-  private tapUndoUntil = 0;
-  private tapUndoTimer?: ReturnType<typeof setTimeout>;
+  private tapUndo?: {
+    snapshot: Snapshot<TFile>;
+    before: string;
+    passage: Passage;
+    quotations: QuotationReceipt[];
+  };
+  private collectingReceipts?: QuotationReceipt[];
   private actions?: HTMLElement;
   private status?: HTMLElement;
   private statusMessage?: string;
@@ -1047,7 +1052,7 @@ export class ReaderView extends ItemView {
     this.tapHighlighter = new TapHighlighter(surface.viewport, surface.body, this.actions, {
       active: this.tapMode,
       mode: this.tapKind,
-      canUndo: !!this.tapUndo && Date.now() <= this.tapUndoUntil,
+      canUndo: !!this.tapUndo,
       modeChanged: (active, mode) => {
         this.tapMode = active;
         if (active) this.tapKind = mode === 'node' ? 'node' : 'highlight';
@@ -1321,6 +1326,9 @@ export class ReaderView extends ItemView {
         throw new Error('The article changed. Tap the first word again.');
       this.assertDisplayed(base);
       locateSelection(base.body, selection.quote, selection.before, selection.after);
+      this.clearTapUndo();
+      const quotations: QuotationReceipt[] = [];
+      this.collectingReceipts = quotations;
       this.automatic = undefined;
       this.lastSelection = '';
       const promise = (async () => {
@@ -1339,24 +1347,21 @@ export class ReaderView extends ItemView {
         this.ownDeferred = undefined;
         this.clearTapUndo();
         if (passage) {
-          // Source-local Undo retains the paragraph anchor and remembered hosts.
-          // Destination quotations are user-owned snapshots and are never reversed.
+          // Keep only newly collected quotation receipts; never prune reused notes.
           const receipt = {
             snapshot: saved,
             before: changePassage(saved.body, passage, 'remove'),
             passage,
+            quotations,
           };
           this.tapUndo = receipt;
-          this.tapUndoUntil = Date.now() + 6000;
-          this.tapUndoTimer = setTimeout(() => {
-            if (this.tapUndo === receipt) this.clearTapUndo();
-          }, 6000);
         }
         this.surface?.setBody(saved.body, text(saved.properties.url));
         this.tapHighlighter?.setUndoAvailable(!!this.tapUndo);
         if (passage && this.surface?.displayedBody === saved.body) this.passageMenu(passage);
         this.controls();
       } finally {
+        this.collectingReceipts = undefined;
         if (this.writing === promise) this.writing = undefined;
       }
     });
@@ -1373,7 +1378,6 @@ export class ReaderView extends ItemView {
       if (
         !receipt ||
         receipt !== this.tapUndo ||
-        Date.now() > this.tapUndoUntil ||
         !base ||
         base.file !== receipt.snapshot.file ||
         base.body !== receipt.snapshot.body ||
@@ -1390,9 +1394,7 @@ export class ReaderView extends ItemView {
       const next = changePassage(base.body, receipt.passage, 'remove');
       if (next !== receipt.before)
         throw new Error('The highlighted passage changed. Nothing was removed.');
-      clearTimeout(this.tapUndoTimer);
-      this.tapUndoTimer = undefined;
-      const promise = this.host.store.annotate(base, (raw) => {
+      const promise = this.host.store.undoHighlight(base, next, receipt.quotations, () => {
         if (
           receipt !== this.tapUndo ||
           signal.aborted ||
@@ -1401,17 +1403,24 @@ export class ReaderView extends ItemView {
         )
           throw new Error('The article changed before Undo could be saved.');
         this.assertDisplayed(base);
-        return replaceBody(raw, base.body, next);
       });
       this.writing = promise;
       try {
-        const saved = await promise;
+        const result = await promise;
+        const saved = result.snapshot;
         if (signal.aborted || !this.current(base, generation) || this.stopping) return;
         this.snapshot = saved;
         this.clearTapUndo();
         this.tapHighlighter?.reset();
         this.surface?.setBody(saved.body, text(saved.properties.url));
         this.controls();
+        if (result.retained.length) {
+          this.contentEl.createEl('p', {
+            cls: 'reader-undo-warning',
+            text: `Highlight undone. Kept edited or unavailable quotations in: ${result.retained.join(', ')}`,
+            attr: { role: 'alert' },
+          });
+        }
       } finally {
         if (this.writing === promise) this.writing = undefined;
         if (this.tapUndo === receipt) this.clearTapUndo();
@@ -1419,10 +1428,7 @@ export class ReaderView extends ItemView {
     });
   }
   private clearTapUndo(): void {
-    clearTimeout(this.tapUndoTimer);
-    this.tapUndoTimer = undefined;
     this.tapUndo = undefined;
-    this.tapUndoUntil = 0;
     this.tapHighlighter?.setUndoAvailable(false);
   }
   private persistPosition(marker: string): void {
@@ -1851,6 +1857,8 @@ export class ReaderView extends ItemView {
     removal?: HighlightRemoval,
   ): Promise<Snapshot<TFile>> {
     const generation = this.generation;
+    const receipts = this.collectingReceipts;
+    const onQuotationAdded = (receipt: QuotationReceipt) => receipts?.push(receipt);
     const guard = (phase: HighlightCollectionPhase) => {
       validate(phase);
       removal?.validate(removal.paths);
@@ -1868,6 +1876,7 @@ export class ReaderView extends ItemView {
         nodes.length === 1 && !removal?.paths.length
           ? await this.host.store.collectHighlight(source, edit, nodes[0].path, {
               guard,
+              onQuotationAdded,
               created: createdPaths.includes(nodes[0].path),
               ...(mode === 'mention' ? { mode: 'mention' as const } : {}),
             })
@@ -1878,6 +1887,7 @@ export class ReaderView extends ItemView {
                 nodes.map((node) => node.path),
                 {
                   guard,
+                  onQuotationAdded,
                   createdPaths,
                   ...(removal
                     ? {

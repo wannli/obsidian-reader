@@ -286,3 +286,32 @@ export function removeQuotation(
     removed: true,
   };
 }
+
+/** Session-only receipt: exact newly inserted block, including its collection date. */
+export interface CollectedQuotation {
+  quoteMarkdown: string;
+  source: string;
+  block: string;
+}
+function removedBlock(raw: string, next: string): string {
+  let start = 0;
+  while (start < next.length && raw[start] === next[start]) start++;
+  return raw.slice(start, start + raw.length - next.length);
+}
+export function quotationReceipt(
+  raw: string,
+  quoteMarkdown: string,
+  source: string,
+): CollectedQuotation {
+  return {
+    quoteMarkdown,
+    source,
+    block: removedBlock(raw, removeQuotation(raw, quoteMarkdown, source).raw),
+  };
+}
+export function undoQuotation(raw: string, receipt: CollectedQuotation): string {
+  const next = removeQuotation(raw, receipt.quoteMarkdown, receipt.source).raw;
+  if (removedBlock(raw, next) !== receipt.block)
+    throw new Error('The collected quotation was edited; it was kept.');
+  return next;
+}

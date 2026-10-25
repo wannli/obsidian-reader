@@ -58,7 +58,9 @@ Reader owns the picker. Fileclass Inline supplies public API v2 discovery, class
 
 ## Explicit removal and snapshot ownership
 
-Quotations are user-owned snapshots, not synchronized projections. Source text edits, file removal, conversion, ordinary source-local Undo and article-level Related notes changes never automatically rewrite or delete them.
+Undo now reverses the last explicit tap highlight and only quotation copies newly added by that operation. Session-only receipts prove exact unchanged copies, including their date. Pre-existing/edited/ambiguous copies and destination notes are retained; incomplete cleanup is reported inline. Undo remains available until another annotation or navigation, and never reverses article retention.
+
+Quotations are user-owned snapshots, not synchronized projections. Source text edits, file removal, conversion, article-level Related notes changes never automatically rewrite or delete them.
 
 An explicit removal of a note from a particular highlight is different: remove its source reference **and the corresponding saved quotation**, only when the current quote text/formatting and paragraph citation identify one exact, unchanged active top-level copy—not code or comment examples. A valid collection date is not its identity; legacy undated copies remain removable.
 

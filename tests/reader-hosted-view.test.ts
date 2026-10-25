@@ -1348,7 +1348,7 @@ describe('hosted highlight UI integration', () => {
       expect(f.opened.openFile).not.toHaveBeenCalled();
     },
   );
-  it('Undo removes only the source mark/references, retaining anchors, defaults, and user-owned destination snapshots', async () => {
+  it('Undo removes the source highlight and newly collected quotation, retaining anchors and defaults', async () => {
     const f = await fixture({ defaults: [0] });
     f.paint();
     const range = document.createRange(),
@@ -1364,7 +1364,8 @@ describe('hosted highlight UI integration', () => {
     const undone = await f.store.read(f.article.path);
     expect(undone.body).toBe(`Before first words after. ${anchor}`);
     expect(undone.properties.topics).toEqual(saved.properties.topics);
-    expect(await f.vault.read(f.targets[0])).toBe(target);
+    expect(target).toContain('> first words');
+    expect(await f.vault.read(f.targets[0])).not.toContain('> first words');
   });
   it('explicitly unchecks a destination by removing its exact filed quotation while retaining defaults and the new destination', async () => {
     const f = await fixture({ body: '==first words==' });
