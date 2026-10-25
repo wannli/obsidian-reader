@@ -1503,6 +1503,7 @@ export class ReaderView extends ItemView {
   articleCommand(
     command: 'move' | 'topics' | 'open-markdown' | 'open-url',
     checking: boolean,
+    destination?: Queue,
   ): boolean {
     if (
       this.stopping ||
@@ -1521,7 +1522,7 @@ export class ReaderView extends ItemView {
     if (!checking) {
       const task =
         command === 'move'
-          ? this.move()
+          ? this.move(destination)
           : command === 'topics'
             ? this.topics()
             : this.openMarkdown(this.file);
@@ -1584,7 +1585,13 @@ export class ReaderView extends ItemView {
     if (!snapshot) return;
     const target =
       destination ??
-      (await choose(this.app, 'Change article status…', [...queues], (queue) => queue, signal));
+      (await choose(
+        this.app,
+        'Change article status…',
+        queues.filter((queue) => queue !== this.host.store.catalog.article(snapshot.path)?.queue),
+        (queue) => queue,
+        signal,
+      ));
     if (target && !signal.aborted && this.current(snapshot, generation))
       await this.finish('next', target);
   }
@@ -1623,7 +1630,13 @@ export class ReaderView extends ItemView {
       const signal = this.articleLifetime.signal;
       const target =
         destination ??
-        (await choose(this.app, 'Change article status…', [...queues], (queue) => queue, signal));
+        (await choose(
+          this.app,
+          'Change article status…',
+          queues.filter((queue) => queue !== this.host.store.catalog.article(snapshot.path)?.queue),
+          (queue) => queue,
+          signal,
+        ));
       if (!target || signal.aborted || !this.current(snapshot, generation)) return;
       this.assertDisplayed(snapshot, true);
       const moved = await this.host.store.move(snapshot, target);

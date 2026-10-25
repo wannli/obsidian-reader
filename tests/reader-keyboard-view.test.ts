@@ -151,6 +151,7 @@ describe('desktop button shortcuts', () => {
     mocks.choose.mockResolvedValueOnce(null);
     expect(press(f.view, 's').defaultPrevented).toBe(true);
     expect(mocks.choose).toHaveBeenCalledOnce();
+    expect(mocks.choose.mock.calls[0][2]).toEqual(['Later', 'Feed', 'Archive']);
     expect(f.view.file).toBe(article);
     expect((await f.store.read(article.path)).properties.status).toBe('inbox');
   });
@@ -173,6 +174,19 @@ describe('desktop button shortcuts', () => {
       expect(f.store.catalog.article(first.path)?.status).toBe(savedStatus);
     },
   );
+  it('moves directly from the command palette without a picker or advancing', async () => {
+    const f = hostFixture();
+    const article = await f.note('Reading/Inbox/A.md');
+    await f.note('Reading/Inbox/B.md');
+    await f.view.openArticle(article.path, true);
+    expect(f.view.articleCommand('move', true, 'Later')).toBe(true);
+    expect(article.path).toBe('Reading/Inbox/A.md');
+    expect(f.view.articleCommand('move', false, 'Later')).toBe(true);
+    await f.probe.operations;
+    expect(f.view.file).toBe(article);
+    expect(article.path).toBe('Reading/Later/A.md');
+    expect(mocks.choose).not.toHaveBeenCalled();
+  });
   it('guards repeats, mobile, modifiers and typing', async () => {
     const f = hostFixture();
     const b = await f.note('Reading/Inbox/B.md');
