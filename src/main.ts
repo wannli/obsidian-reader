@@ -9,7 +9,7 @@ import {
   type WorkspaceLeaf,
 } from 'obsidian';
 import { hasAnnotations, hasPropertyAnnotations, isAnnotationProperty } from './core/annotations';
-import { excludedReaderPath, queues, type Queue } from './core/model';
+import { excludedReaderPath, type Queue } from './core/model';
 import { defaultFolders, validateFolders, type ReaderFolders } from './core/folders';
 import { SerialWrites } from './core/work';
 import { ArticleFragmentIntents } from './core/article-fragment';
@@ -216,16 +216,6 @@ export default class ReaderPlugin extends Plugin {
         name,
         checkCallback: (checking) =>
           this.app.workspace.getActiveViewOfType(ReaderView)?.articleCommand(id, checking) ?? false,
-      });
-    }
-    for (const destination of queues) {
-      this.addCommand({
-        id: `move-to-${destination.toLowerCase()}`,
-        name: `Move article to ${destination} (stay here)`,
-        checkCallback: (checking) =>
-          this.app.workspace
-            .getActiveViewOfType(ReaderView)
-            ?.articleCommand('move', checking, destination) ?? false,
       });
     }
     this.addSettingTab(

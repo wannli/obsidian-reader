@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { Platform, type App } from 'obsidian';
+import type { App } from 'obsidian';
 import type { NodeResult, NodesApi } from '../src/host/nodes';
 import { chooseHighlightHost, type HighlightHostPickerOptions } from '../src/host/highlight-picker';
 
@@ -14,7 +14,6 @@ const modalState = vi.hoisted(() => ({
   document: undefined as Document | undefined,
 }));
 vi.mock('obsidian', () => ({
-  Platform: { isMobile: false },
   Modal: class {
     ownerDocument = modalState.document ?? document;
     modalEl = this.ownerDocument.createElement('div');
@@ -139,12 +138,11 @@ function open(options: HighlightHostPickerOptions = {}) {
 // Every case also asserts no standalone creation, linked creation, shared picker, or writes.
 describe('existing typed highlight notes', () => {
   it('scopes faint picker accents to highlight or node intent, leaving related notes neutral', async () => {
-    for (const tone of ['highlight', 'node', 'related', 'neutral'] as const) {
+    for (const tone of ['highlight', 'node', 'neutral'] as const) {
       const { choice } = open({ tone });
       const modal = document.querySelector('.reader-highlight-picker-modal')!;
       expect(modal.classList.contains('reader-picker-highlight')).toBe(tone === 'highlight');
       expect(modal.classList.contains('reader-picker-node')).toBe(tone === 'node');
-      expect(modal.classList.contains('reader-picker-related')).toBe(tone === 'related');
       button('Cancel').click();
       expect(await choice).toBeNull();
     }
@@ -1011,8 +1009,7 @@ describe('native suggestion presentation', () => {
       modal.querySelector('.reader-highlight-picker-results')!.classList.contains('prompt-results'),
     ).toBe(true);
     const footer = modal.querySelector('.reader-highlight-picker-footer')!;
-    expect(footer.querySelector('.reader-picker-count')?.textContent).toBe('0 selected');
-    expect(footer.querySelectorAll('button').length).toBeGreaterThan(0);
+    expect([...footer.children].every((element) => element.tagName === 'BUTTON')).toBe(true);
     expect(footer.querySelector('input, select, .reader-highlight-picker-result')).toBeNull();
     expect(
       rows().every((element) => element.tagName === 'BUTTON' && element.type === 'button'),
@@ -1211,73 +1208,4 @@ describe('optional choose-from-article intent', () => {
     secondary.click();
     expect(source.api.getNode).toHaveBeenCalledTimes(reads);
   });
-});
-
-it('applies checked destinations from a nonempty search using Mod+Enter', async () => {
-  const { choice } = open({ multiple: true });
-  row(exact.path).click();
-  search('Recall');
-  searchInput().dispatchEvent(
-    new KeyboardEvent('keydown', { key: 'Enter', ctrlKey: true, bubbles: true }),
-  );
-  expect(await choice).toEqual({ kind: 'existing-many', nodes: [exact] });
-});
-it('does not focus a text input automatically on touch devices', async () => {
-  Object.assign(Platform, { isMobile: true });
-  try {
-    const { choice } = open({ multiple: true });
-    expect(document.activeElement).not.toBe(searchInput());
-    button('Cancel').click();
-    expect(await choice).toBeNull();
-  } finally {
-    Object.assign(Platform, { isMobile: false });
-  }
-});
-
-it('keeps one modal alive while the provider uses its creation surface', async () => {
-  const { choice } = open({ query: 'Fresh title', keepCreationOpen: true });
-  create('concept').click();
-  const result = await choice;
-  expect(result?.kind).toBe('create');
-  if (result?.kind !== 'create' || !result.completion)
-    throw new Error('Missing completion surface');
-  expect(document.querySelectorAll('.reader-highlight-picker-modal')).toHaveLength(1);
-  expect(result.completion.container.isConnected).toBe(true);
-  expect(result.completion.signal.aborted).toBe(false);
-  result.completion.close();
-  expect(result.completion.signal.aborted).toBe(true);
-  expect(document.querySelectorAll('.reader-highlight-picker-modal')).toHaveLength(0);
-});
-
-it.each(['highlight', 'node', 'related'] as const)(
-  'creates a typed note from the %s picker without opening another dialog',
-  async (tone) => {
-    const { choice } = open({ tone, multiple: true, query: 'A new title', keepCreationOpen: true });
-    expect(document.querySelector('.reader-highlight-picker-results')?.firstElementChild).toBe(
-      create('concept'),
-    );
-    filter('topic');
-    expect(creates()).toHaveLength(1);
-    searchInput().focus();
-    key(searchInput(), 'Enter');
-    const result = await choice;
-    expect(result).toMatchObject({ kind: 'create', title: 'A new title', type: 'topic' });
-    if (result?.kind !== 'create' || !result.completion) throw new Error('Missing completion');
-    expect(document.querySelectorAll('.reader-highlight-picker-modal')).toHaveLength(1);
-    result.completion.close();
-  },
-);
-
-it('explains why a legacy provider cannot create in the same dialog', async () => {
-  const { choice } = open({
-    query: 'A new title',
-    allowCreate: false,
-    creationUnavailable: 'Update Fileclass Inline to create notes in this dialog.',
-  });
-  expect(creates()).toHaveLength(0);
-  expect(document.querySelector('.reader-highlight-picker-results')?.textContent).toContain(
-    'Update Fileclass Inline',
-  );
-  button('Cancel').click();
-  expect(await choice).toBeNull();
 });

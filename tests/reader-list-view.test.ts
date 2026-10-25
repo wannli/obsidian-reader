@@ -194,24 +194,23 @@ describe('bounded Reader UI', () => {
       ];
       expect(
         buttons.map((button) => button.querySelector('svg')?.getAttribute('data-icon')),
-      ).toEqual(['list-filter', 'trash-2', 'list', 'highlighter', 'file-plus-2', 'tags']);
+      ).toEqual(['tags', 'list-filter', 'trash-2', 'list', 'highlighter', 'file-plus-2']);
       expect(buttons.map((button) => button.getAttribute('aria-label'))).toEqual([
+        'Related notes',
         'Change status and advance · S: choose · L: Later · A: Archive',
         'Trash article and advance',
         'List',
         'Highlight mode',
-        'Link or create note',
-        'Related notes',
+        'Create node',
       ]);
-      expect(setTooltip).toHaveBeenCalledWith(buttons[5], 'Related notes (T)');
-      expect(buttons[5].classList.contains('reader-related-trigger')).toBe(true);
+      expect(setTooltip).toHaveBeenCalledWith(buttons[0], 'Related notes (T)');
       expect(setTooltip).toHaveBeenCalledWith(
-        buttons[0],
+        buttons[1],
         'Change status and advance · S: choose · L: Later · A: Archive',
       );
       expect(buttons.every((button) => !button.hasAttribute('title'))).toBe(true);
-      expect(setTooltip).toHaveBeenCalledWith(buttons[3], 'Highlight mode (H)');
-      expect(setTooltip).toHaveBeenCalledWith(buttons[4], 'Link or create note (C)');
+      expect(setTooltip).toHaveBeenCalledWith(buttons[4], 'Highlight mode (H)');
+      expect(setTooltip).toHaveBeenCalledWith(buttons[5], 'Create node (C)');
       expect(setTooltip).toHaveBeenCalledWith(
         f.probe.surface.title,
         'J/K: next/previous article · Space: page · D/U: half-page · gg/G: top/bottom · Q: list · ?: shortcuts',
@@ -221,11 +220,7 @@ describe('bounded Reader UI', () => {
         expect(button.textContent).toBe('');
         expect(css.minWidth).toBe('44px');
         expect(css.minHeight).toBe('44px');
-        if (
-          !button.matches(
-            '.reader-tap-highlight-trigger,.reader-tap-node-trigger,.reader-related-trigger',
-          )
-        )
+        if (!button.matches('.reader-tap-highlight-trigger,.reader-tap-node-trigger'))
           expect([css.padding, css.borderRadius, css.backgroundColor, css.border]).toEqual(
             treatment,
           );

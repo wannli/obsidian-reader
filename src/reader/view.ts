@@ -1,6 +1,5 @@
 import {
   ItemView,
-  Menu,
   Notice,
   Platform,
   parseLinktext,
@@ -11,7 +10,13 @@ import {
   type ViewStateResult,
   type WorkspaceLeaf,
 } from 'obsidian';
-import { changePassage, locateSelection, passages, type Passage } from '../core/annotations';
+import {
+  changePassage,
+  locateSelection,
+  passages,
+  UnmappableSelection,
+  type Passage,
+} from '../core/annotations';
 import { ReadingQueue } from '../core/catalog';
 import { matchesTopicArticle, type TopicFilter } from '../core/topic-filter';
 import { chooseTopicFilter } from '../host/topic-filter-dialog';
@@ -28,7 +33,6 @@ import {
   type ArticleStore,
   type HighlightCollectionPhase,
   type Snapshot,
-  type QuotationReceipt,
 } from '../core/store';
 import {
   convertPassage,
@@ -39,14 +43,14 @@ import {
   replacePassageHosts,
   type HostedHighlight,
 } from '../core/hosted-highlights';
-import { choose } from '../host/dialogs';
+import { choose, confirmWebLink } from '../host/dialogs';
 import type { Ingestion } from '../host/ingestion';
 import { nodesApi, type NodesApi, type NodeResult } from '../host/nodes';
 import { chooseHighlightHost } from '../host/highlight-picker';
 import { hasNodeClass } from '../core/node-choices';
 import type { LibraryChange } from '../host/vault';
 import { ReadingSurface } from './surface';
-import { selectedPassage } from './render';
+import { selectedPassage, selectionRange } from './render';
 import { TapHighlighter, type TapToolbarAction } from './tap-highlighter';
 
 export const READER_VIEW = 'obsidian-reader';
@@ -97,13 +101,9 @@ export class ReaderView extends ItemView {
   };
   private tapMode = false;
   private tapKind: 'highlight' | 'node' = 'highlight';
-  private tapUndo?: {
-    snapshot: Snapshot<TFile>;
-    before: string;
-    passage: Passage;
-    quotations: QuotationReceipt[];
-  };
-  private collectingReceipts?: QuotationReceipt[];
+  private tapUndo?: { snapshot: Snapshot<TFile>; before: string; passage: Passage };
+  private tapUndoUntil = 0;
+  private tapUndoTimer?: ReturnType<typeof setTimeout>;
   private actions?: HTMLElement;
   private status?: HTMLElement;
   private statusMessage?: string;
@@ -129,6 +129,9 @@ export class ReaderView extends ItemView {
   private loadingPath?: string;
   private listFrame?: number;
   private selectionState = new SelectionCoordinator();
+  private get selecting(): boolean {
+    return this.selectionState.selecting;
+  }
   private dialog = false;
   private automatic?: Passage;
   private lastSelection = '';
@@ -227,16 +230,6 @@ export class ReaderView extends ItemView {
       { ...options, capture: true },
     );
     this.contentEl.addEventListener('click', (event) => this.clicked(event), options);
-    this.contentEl.addEventListener('contextmenu', (event) => this.linkMenu(event), options);
-    this.contentEl.addEventListener(
-      'keydown',
-      (event) => {
-        if (event.key === 'ContextMenu' || (event.key === 'F10' && event.shiftKey)) {
-          this.linkMenu(event);
-        }
-      },
-      options,
-    );
     this.contentEl.addEventListener(
       'auxclick',
       (event) => {
@@ -249,6 +242,9 @@ export class ReaderView extends ItemView {
   onClose(): Promise<void> {
     if (this.lifetime.signal.aborted) return Promise.resolve();
     if (this.closing) return this.closing;
+    const selection = this.surface?.selection(),
+      body = this.surface?.displayedBody;
+    const pending = selection && body !== undefined ? { selection, body } : undefined;
     this.stopping = true;
     this.articleLifetime.abort();
     if (this.listFrame !== undefined) cancelAnimationFrame(this.listFrame);
@@ -260,7 +256,7 @@ export class ReaderView extends ItemView {
         if (!this.host.signal.aborted) {
           this.selectionState.selecting = false;
           this.dialog = false;
-          await this.prepareToLeave();
+          await this.prepareToLeave(pending);
         }
       } catch (error) {
         this.error(error);
@@ -1026,14 +1022,7 @@ export class ReaderView extends ItemView {
         button.disabled = this.surface.atBoundary(direction);
       }
     }
-    const relatedButton = this.button(
-      this.actions,
-      'Related notes',
-      () => this.topics(),
-      'tags',
-      't',
-    );
-    relatedButton.classList.add('reader-related-trigger');
+    this.button(this.actions, 'Related notes', () => this.topics(), 'tags', 't');
     const statusButton = this.button(
       this.actions,
       'Change status and advance',
@@ -1049,7 +1038,7 @@ export class ReaderView extends ItemView {
       'Trash article and advance',
     );
     this.button(this.actions, 'List', () => this.readingList(), 'list', 'b');
-    this.setupTapHighlighter(relatedButton);
+    this.setupTapHighlighter();
     this.updateStatus();
   }
   private updatePagingControls(): void {
@@ -1064,14 +1053,13 @@ export class ReaderView extends ItemView {
       if (button) button.disabled = this.surface.atBoundary(direction);
     }
   }
-  private setupTapHighlighter(relatedButton: HTMLElement): void {
+  private setupTapHighlighter(): void {
     if (!this.surface || !this.actions) return;
     const surface = this.surface;
     this.tapHighlighter = new TapHighlighter(surface.viewport, surface.body, this.actions, {
       active: this.tapMode,
-      trailingControls: [relatedButton],
       mode: this.tapKind,
-      canUndo: !!this.tapUndo,
+      canUndo: !!this.tapUndo && Date.now() <= this.tapUndoUntil,
       modeChanged: (active, mode) => {
         this.tapMode = active;
         if (active) this.tapKind = mode === 'node' ? 'node' : 'highlight';
@@ -1133,9 +1121,91 @@ export class ReaderView extends ItemView {
     return this.selectionState.invalidate();
   }
   private selectionChanged(): void {
-    // Native selection is for copying. Only explicit tap mode creates annotations.
-    this.invalidateSelection();
-    if (!this.containerEl.ownerDocument.getSelection()?.toString()) this.surface?.refresh();
+    if (this.stopping || this.host.signal.aborted || this.dialog) return;
+    const revision = this.invalidateSelection();
+    if (this.tapMode) return;
+    const range = this.surface && selectionRange(this.surface.body);
+    if (!range) {
+      this.automatic = undefined;
+      this.lastSelection = '';
+      this.surface?.refresh();
+      return;
+    }
+    const surface = this.surface,
+      source = this.snapshot,
+      generation = this.generation;
+    if (
+      !this.selecting &&
+      !this.dialog &&
+      surface &&
+      !surface.pointerActive &&
+      source &&
+      surface.displayedBody !== undefined
+    ) {
+      // Keep live events cheap: materialize quote/context only after the quiet period.
+      // Copy endpoints, not a live Range (whose boundaries can follow DOM mutations).
+      const start = range.startContainer,
+        startOffset = range.startOffset,
+        end = range.endContainer,
+        endOffset = range.endOffset,
+        body = surface.displayedBody;
+      const currentRange = () => {
+        const live = selectionRange(surface.body);
+        return (
+          live?.startContainer === start &&
+          live.startOffset === startOffset &&
+          live.endContainer === end &&
+          live.endOffset === endOffset
+        );
+      };
+      const active = (hosted = false) => {
+        return !(
+          this.stopping ||
+          this.selecting ||
+          surface.pointerActive ||
+          (this.dialog && !hosted) ||
+          this.selectionState.revision !== revision ||
+          this.surface !== surface ||
+          !this.current(source, generation) ||
+          surface.displayedBody !== body ||
+          !this.acceptsSource(this.snapshot!, body, true)
+        );
+      };
+      let pending: PendingSelection;
+      const valid = (hosted = false) => {
+        if (!active(hosted)) return false;
+        // A destination modal owns focus/Selection. Its captured source words stay
+        // immutable; modal text selection must not invalidate that source intent.
+        if (hosted && this.dialog) return true;
+        if (!currentRange()) return false;
+        // Native selectionchange can itself be queued: check the current text too.
+        const live = surface.selection();
+        return (
+          live?.quote === pending.selection.quote &&
+          live.before === pending.selection.before &&
+          live.after === pending.selection.after
+        );
+      };
+      // Require 900ms of quiet after the last adjustment/release; never
+      // write while a pointer is held. Tokens still guard every asynchronous boundary.
+      this.selectionState.schedule(() => {
+        if (!active() || !currentRange()) return;
+        const selection = surface.selection();
+        if (!selection) return;
+        // Immutable text/source snapshot is captured before entering any async queue.
+        pending = {
+          selection: { quote: selection.quote, before: selection.before, after: selection.after },
+          body,
+        };
+        void this.operation(async () => {
+          try {
+            await this.saveSelection(pending, valid);
+          } catch (error) {
+            if (!(error instanceof UnmappableSelection)) throw error;
+          }
+        }).catch((error) => this.error(error));
+      }, 900);
+    }
   }
   private async saveSelection(
     pending?: PendingSelection,
@@ -1144,7 +1214,12 @@ export class ReaderView extends ItemView {
   ): Promise<void> {
     await this.positionWrite;
     const closing = leaving && this.stopping && !!pending && !this.host.signal.aborted;
-    if (((this.stopping || this.articleLifetime.signal.aborted) && !closing) || !valid()) return;
+    if (
+      this.tapMode ||
+      ((this.stopping || this.articleLifetime.signal.aborted) && !closing) ||
+      !valid()
+    )
+      return;
     const selection = pending?.selection ?? this.surface?.selection(),
       snapshot = this.snapshot;
     if (
@@ -1345,42 +1420,70 @@ export class ReaderView extends ItemView {
         throw new Error('The article changed. Tap the first word again.');
       this.assertDisplayed(base);
       locateSelection(base.body, selection.quote, selection.before, selection.after);
-      this.clearTapUndo();
-      const quotations: QuotationReceipt[] = [];
-      this.collectingReceipts = quotations;
-      this.automatic = undefined;
-      this.lastSelection = '';
-      const promise = (async () => {
-        await this.saveSelection(
-          { selection, body: displayed! },
-          () => !signal.aborted && !this.stopping && this.current(base, generation),
-        );
-        return this.snapshot?.body !== base.body ? this.snapshot : undefined;
-      })();
+      let edit: HostedHighlight | undefined;
+      const promise = this.withHighlightHost(
+        base,
+        '',
+        { inherit: true },
+        async (source, nodes, createdPaths, validate, authorize) => {
+          const guard = () => {
+            if (signal.aborted || this.stopping || !this.current(base, generation))
+              throw new Error('The article changed before the highlight could be saved.');
+            this.assertDisplayed(source);
+            validate();
+          };
+          guard();
+          edit = hostSelection(
+            source.body,
+            selection,
+            nodes.map((node) => node.path),
+          );
+          try {
+            return await this.collectHosted(source, edit, nodes, createdPaths, guard);
+          } catch (cause) {
+            this.offerCollectionRetry(
+              source,
+              edit,
+              nodes,
+              createdPaths,
+              undefined,
+              cause,
+              authorize,
+            );
+            throw cause;
+          }
+        },
+      );
+      this.writing = promise;
       try {
         const saved = await promise;
         if (!saved || signal.aborted || !this.current(base, generation) || this.stopping) return;
-        const passage = this.automatic;
         this.automatic = undefined;
         this.lastSelection = '';
         this.ownDeferred = undefined;
         this.clearTapUndo();
+        const passage = edit
+          ? this.passageAfterWrite(edit.body, edit.passage, saved.body)
+          : undefined;
         if (passage) {
-          // Keep only newly collected quotation receipts; never prune reused notes.
+          // Source-local Undo retains the paragraph anchor and remembered hosts.
+          // Destination quotations are user-owned snapshots and are never reversed.
           const receipt = {
             snapshot: saved,
             before: changePassage(saved.body, passage, 'remove'),
             passage,
-            quotations,
           };
           this.tapUndo = receipt;
+          this.tapUndoUntil = Date.now() + 6000;
+          this.tapUndoTimer = setTimeout(() => {
+            if (this.tapUndo === receipt) this.clearTapUndo();
+          }, 6000);
         }
         this.surface?.setBody(saved.body, text(saved.properties.url));
         this.tapHighlighter?.setUndoAvailable(!!this.tapUndo);
         if (passage && this.surface?.displayedBody === saved.body) this.passageMenu(passage);
         this.controls();
       } finally {
-        this.collectingReceipts = undefined;
         if (this.writing === promise) this.writing = undefined;
       }
     });
@@ -1397,6 +1500,7 @@ export class ReaderView extends ItemView {
       if (
         !receipt ||
         receipt !== this.tapUndo ||
+        Date.now() > this.tapUndoUntil ||
         !base ||
         base.file !== receipt.snapshot.file ||
         base.body !== receipt.snapshot.body ||
@@ -1413,7 +1517,9 @@ export class ReaderView extends ItemView {
       const next = changePassage(base.body, receipt.passage, 'remove');
       if (next !== receipt.before)
         throw new Error('The highlighted passage changed. Nothing was removed.');
-      const promise = this.host.store.undoHighlight(base, next, receipt.quotations, () => {
+      clearTimeout(this.tapUndoTimer);
+      this.tapUndoTimer = undefined;
+      const promise = this.host.store.annotate(base, (raw) => {
         if (
           receipt !== this.tapUndo ||
           signal.aborted ||
@@ -1422,24 +1528,17 @@ export class ReaderView extends ItemView {
         )
           throw new Error('The article changed before Undo could be saved.');
         this.assertDisplayed(base);
+        return replaceBody(raw, base.body, next);
       });
       this.writing = promise;
       try {
-        const result = await promise;
-        const saved = result.snapshot;
+        const saved = await promise;
         if (signal.aborted || !this.current(base, generation) || this.stopping) return;
         this.snapshot = saved;
         this.clearTapUndo();
         this.tapHighlighter?.reset();
         this.surface?.setBody(saved.body, text(saved.properties.url));
         this.controls();
-        if (result.retained.length) {
-          this.contentEl.createEl('p', {
-            cls: 'reader-undo-warning',
-            text: `Highlight undone. Kept edited or unavailable quotations in: ${result.retained.join(', ')}`,
-            attr: { role: 'alert' },
-          });
-        }
       } finally {
         if (this.writing === promise) this.writing = undefined;
         if (this.tapUndo === receipt) this.clearTapUndo();
@@ -1447,7 +1546,10 @@ export class ReaderView extends ItemView {
     });
   }
   private clearTapUndo(): void {
+    clearTimeout(this.tapUndoTimer);
+    this.tapUndoTimer = undefined;
     this.tapUndo = undefined;
+    this.tapUndoUntil = 0;
     this.tapHighlighter?.setUndoAvailable(false);
   }
   private persistPosition(marker: string): void {
@@ -1491,15 +1593,12 @@ export class ReaderView extends ItemView {
       })
       .catch((error) => this.error(error));
   }
-  private async prepareToLeave(): Promise<void> {
+  private async prepareToLeave(pending?: PendingSelection): Promise<void> {
     this.selectionState.cancel();
     await this.positionWrite;
-    // Leaving never turns a native text selection into an annotation.
-    if (this.snapshot) {
-      const current = await this.host.store.read(this.snapshot.file.path);
-      if (current.body !== this.snapshot.body)
-        throw new Error('Article changed before navigation.');
-    }
+    // Leaving can finish a known sole typed default, but must never start a new
+    // picker after the navigation/close intent has already cancelled modal work.
+    await this.saveSelection(pending, () => true, true);
     await this.writing;
     this.surface?.flush();
     await this.positionWrite;
@@ -1511,7 +1610,6 @@ export class ReaderView extends ItemView {
   articleCommand(
     command: 'move' | 'topics' | 'open-markdown' | 'open-url',
     checking: boolean,
-    destination?: Queue,
   ): boolean {
     if (
       this.stopping ||
@@ -1530,7 +1628,7 @@ export class ReaderView extends ItemView {
     if (!checking) {
       const task =
         command === 'move'
-          ? this.move(destination)
+          ? this.move()
           : command === 'topics'
             ? this.topics()
             : this.openMarkdown(this.file);
@@ -1593,13 +1691,7 @@ export class ReaderView extends ItemView {
     if (!snapshot) return;
     const target =
       destination ??
-      (await choose(
-        this.app,
-        'Change article status…',
-        queues.filter((queue) => queue !== this.host.store.catalog.article(snapshot.path)?.queue),
-        (queue) => queue,
-        signal,
-      ));
+      (await choose(this.app, 'Change article status…', [...queues], (queue) => queue, signal));
     if (target && !signal.aborted && this.current(snapshot, generation))
       await this.finish('next', target);
   }
@@ -1638,13 +1730,7 @@ export class ReaderView extends ItemView {
       const signal = this.articleLifetime.signal;
       const target =
         destination ??
-        (await choose(
-          this.app,
-          'Change article status…',
-          queues.filter((queue) => queue !== this.host.store.catalog.article(snapshot.path)?.queue),
-          (queue) => queue,
-          signal,
-        ));
+        (await choose(this.app, 'Change article status…', [...queues], (queue) => queue, signal));
       if (!target || signal.aborted || !this.current(snapshot, generation)) return;
       this.assertDisplayed(snapshot, true);
       const moved = await this.host.store.move(snapshot, target);
@@ -1753,7 +1839,8 @@ export class ReaderView extends ItemView {
         throw new Error(
           'Editing related notes requires Fileclass Inline public Nodes API v2. Existing topic filters remain available.',
         );
-      const selectedPaths = this.relatedNodes(snapshot, api).map((node) => node.path);
+      let selectedPaths = this.relatedNodes(snapshot, api).map((node) => node.path);
+      let createdOnce = false;
       const alive = () =>
         !signal.aborted &&
         !this.lifetime.signal.aborted &&
@@ -1763,28 +1850,37 @@ export class ReaderView extends ItemView {
         this.current(snapshot, generation) &&
         this.snapshot?.body === snapshot.body;
       const active = () => alive() && nodesApi(this.app) === api;
-      if (active()) {
+      while (active()) {
         const base = this.snapshot!,
           originals = this.relatedNodes(base, api),
           baseline = originals.map((node) => node.path),
           validateOriginals = this.nodeAuthority(api, originals);
+        let created = false,
+          attempted = false;
         try {
           await this.withHighlightHost(
             base,
             '',
             {
               title: 'Related notes',
-              description: 'One selected note receives new highlights automatically.',
-              tone: 'related',
+              tone: 'neutral',
               multiple: true,
               selectedPaths,
               minSelection: 0,
               actionLabel: 'Apply',
-              allowCreate: true,
+              allowCreate: !createdOnce,
               allowDeferred: true,
               epoch,
+              onSelected: (nodes) => {
+                selectedPaths = nodes.map((node) => node.path);
+              },
+              onCreateAttempt: (nodes) => {
+                createdOnce = true;
+                attempted = true;
+                selectedPaths = nodes.map((node) => node.path);
+              },
             },
-            async (source, nodes, _createdPaths, validate) => {
+            async (source, nodes, createdPaths, validate) => {
               const guard = () => {
                 if (!active()) throw new Error('The article changed. Reopen Related notes.');
                 this.assertDisplayed(source, true);
@@ -1792,8 +1888,11 @@ export class ReaderView extends ItemView {
                 validateOriginals();
               };
               guard();
-              // Create is also the explicit apply action for all checked defaults.
-              const paths = nodes.map((node) => node.path);
+              // Only the created note's link is durable before completion. Other
+              // checked/unchecked choices remain a draft until an explicit Apply.
+              const paths = createdPaths.length
+                ? [...new Set([...baseline, ...createdPaths])]
+                : nodes.map((node) => node.path);
               const saved = await this.host.store.setRelatedNodes(source, paths, baseline, guard);
               if (this.current(snapshot, generation) && !this.stopping) {
                 this.adoptSnapshot(saved);
@@ -1804,11 +1903,34 @@ export class ReaderView extends ItemView {
                   this.surface?.setBody(saved.body, text(saved.properties.url));
                 this.controls();
               }
+              created = createdPaths.length > 0;
               return saved;
             },
           );
+          if (!created && !attempted) return;
         } catch (cause) {
-          if (alive()) this.error(cause);
+          if (!alive()) return;
+          this.error(cause);
+          if (!active()) return;
+        }
+        await this.positionWrite;
+        if (!active()) return;
+        // Reopen after any settled creation attempt, including provider Cancel,
+        // null-without-callback, or failure. Keep the draft, never auto-retry a
+        // write, adopt arbitrary bytes, or allow a second creation attempt.
+        const known = this.snapshot;
+        if (!known || !this.acceptsSource(known, this.surface?.displayedBody, true)) return;
+        try {
+          const current = await this.host.store.read(known.path);
+          if (
+            !active() ||
+            this.snapshot !== known ||
+            current.file !== known.file ||
+            current.raw !== known.raw
+          )
+            return;
+        } catch {
+          return;
         }
       }
     });
@@ -1853,8 +1975,6 @@ export class ReaderView extends ItemView {
     removal?: HighlightRemoval,
   ): Promise<Snapshot<TFile>> {
     const generation = this.generation;
-    const receipts = this.collectingReceipts;
-    const onQuotationAdded = (receipt: QuotationReceipt) => receipts?.push(receipt);
     const guard = (phase: HighlightCollectionPhase) => {
       validate(phase);
       removal?.validate(removal.paths);
@@ -1872,7 +1992,6 @@ export class ReaderView extends ItemView {
         nodes.length === 1 && !removal?.paths.length
           ? await this.host.store.collectHighlight(source, edit, nodes[0].path, {
               guard,
-              onQuotationAdded,
               created: createdPaths.includes(nodes[0].path),
               ...(mode === 'mention' ? { mode: 'mention' as const } : {}),
             })
@@ -1883,7 +2002,6 @@ export class ReaderView extends ItemView {
                 nodes.map((node) => node.path),
                 {
                   guard,
-                  onQuotationAdded,
                   createdPaths,
                   ...(removal
                     ? {
@@ -1918,12 +2036,11 @@ export class ReaderView extends ItemView {
       directNodes?: NodeResult[];
       includeNodes?: NodeResult[];
       title?: string;
-      description?: string;
       multiple?: boolean;
       selectedPaths?: string[];
       minSelection?: number;
       actionLabel?: string;
-      tone?: 'highlight' | 'node' | 'related' | 'neutral';
+      tone?: 'highlight' | 'node' | 'neutral';
       allowCreate?: boolean;
       onCreateAttempt?: (existing: NodeResult[]) => void;
       onSelected?: (nodes: NodeResult[]) => void;
@@ -1985,7 +2102,6 @@ export class ReaderView extends ItemView {
     let accepting = true,
       attempted = false;
     let saved: Snapshot<TFile> | undefined, pendingLink: Promise<void> | undefined;
-    let completion: { container: HTMLElement; signal: AbortSignal; close(): void } | undefined;
     const check = () => {
       if (!accepting)
         throw new Error(
@@ -2113,11 +2229,6 @@ export class ReaderView extends ItemView {
             fixedChoice ??
               chooseHighlightHost(this.app, api, {
                 title: options.title ?? 'Add highlight to notes',
-                description:
-                  options.description ??
-                  (options.selectedPaths
-                    ? 'Removing a note also removes its unchanged collected quotation.'
-                    : undefined),
                 query: title,
                 preferredPaths: preferred.map((node) => node.path),
                 multiple: options.multiple !== false,
@@ -2125,12 +2236,7 @@ export class ReaderView extends ItemView {
                 minSelection: minimum,
                 actionLabel: options.actionLabel ?? 'Add highlight',
                 tone: options.tone ?? 'highlight',
-                allowCreate: options.allowCreate !== false && api.embeddedCreation === true,
-                creationUnavailable:
-                  options.allowCreate !== false && api.embeddedCreation !== true
-                    ? 'Update Fileclass Inline to create notes in this dialog.'
-                    : undefined,
-                keepCreationOpen: api.embeddedCreation === true,
+                allowCreate: options.allowCreate,
                 allowPickFromArticle: !!options.onPickFromArticle,
                 signal: request.controller.signal,
               }),
@@ -2153,11 +2259,6 @@ export class ReaderView extends ItemView {
           );
         if (!types.some(({ type }) => type === choice.type))
           throw new Error('The chosen Fileclass is no longer available.');
-        completion = choice.completion;
-        if (completion) {
-          if (completion.signal.aborted) return;
-          completion.signal.addEventListener('abort', abort, { once: true });
-        }
         const existing = selection(choice.existingNodes ?? []).selected;
         options.onCreateAttempt?.(existing);
         // The single-use durable callback precedes required completion. Never
@@ -2167,7 +2268,6 @@ export class ReaderView extends ItemView {
             {
               type: choice.type,
               suggestedTitle: choice.title,
-              ...(completion ? { completionContainer: completion.container } : {}),
               sourcePath: request.source.path,
               signal: request.controller.signal,
             },
@@ -2183,8 +2283,6 @@ export class ReaderView extends ItemView {
       return saved;
     } finally {
       accepting = false;
-      completion?.signal.removeEventListener('abort', abort);
-      completion?.close();
       signal.removeEventListener('abort', abort);
       this.host.signal.removeEventListener('abort', abort);
       request.controller.signal.removeEventListener('abort', settleCancellation);
@@ -2279,7 +2377,23 @@ export class ReaderView extends ItemView {
           );
         this.sendToNodes(nodes);
       } else {
-        void this.openLinked(target).catch((error) => this.error(error));
+        const source = this.snapshot;
+        if (!source) throw new Error('The article is no longer open.');
+        this.assertDisplayed(source);
+        const index = reference?.getAttribute('data-reader-passage');
+        const passage =
+          index && /^\d+$/.test(index) ? this.passages(source.body)[Number(index)] : undefined;
+        if (!passage)
+          throw new Error(
+            'This reference cannot be matched safely to a highlight. Open Markdown to edit it.',
+          );
+        this.passageMenu(passage, event);
+        const edit = this.passageActions?.find((action) => action.id === 'link-note');
+        if (!edit || edit.disabled)
+          throw new Error(
+            'Editing highlight destinations requires Fileclass Inline public Nodes API v2.',
+          );
+        void Promise.resolve(edit.run()).catch((error) => this.error(error));
       }
     } catch (error) {
       this.error(error);
@@ -2372,60 +2486,41 @@ export class ReaderView extends ItemView {
       );
     } else if (/^https?:/i.test(href)) {
       this.cancelNodeCreation();
-      window.open(href, '_blank', 'noopener,noreferrer');
+      const signal = this.articleLifetime.signal,
+        source = this.snapshot,
+        surface = this.surface,
+        generation = this.generation;
+      if (!source) return;
+      confirmWebLink(
+        this.app,
+        href,
+        async (modalSignal) => {
+          const guard = () => {
+            if (
+              signal.aborted ||
+              modalSignal.aborted ||
+              this.stopping ||
+              !this.current(source, generation) ||
+              this.surface !== surface ||
+              this.snapshot?.body !== source.body ||
+              this.host.store.vault.file(source.file.path) !== source.file
+            )
+              throw new Error('Reader capture was cancelled.');
+            this.assertDisplayed(source);
+          };
+          guard();
+          const file = await this.host.store.capture({ url: href }, new Date(), guard);
+          guard();
+          // Capture owns new-note status; duplicates retain their status and placement.
+          // Save/capture stays in the current article and its original browsing context.
+          void this.host.ingestion.acquire(file.path, true).catch((error) => {
+            if (!signal.aborted) this.error(error);
+          });
+          new Notice('Article saved.');
+        },
+        [signal, this.host.signal],
+      );
     }
-  }
-  private linkMenu(event: MouseEvent | KeyboardEvent): void {
-    const element = event.target instanceof Element ? event.target : undefined;
-    const link = element?.closest<HTMLAnchorElement>('a[href]');
-    if (!link || !this.surface?.body.contains(link) || this.surface.selection()) return;
-    const href = link.getAttribute('href')!;
-    if (!/^https?:/i.test(href)) return;
-    event.preventDefault();
-    event.stopPropagation();
-    const source = this.snapshot,
-      generation = this.generation;
-    if (!source) return;
-    const menu = new Menu();
-    menu.addItem((item) =>
-      item
-        .setTitle('Save to Inbox')
-        .setIcon('inbox')
-        .onClick(() => {
-          void this.saveWebLink(href, source, generation).catch((error) => this.error(error));
-        }),
-    );
-    if (event instanceof MouseEvent) menu.showAtMouseEvent(event);
-    else {
-      const rect = link.getBoundingClientRect();
-      menu.showAtPosition({ x: rect.left, y: rect.bottom });
-    }
-  }
-  private async saveWebLink(
-    href: string,
-    source: Snapshot<TFile>,
-    generation: number,
-  ): Promise<void> {
-    const signal = this.articleLifetime.signal;
-    const guard = () => {
-      if (
-        signal.aborted ||
-        this.host.signal.aborted ||
-        this.host.store.vault.file(source.file.path) !== source.file ||
-        this.stopping ||
-        !this.current(source, generation) ||
-        this.snapshot?.body !== source.body
-      )
-        throw new Error('Reader capture was cancelled.');
-      this.assertDisplayed(source);
-    };
-    guard();
-    const file = await this.host.store.capture({ url: href }, new Date(), guard);
-    guard();
-    void this.host.ingestion.acquire(file.path, true).catch((error) => {
-      if (!signal.aborted) this.error(error);
-    });
-    new Notice('Article saved.');
   }
   private selectPassageMark(mark: Element, event: MouseEvent): void {
     if (!this.snapshot || !this.surface?.body.contains(mark) || this.surface.selection()) return;
@@ -2817,7 +2912,9 @@ export class ReaderView extends ItemView {
     const pick = (mode: 'highlight' | 'mention', epoch: number) =>
       this.editPassage(snapshot, passage, mode, epoch, intent);
     if (api) {
-      action('link-note', 'Notes…', 'highlighter', (epoch) => pick('highlight', epoch));
+      action('link-note', 'Add highlight to notes…', 'highlighter', (epoch) =>
+        pick('highlight', epoch),
+      );
       action('convert-node', 'Convert to note link…', 'file-symlink', (epoch) =>
         pick('mention', epoch),
       );

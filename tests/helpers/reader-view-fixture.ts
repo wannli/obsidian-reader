@@ -74,9 +74,6 @@ vi.mock('obsidian', () => {
     addItem(build: (item: any) => void) {
       let title = '';
       const item = {
-        setIcon() {
-          return item;
-        },
         setTitle(value: string) {
           title = value;
           return item;
@@ -93,9 +90,6 @@ vi.mock('obsidian', () => {
     addSeparator() {
       this.items.set('---', () => {});
       return this;
-    }
-    showAtPosition(position: unknown) {
-      mocks.menuShown(position);
     }
     showAtMouseEvent(event: MouseEvent) {
       mocks.menuShown(event);
@@ -503,7 +497,7 @@ function expectedPassageActions({ linked = false, provider = true, undo = false 
   return [
     ...(linked ? ['Open note'] : []),
     ...(provider
-      ? ['Notes…', 'Convert to note link…']
+      ? ['Add highlight to notes…', 'Convert to note link…']
       : [
           'Add highlight to notes… (requires Fileclass Inline v2)',
           'Convert to note link… (requires Fileclass Inline v2)',
@@ -555,7 +549,7 @@ function menu(view: ReaderView, title: string) {
       kind: 'pick-in-article',
       nodes: probe.typedDestinations(passage.hosts ?? []),
     });
-    passageButton(view, 'Notes…').click();
+    passageButton(view, 'Add highlight to notes…').click();
   } else passageButton(view, title).click();
   return probe.operations as Promise<void>;
 }

@@ -202,7 +202,8 @@ describe('hosted highlight UI integration', () => {
       range.selectNodeContents(root.querySelector('p')!);
       document.getSelection()!.removeAllRanges();
       document.getSelection()!.addRange(range);
-      void f.probe.operation(() => f.probe.saveSelection()).catch(() => {});
+      document.dispatchEvent(new Event('selectionchange'));
+      await vi.advanceTimersByTimeAsync(1000);
     }
     await expect(f.probe.operations).rejects.toThrow(/source annotation was saved/i);
     await f.probe.positionWrite;
@@ -359,7 +360,7 @@ describe('hosted highlight UI integration', () => {
       click = nativeClicks(f);
     click(root.querySelectorAll('mark')[0]);
     mocks.highlightPicker.mockResolvedValueOnce({ kind: 'pick-in-article', nodes: [f.nodes[0]] });
-    passageButton(f.view, 'Notes…').click();
+    passageButton(f.view, 'Add highlight to notes…').click();
     await f.probe.operations;
     expect(f.probe.sendSource?.mode).toBe('explicit');
     mocks.choose.mockResolvedValueOnce(f.nodes[1]);
@@ -451,7 +452,7 @@ describe('hosted highlight UI integration', () => {
     expect(await f.vault.read(f.targets[0])).toBe(copy);
     expect(await f.vault.read(f.targets[1])).not.toContain('> first words');
   });
-  it('applies checked related notes together with creation without a second picker', async () => {
+  it('links a created related note before completion but keeps other edits staged when Cancel follows', async () => {
     const f = await fixture({ defaults: [0] }),
       entered = gate(),
       release = gate();
@@ -481,20 +482,28 @@ describe('hosted highlight UI integration', () => {
     const pending = f.probe.topics();
     await entered.promise;
     expect((await f.store.read(f.article.path)).properties.topics).toEqual([
-      '[[Nodes/Project.md]]',
+      '[[Nodes/Concept]]',
       '[[Nodes/New.md]]',
     ]);
     expect(await f.vault.read(file)).toContain('New authored note.');
     release.resolve();
     await pending;
-    expect(mocks.highlightPicker).toHaveBeenCalledOnce();
+    expect(mocks.highlightPicker).toHaveBeenLastCalledWith(
+      f.app,
+      f.api,
+      expect.objectContaining({
+        selectedPaths: ['Nodes/Project.md', 'Nodes/New.md'],
+        allowCreate: false,
+        actionLabel: 'Apply',
+      }),
+    );
     expect((await f.store.read(f.article.path)).properties.topics).toEqual([
-      '[[Nodes/Project.md]]',
+      '[[Nodes/Concept]]',
       '[[Nodes/New.md]]',
     ]);
     expect(f.vault.trashed).toEqual([]);
   });
-  it('opens a plain reference click as direct note navigation when no highlight is selected', async () => {
+  it('opens a plain reference click as that passage multiselect when no highlight is selected', async () => {
     const body = hostSelection('First excerpt.', { quote: 'First excerpt.' }, [
       'Nodes/Concept.md',
     ]).body;
@@ -503,8 +512,16 @@ describe('hosted highlight UI integration', () => {
     const click = nativeClicks(f);
     click(f.probe.surface.body.querySelector('.reader-reference-pill'));
     await f.probe.operations;
-    expect(mocks.highlightPicker).not.toHaveBeenCalled();
-    expect(f.opened.openFile).toHaveBeenCalledWith(f.targets[0], { active: true });
+    expect(mocks.highlightPicker).toHaveBeenCalledWith(
+      f.app,
+      f.api,
+      expect.objectContaining({
+        selectedPaths: ['Nodes/Concept.md'],
+        minSelection: 0,
+        multiple: true,
+      }),
+    );
+    expect(f.opened.openFile).not.toHaveBeenCalled();
     expect((await f.store.read(f.article.path)).body).toBe(body);
   });
   it.each(['plain', 'nested internal anchor'] as const)(
@@ -578,6 +595,7 @@ describe('hosted highlight UI integration', () => {
       if (selected) click(root.querySelector('mark')!);
       click(path);
       await f.probe.operations;
+      expect(f.opened.openFile).not.toHaveBeenCalled();
       expect((await f.store.read(f.article.path)).body).toContain(second);
       if (selected) {
         expect(await f.vault.read(f.targets[1])).toContain('> First excerpt.');
@@ -585,8 +603,11 @@ describe('hosted highlight UI integration', () => {
         expect(await f.vault.read(f.targets[0])).not.toContain('> First excerpt.');
         expect(mocks.highlightPicker).not.toHaveBeenCalled();
       } else {
-        expect(mocks.highlightPicker).not.toHaveBeenCalled();
-        expect(f.opened.openFile).toHaveBeenCalledWith(f.targets[1], { active: true });
+        expect(mocks.highlightPicker).toHaveBeenCalledWith(
+          f.app,
+          f.api,
+          expect.objectContaining({ selectedPaths: ['Nodes/Concept.md', 'Nodes/Project.md'] }),
+        );
         expect((await f.store.read(f.article.path)).body).toBe(`${first}\n\n${second}`);
         for (const target of f.targets) expect(await f.vault.read(target)).not.toContain('> ');
       }
@@ -629,8 +650,7 @@ describe('hosted highlight UI integration', () => {
       expect(f.probe.sendSource).toBeUndefined();
       click(root.querySelector('.reader-reference-pill')!);
       await f.probe.operations;
-      expect(mocks.highlightPicker).not.toHaveBeenCalled();
-      expect(f.opened.openFile).toHaveBeenCalledOnce();
+      expect(mocks.highlightPicker).toHaveBeenCalledOnce();
       expect(await f.vault.read(f.targets[0])).not.toContain('> First excerpt.');
     },
   );
@@ -708,7 +728,7 @@ describe('hosted highlight UI integration', () => {
         originLink(before.path, anchor, 'Hosted'),
       ).raw;
     mocks.highlightPicker.mockResolvedValueOnce({ kind: 'existing-many', nodes: [f.nodes[0]] });
-    await menu(f.view, 'Notes…');
+    await menu(f.view, 'Add highlight to notes…');
     expect(mocks.highlightPicker).toHaveBeenLastCalledWith(
       f.app,
       f.api,
@@ -744,7 +764,7 @@ describe('hosted highlight UI integration', () => {
       ).raw,
     );
     mocks.highlightPicker.mockResolvedValueOnce({ kind: 'existing-many', nodes: [] });
-    await menu(f.view, 'Notes…');
+    await menu(f.view, 'Add highlight to notes…');
     const saved = await f.store.read(f.article.path),
       target = await f.vault.read(f.targets[0]);
     expect(passages(saved.body)).toEqual([]);
@@ -770,7 +790,7 @@ describe('hosted highlight UI integration', () => {
     const original = await f.store.read(f.article.path),
       process = vi.spyOn(f.vault, 'process');
     mocks.highlightPicker.mockResolvedValueOnce({ kind: 'existing-many', nodes: [] });
-    await expect(menu(f.view, 'Notes…')).rejects.toThrow(/quotation/i);
+    await expect(menu(f.view, 'Add highlight to notes…')).rejects.toThrow(/quotation/i);
     expect((await f.store.read(f.article.path)).raw).toBe(original.raw);
     expect(await f.vault.read(f.targets[0])).toBe(target);
     expect(process.mock.calls.filter(([file]) => file === f.article)).toHaveLength(0);
@@ -793,7 +813,9 @@ describe('hosted highlight UI integration', () => {
       return process(file, update);
     });
     mocks.highlightPicker.mockResolvedValueOnce({ kind: 'existing-many', nodes: [] });
-    await expect(menu(f.view, 'Notes…')).rejects.toThrow(/source annotation was saved/i);
+    await expect(menu(f.view, 'Add highlight to notes…')).rejects.toThrow(
+      /source annotation was saved/i,
+    );
     expect(passages((await f.store.read(f.article.path)).body)).toEqual([]);
     expect(await f.vault.read(f.targets[0])).not.toContain('> first words');
     expect(await f.vault.read(f.targets[1])).toContain('> first words');
@@ -872,7 +894,7 @@ describe('hosted highlight UI integration', () => {
         ),
       );
       expect((await f.store.read(f.article.path)).raw).toBe(before.raw);
-      expect(mocks.highlightPicker).toHaveBeenCalledTimes(1);
+      expect(mocks.highlightPicker).toHaveBeenCalledTimes(2);
       expect(f.api.createNodeForLink).not.toHaveBeenCalled();
     },
   );
@@ -950,7 +972,9 @@ describe('hosted highlight UI integration', () => {
       await link(f.nodes[1]);
       return f.nodes[1];
     });
-    await expect(menu(f.view, 'Notes…')).rejects.toThrow(/source annotation was saved/i);
+    await expect(menu(f.view, 'Add highlight to notes…')).rejects.toThrow(
+      /source annotation was saved/i,
+    );
     const createdCopy = await f.vault.read(f.targets[1]);
     expect(createdCopy).toContain('> first words');
     expect(readDocument(createdCopy).properties.origin).toContain('#^reader-');
@@ -1123,7 +1147,7 @@ describe('hosted highlight UI integration', () => {
         entered.resolve();
         return new Promise<never>(() => {});
       });
-      const pending = menu(f.view, 'Notes…');
+      const pending = menu(f.view, 'Add highlight to notes…');
       await entered.promise;
       const leaving = f.view.readingList();
       await leaving;
@@ -1148,7 +1172,7 @@ describe('hosted highlight UI integration', () => {
       }
       return result;
     });
-    const pending = menu(f.view, 'Notes…');
+    const pending = menu(f.view, 'Add highlight to notes…');
     await entered.promise;
     let left = false;
     const leaving = f.view.readingList().then(() => {
@@ -1325,7 +1349,7 @@ describe('hosted highlight UI integration', () => {
       expect(f.opened.openFile).not.toHaveBeenCalled();
     },
   );
-  it('Undo removes the source highlight and newly collected quotation, retaining anchors and defaults', async () => {
+  it('Undo removes only the source mark/references, retaining anchors, defaults, and user-owned destination snapshots', async () => {
     const f = await fixture({ defaults: [0] });
     f.paint();
     const range = document.createRange(),
@@ -1341,16 +1365,15 @@ describe('hosted highlight UI integration', () => {
     const undone = await f.store.read(f.article.path);
     expect(undone.body).toBe(`Before first words after. ${anchor}`);
     expect(undone.properties.topics).toEqual(saved.properties.topics);
-    expect(target).toContain('> first words');
-    expect(await f.vault.read(f.targets[0])).not.toContain('> first words');
+    expect(await f.vault.read(f.targets[0])).toBe(target);
   });
   it('explicitly unchecks a destination by removing its exact filed quotation while retaining defaults and the new destination', async () => {
     const f = await fixture({ body: '==first words==' });
     mocks.highlightPicker.mockResolvedValue({ kind: 'existing', node: f.nodes[0] });
-    await menu(f.view, 'Notes…');
+    await menu(f.view, 'Add highlight to notes…');
     const firstSnapshot = await f.vault.read(f.targets[0]);
     mocks.highlightPicker.mockResolvedValue({ kind: 'existing', node: f.nodes[1] });
-    await menu(f.view, 'Notes…');
+    await menu(f.view, 'Add highlight to notes…');
     const source = await f.store.read(f.article.path);
     expect(passages(source.body)[0].hosts).toEqual(['Nodes/Project']);
     expect(firstSnapshot).toContain('> first words');
@@ -1439,7 +1462,7 @@ describe('hosted highlight UI integration', () => {
       await link(f.nodes[0]);
       return f.nodes[0];
     });
-    await menu(f.view, 'Notes…');
+    await menu(f.view, 'Add highlight to notes…');
     const saved = await f.store.read(f.article.path);
     expect(saved.properties.bookmark).toBe('first words');
     expect(passages(saved.body)[0].hosts).toEqual(['Nodes/Concept']);
@@ -1525,9 +1548,8 @@ describe('hosted highlight UI integration', () => {
     expect(mocks.highlightPicker).toHaveBeenLastCalledWith(
       f.app,
       f.api,
-      expect.objectContaining({ selectedPaths: [] }),
+      expect.objectContaining({ selectedPaths: [f.nodes[0].path] }),
     );
-    expect(mocks.highlightPicker).toHaveBeenCalledTimes(1);
     expect((await f.store.read(f.article.path)).raw).toBe(original.raw);
   });
   it('does not revive a queued picker after a newer explicit navigation intent', async () => {
@@ -1539,7 +1561,7 @@ describe('hosted highlight UI integration', () => {
       await release.promise;
     });
     await entered.promise;
-    const pending = menu(f.view, 'Notes…');
+    const pending = menu(f.view, 'Add highlight to notes…');
     const leaving = f.view.readingList();
     release.resolve();
     await blocked;
@@ -1547,21 +1569,21 @@ describe('hosted highlight UI integration', () => {
     await leaving;
     expect(mocks.highlightPicker).not.toHaveBeenCalled();
   });
-  it('leaves native selection unannotated on close', async () => {
+  it('captures and drains a sole-default native selection on normal close even after the native range disappears', async () => {
     const f = await fixture({ defaults: [0] });
     f.probe.surface.selectionValue = { quote: 'first words', before: 'Before ', after: ' after.' };
     const closing = f.view.onClose();
     f.probe.surface.selectionValue = undefined;
     await closing;
-    expect(passages((await f.store.read(f.article.path)).body)).toEqual([]);
-    expect(await f.vault.read(f.targets[0])).not.toContain('> first words');
+    expect(passages((await f.store.read(f.article.path)).body)[0].hosts).toEqual(['Nodes/Concept']);
+    expect(await f.vault.read(f.targets[0])).toContain('> first words');
     expect(mocks.highlightPicker).not.toHaveBeenCalled();
   });
-  it('leaves native selection unannotated on navigation', async () => {
+  it('finishes a sole-default pending native selection before navigation without starting a picker', async () => {
     const f = await fixture({ defaults: [1] });
     f.probe.surface.selectionValue = { quote: 'first words', before: 'Before ', after: ' after.' };
     await f.view.readingList();
-    expect(passages((await f.store.read(f.article.path)).body)).toEqual([]);
+    expect(passages((await f.store.read(f.article.path)).body)[0].hosts).toEqual(['Nodes/Project']);
     expect(f.probe.snapshot).toBeUndefined();
     expect(mocks.highlightPicker).not.toHaveBeenCalled();
   });

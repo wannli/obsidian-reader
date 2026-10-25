@@ -1,4 +1,4 @@
-import { FuzzySuggestModal, Modal, Platform, Setting, type App, type TFile } from 'obsidian';
+import { FuzzySuggestModal, Modal, Setting, type App, type TFile } from 'obsidian';
 
 export function choose<T>(
   app: App,
@@ -52,19 +52,12 @@ export function input(
   class Input extends Modal {
     onOpen(): void {
       this.setTitle(title);
-      this.contentEl.classList.add('reader-compact-dialog');
-      if (Platform.isMobile)
-        queueMicrotask(() => {
-          if (lifetime.signal.aborted) return;
-          this.contentEl.tabIndex = -1;
-          this.contentEl.focus();
-        });
       let value = '';
       let field!: HTMLInputElement;
       new Setting(this.contentEl).setName(label).addText((control) => {
         field = control.inputEl;
         control.onChange((next) => (value = next));
-        if (!Platform.isMobile) field.focus();
+        field.focus();
       });
       const error = this.contentEl.createEl('p', { attr: { role: 'alert' } });
       const save = async (button: HTMLButtonElement) => {

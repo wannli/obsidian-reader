@@ -4,8 +4,6 @@ Approved by Wannes in the Reader highlight-design discussion, the 20 October E2E
 
 ## Markdown contract
 
-See the [file schema reference](file-schema.md) for field tables, source/destination examples and the distinction between Reader file types and public Fileclass membership.
-
 An article preserves its selected words, emphasis and publisher links:
 
 ```markdown
@@ -33,34 +31,30 @@ Each destination is an ordinary Fileclass-typed note. Collect a self-contained s
 
 ## Reader interaction
 
-Native text selection is copy-only: it never creates a highlight, opens a picker or saves on navigation. Use Highlight mode (H) and first/last-word, Sentence or Paragraph controls to annotate.
-
 All destinations for one highlight share a single pill using Obsidian’s native tag sizing, padding, radius and theme tokens. Each destination retains its own Fileclass icon/name and independent link; no generic marker is rendered. The ordinary `(※ …)` citation grammar remains unchanged in Markdown. They remain note-reference links, not tag-search controls; they do not enlarge paragraph line boxes or add invisible hit areas over adjacent prose. Floating actions and picker rows retain ≥44px targets. All links to publicly recognized Fileclass notes keep their resolved node icon, falling back only to a matching registered class icon. Icons and reference labels are decoration, not quotation text. Publisher links and untyped notes keep their normal presentation. No raw-YAML class inference or private Fileclass icon lookup.
 
-- One main action, **Notes…**, opens initially empty full-width search, never preset to the highlighted quotation, and quiet native-style suggestion rows with checked multiselection, compact icons and visibly separated title/type metadata. No existing/create mode switch, selected-details panel or **Link** confirmation. Choose several notes, then apply once.
+- One main action, **Add highlight to notes…**, opens initially empty full-width search, never preset to the highlighted quotation, and quiet native-style suggestion rows with checked multiselection, compact icons and visibly separated title/type metadata. No existing/create mode switch, selected-details panel or **Link** confirmation. Choose several notes, then apply once.
 - A normal click on a highlight selects it. A subsequent note-reference click files that first highlight in the exact clicked note; no separate **Send to…** arming is required. The destination-selecting passage is not edited. Cancel/Done clears the transient selection.
-- With no highlight selected, clicking its reference opens the note; modifier-click opens another pane. Select a highlight and use **Notes…** to edit its destinations; explicit **Choose from article…** is a secondary selection shortcut, not another filing command.
+- With no highlight selected, clicking its reference opens that highlight's notes multiselect. Ordinary note navigation remains available through native modifier-click; explicit **Choose from article…** is a secondary selection shortcut, not another filing command.
 - The article’s existing `topics` also appear in the top reading header with the same compact pill styling and Fileclass icons. A matching authored title remains untouched in the body, below that metadata row. This is metadata presentation, not a new tag field or a filing gesture.
 - The article-level **Related notes** action separately edits remembered defaults. It does not reassign earlier highlights or erase previously filed quotes.
 - Explicit **Convert to note link** still chooses one note, since one source phrase becomes one ordinary wikilink rather than a collection.
-- The separate **Link or create note** article control uses the same first/last word or Sentence/Paragraph tap range as Highlight mode, but does not save a highlight first. It opens typed destination choice (including explicit public creation), without inheriting a highlight default. The article receives an ordinary aliased note link and paragraph anchor, no `==` or quotation snapshot. A newly created destination receives `origin` for that paragraph; reuse never changes an existing origin. Publisher-link conflicts and unmappable selections fail without altering the source.
+- The separate **Create node** article control uses the same first/last word or Sentence/Paragraph tap range as Highlight mode, but does not save a highlight first. It opens typed destination choice (including explicit public creation), without inheriting a highlight default. The article receives an ordinary aliased note link and paragraph anchor, no `==` or quotation snapshot. A newly created destination receives `origin` for that paragraph; reuse never changes an existing origin. Publisher-link conflicts and unmappable selections fail without altering the source.
 
 ## Typed destination selection
 
-Reader owns the yellow highlight, green note-link and blue Related notes pickers. Type a new title to see Create choices above existing results; select one Fileclass and press Enter to create directly. Fileclass Inline supplies public API v2 discovery, classes/icons, creation and required-field completion; Reader never copies schemas/forms or calls private provider APIs. An older provider without embedded creation shows an update message and can still select existing notes.
+Reader owns the picker. Fileclass Inline supplies public API v2 discovery, classes/icons, creation and required-field completion; Reader never copies schemas/forms or calls private provider APIs.
 
 - Only current registered Fileclass members are eligible, validated with `classes.includes(...)`, including multi-class notes. A primary `type` or arbitrary YAML string is not proof. All types means all Fileclasses, not all files.
 - Show clear primary titles with separately styled muted types; add path context only when otherwise ambiguous. Creation rows remain compact even for long selected passages, while preserving the full query and accessible action name. Search/alias/fuzzy reuse remains explicit. Draft checks survive search/type filters; Apply/Cancel is staged and cancellation performs no write.
-- Creation is explicit with a registered class and title. One new typed note can be created together with existing checked destinations; the public callback commits the source before required completion. The optional public `embeddedCreation` capability and `completionContainer` keep required fields inside the same compact dialog; no repeated title prompt or second picker. Older providers retain existing-note selection but require an update for creation. Create also applies all checked Related notes defaults. Never invent an untyped or standalone-creation fallback.
+- Creation is explicit with a registered class and title. One new typed note can be created together with existing checked destinations; the public callback commits the source before required completion. Never invent an untyped or standalone-creation fallback.
 - Every new highlight needs at least one typed host. Inherit one eligible article default; zero or several requires explicit selection. Never silently choose the first or last-used note.
 - Article `topics` remembers typed destination links from any Fileclass. Bulk editing replaces only known eligible links; retain unknown/untyped/unresolved authored values, retained aliases and order. It does not rewrite previous passage associations.
 - Cancelling never authorizes deletion of a provider-created note. A stale/reloaded/missing provider blocks new writes with a clear error; existing content remains readable.
 
 ## Explicit removal and snapshot ownership
 
-Undo now reverses the last explicit tap highlight and only quotation copies newly added by that operation. Session-only receipts prove exact unchanged copies, including their date. Pre-existing/edited/ambiguous copies and destination notes are retained; incomplete cleanup is reported inline. Undo remains available until another annotation or navigation, and never reverses article retention.
-
-Quotations are user-owned snapshots, not synchronized projections. Source text edits, file removal, conversion, article-level Related notes changes never automatically rewrite or delete them.
+Quotations are user-owned snapshots, not synchronized projections. Source text edits, file removal, conversion, ordinary source-local Undo and article-level Related notes changes never automatically rewrite or delete them.
 
 An explicit removal of a note from a particular highlight is different: remove its source reference **and the corresponding saved quotation**, only when the current quote text/formatting and paragraph citation identify one exact, unchanged active top-level copy—not code or comment examples. A valid collection date is not its identity; legacy undated copies remain removable.
 

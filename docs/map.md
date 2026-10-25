@@ -1,6 +1,6 @@
 # Reader codebase map
 
-One runtime, one Markdown store. Start with the [approved scope](rebuild-spec.md), [storage contract](storage-contract.md) and [file/highlight/typing schema reference](file-schema.md); neither a cache nor UI state is write authority.
+One runtime, one Markdown store. Start with the [approved scope](rebuild-spec.md) and [storage contract](storage-contract.md); neither a cache nor UI state is write authority.
 
 Folder-authoritative queues and initial hosted highlights were installed in the owned E2E vault on 20 October; loaded artifacts/public APIs and queue composition were checked, not full workflow/device/Sync acceptance. Earlier Mac evidence below remains historical.
 

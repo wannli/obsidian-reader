@@ -52,7 +52,7 @@ describe('Reader operation and close lifecycle', () => {
     expect(f.probe.surface.body.textContent).toBe('article B');
   });
 
-  it('saves position on close without annotating native selection', async () => {
+  it('drains a pending selection and position on normal close, without waiting for debounce', async () => {
     const f = hostFixture(),
       file = await f.note('Reading/Inbox/A.md');
     await enableHighlightHost(f, file);
@@ -63,7 +63,7 @@ describe('Reader operation and close lifecycle', () => {
     f.probe.selectionChanged();
     await f.view.onClose();
     const saved = readDocument(await f.vault.read(file));
-    expect(saved.body).toBe('before words after');
+    expect(saved.body).toBe(expectedHosted('before ==words== after'));
     expect(saved.properties.bookmark).toBe('words');
     expect(surface.dispose).toHaveBeenCalledOnce();
     expect(f.probe.surface).toBeUndefined();
@@ -378,15 +378,11 @@ describe('public reading-list command and URI', () => {
       expect(f.view.file).toBeUndefined();
       expect(f.view.contentEl.querySelector('.reader-list')).not.toBeNull();
       const saved = readDocument(await f.vault.read(article));
-      expect(saved.body).toBe('before words after');
+      expect(saved.body).toBe(expectedHosted('before ==words== after'));
       expect(saved.properties.bookmark).toBe('words');
       // Cancel a genuine Reader create intent separately: cancelling a modal's captured
       // selection must not replay that cancelled intent as a fresh automatic highlight.
       await f.view.openArticle(article.path);
-      f.probe.surface.selectionValue = { quote: 'words', before: 'before ', after: ' after' };
-      await f.probe.saveSelection();
-      f.probe.surface.selectionValue = undefined;
-      f.probe.surface.refresh();
       const beforeCancel = await f.vault.read(article),
         entered = gate();
       let requestSignal!: AbortSignal;
@@ -396,7 +392,7 @@ describe('public reading-list command and URI', () => {
         return new Promise(() => {});
       };
       mocks.highlightPicker.mockResolvedValue({ kind: 'create', title: 'words', type: 'topic' });
-      const creating = menu(f.view, 'Notes…');
+      const creating = menu(f.view, 'Add highlight to notes…');
       await entered.promise;
       invoke(route);
       expect(requestSignal.aborted).toBe(true);
@@ -955,7 +951,7 @@ describe('browsing context and presentation', () => {
       expect(mocks.choose).toHaveBeenCalledWith(
         f.app,
         'Change article status…',
-        ['Inbox', 'Later', 'Feed', 'Archive'].filter((item) => item !== queue),
+        ['Inbox', 'Later', 'Feed', 'Archive'],
         expect.any(Function),
         expect.any(AbortSignal),
       );

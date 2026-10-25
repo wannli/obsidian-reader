@@ -1,4 +1,4 @@
-import { Modal, Platform, Setting, type App } from 'obsidian';
+import { Modal, Setting, type App } from 'obsidian';
 import type { TopicFilter } from '../core/topic-filter';
 
 /** null cancels; a free-text choice is a filter, never a request to create a note. */
@@ -13,13 +13,6 @@ export function chooseTopicFilter(
     class TopicFilterDialog extends Modal {
       onOpen(): void {
         this.setTitle('Filter articles by topic');
-        this.contentEl.classList.add('reader-compact-dialog');
-        if (Platform.isMobile)
-          queueMicrotask(() => {
-            if (signal.aborted) return;
-            this.contentEl.tabIndex = -1;
-            this.contentEl.focus();
-          });
         const input = this.contentEl.createEl('input', {
           type: 'search',
           value: current?.label ?? '',
@@ -71,7 +64,7 @@ export function chooseTopicFilter(
           button.setButtonText('Cancel').onClick(() => this.close()),
         );
         render();
-        if (!Platform.isMobile) input.focus();
+        input.focus();
       }
       onClose(): void {
         signal.removeEventListener('abort', abort);

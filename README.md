@@ -93,17 +93,17 @@ Highlights preserve selected words, formatting and publisher URLs:
 
 Each selected note receives a quotation under `## Highlights`, grouped by `### [[Article title]]`, with a precise paragraph citation and local collection-date link such as `[[2026-10-20]]`. Editing the source never silently changes the snapshot; an explicit removal from that highlight's notes can remove its uniquely matching, unedited copy.
 
-- Native text selection is copy-only. Enter **Highlight** mode and tap the **first** and **last word**. Tap the same word twice for one word.
-- Or tap a word, then **Sentence** or **Paragraph**. On desktop, after that first word press **S** for Sentence or **P** for Paragraph; **U** undoes a saved highlight and **D** exits. **Done** cancels an unfinished selection; **Escape** clears the first word, then exits. Highlight controls and their picker are yellow; Link or create note is green; Related notes follows it in blue. In any of these pickers, type a new title and choose its Create row (or select one Fileclass and press Enter). Required fields stay in the same dialog.
-- The passage bar offers **Notes…** and explicit **Convert to note link**. With no highlight selected, clicking its reference opens the note. Unchecking removes the reference and exact saved copy; edited/ambiguous copies block removal. Undo removes the last tap highlight and its newly collected, unchanged copies; it remains available until another annotation or navigation. Pre-existing or edited copies and Feed → Later retention are preserved.
+- Drag to select text, or enter **Highlight** mode and tap the **first** and **last word**. Tap the same word twice for one word.
+- Or tap a word, then **Sentence** or **Paragraph**. On desktop, after that first word press **S** for Sentence or **P** for Paragraph; **U** undoes a saved highlight and **D** exits. **Done** cancels an unfinished selection; **Escape** clears the first word, then exits. Highlight controls and their picker have a faint yellow tint; Create node controls and its picker use green.
+- The passage bar offers **Add highlight to notes…** and explicit **Convert to note link**. With no highlight selected, clicking its reference edits that highlight’s checked notes. Unchecking removes the reference and exact saved copy; edited/ambiguous copies block removal. Source-only removal/brief Undo never deletes stored copies or reverses Feed → Later retention.
 - **Convert to note link** makes an ordinary `[[Node|original words]]` mention, without highlighting or redundant references. Only a newly created note receives `origin: "[[Article#^paragraph]]"`; existing origins are preserved. No quotation of the node's own name is added.
 - For direct collection, click a highlight and then a note reference: file the **first** quotation in that exact note without changing the destination-selecting text. **Choose from article…** remains a secondary shortcut for other targets; the first passage supplies the citation.
 
 Scrolling and paging still work in Highlight mode; article-navigation shortcuts pause until exit. Each highlight’s references share one native-sized pill containing each note’s Fileclass icon and name, without a generic marker. Destinations remain independently clickable; ordinary typed-note links keep their icons. Existing article topics appear in the top reading header with the same styling. Decorations are not quotation text. Cancel before saving leaves no new highlight; provider cancellation can leave a created note, which Reader never deletes.
 
-New hosted highlights require **Obsidian 1.12.7+** and public **Nodes API v2** at `fileclass-inline.api`; typed creation additionally needs `createNodeForLink` and `embeddedCreation`. Required fields appear in the same compact dialog, without asking for the title again. Fileclass Inline owns schemas and required-field completion, not Reader's picker. Without it, existing articles/highlights/links remain readable, but new hosted highlights are unavailable.
+New hosted highlights require **Obsidian 1.12.7+** and public **Nodes API v2** at `fileclass-inline.api`; typed creation additionally needs `createNodeForLink`. Fileclass Inline owns schemas and required-field completion, not Reader's picker. Without it, existing articles/highlights/links remain readable, but new hosted highlights are unavailable.
 
-The article’s **Related notes** multiselect manages future defaults, not previous quotations. Create applies checked defaults together with the new note; there is no second Apply step. Source/target saves are guarded but not atomic: partial failures report saved source and verified target progress. Filing retries deduplicate quote + paragraph citation without changing its date; completed removals are never blindly retried. Dirty/uncertain editors remain protected. See the [full contract](docs/hosted-highlights.md).
+The article’s **Related notes** multiselect manages future defaults, not previous quotations. Source/target saves are guarded but not atomic: partial failures report saved source and verified target progress. Filing retries deduplicate quote + paragraph citation without changing its date; completed removals are never blindly retried. Dirty/uncertain editors remain protected. See the [full contract](docs/hosted-highlights.md).
 
 ## Offline reading and capture
 
@@ -121,7 +121,7 @@ If extraction fails, the URL and available text remain, and you can retry. **Run
 
 ## Your reading library is just Markdown
 
-Reader identifies articles by `type: article` and subscriptions by `type: feed`, wherever you store them outside Templates and .trash. You can move and rename the files yourself. See the [file, highlight and typed-note schema reference](docs/file-schema.md) for property types, defaults and linked examples.
+Reader identifies articles by `type: article` and subscriptions by `type: feed`, wherever you store them. You can move and rename the files yourself.
 
 An article might look like this:
 

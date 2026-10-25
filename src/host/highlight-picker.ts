@@ -1,4 +1,4 @@
-import { Modal, Platform, setIcon, type App } from 'obsidian';
+import { Modal, setIcon, type App } from 'obsidian';
 import {
   hasNodeClass,
   nodeChoiceMatch,
@@ -12,28 +12,19 @@ export type HighlightHostChoice =
   | { kind: 'existing'; node: NodeResult }
   | { kind: 'existing-many'; nodes: NodeResult[] }
   | { kind: 'pick-in-article'; nodes: NodeResult[] }
-  | {
-      kind: 'create';
-      title: string;
-      type: string;
-      existingNodes?: NodeResult[];
-      completion?: { container: HTMLElement; signal: AbortSignal; close(): void };
-    };
+  | { kind: 'create'; title: string; type: string; existingNodes?: NodeResult[] };
 
 export interface HighlightHostPickerOptions {
   title?: string;
-  description?: string;
-  keepCreationOpen?: boolean;
   query?: string;
   preferredPaths?: readonly string[];
   signal?: AbortSignal;
   allowCreate?: boolean;
-  creationUnavailable?: string;
   multiple?: boolean;
   selectedPaths?: string[];
   minSelection?: number;
   actionLabel?: string;
-  tone?: 'highlight' | 'node' | 'related' | 'neutral';
+  tone?: 'highlight' | 'node' | 'neutral';
   allowPickFromArticle?: boolean;
 }
 
@@ -74,39 +65,20 @@ export function chooseHighlightHost(
   const action = actionLabel.charAt(0).toLocaleLowerCase() + actionLabel.slice(1);
   return new Promise((resolve) => {
     let settled = false;
-    const creationLifetime = new AbortController();
     const active = () => !settled && !options.signal?.aborted;
     const finish = (choice: HighlightHostChoice | null) => {
       if (settled || (choice && !active())) return;
       settled = true;
-      if (choice?.kind === 'create' && options.keepCreationOpen) {
-        modal.contentEl.replaceChildren();
-        modal.contentEl.classList.add('reader-creation-fields');
-        append(modal.contentEl, 'p', 'reader-picker-description', 'Creating note…');
-        const cancel = append(modal.contentEl, 'button', '', 'Cancel');
-        cancel.addEventListener('click', () => modal.close());
-        resolve({
-          ...choice,
-          completion: {
-            container: modal.contentEl,
-            signal: creationLifetime.signal,
-            close: () => modal.close(),
-          },
-        });
-      } else {
-        resolve(choice);
-        modal.close();
-      }
+      resolve(choice);
+      modal.close();
     };
     class HighlightHostDialog extends Modal {
       onOpen(): void {
         this.setTitle(options.title ?? 'Add highlight to notes');
         this.modalEl.classList.add('reader-highlight-picker-modal', 'prompt');
-        if (options.tone === 'highlight' || options.tone === 'node' || options.tone === 'related')
+        if (options.tone === 'highlight' || options.tone === 'node')
           this.modalEl.classList.add(`reader-picker-${options.tone}`);
         this.contentEl.classList.add('reader-highlight-picker');
-        if (options.description)
-          append(this.contentEl, 'p', 'reader-picker-description', options.description);
         const controls = append(this.contentEl, 'div', 'reader-highlight-picker-controls');
         const searchWrap = append(
           controls,
@@ -115,7 +87,7 @@ export function chooseHighlightHost(
         );
         const search = append(searchWrap, 'input', 'reader-highlight-picker-search prompt-input');
         search.type = 'search';
-        search.placeholder = 'Find a note or type a title to create';
+        search.placeholder = 'Search notes or enter a new title';
         search.setAttribute('aria-label', 'Search typed notes');
         search.value = nodeChoiceSeed(options.query);
         const filter = append(controls, 'select', 'reader-highlight-picker-type-filter dropdown');
@@ -130,8 +102,6 @@ export function chooseHighlightHost(
         const message = append(this.contentEl, 'div', 'reader-highlight-picker-message');
         message.setAttribute('role', 'alert');
         const footer = append(this.contentEl, 'div', 'reader-highlight-picker-footer');
-        const count = multiple ? append(footer, 'span', 'reader-picker-count') : undefined;
-        if (count) count.setAttribute('aria-live', 'polite');
         const cancel = append(footer, 'button', '', 'Cancel');
         const retry = append(footer, 'button', '', 'Retry');
         const fromArticle =
@@ -172,7 +142,6 @@ export function chooseHighlightHost(
           setIcon(element, name);
         };
         const updateFooter = () => {
-          if (count) count.textContent = `${selected.size} selected`;
           if (fromArticle) fromArticle.disabled = hasError || !initialized;
           if (confirm) {
             confirm.disabled = hasError || !initialized || selected.size < minimum;
@@ -501,10 +470,6 @@ export function chooseHighlightHost(
               row.addEventListener('click', () => create(type.type, title));
             }
           }
-          // Keep creation above a long list of fuzzy matches, in DOM and tab order.
-          results.prepend(...results.querySelectorAll('.reader-highlight-picker-create-row'));
-          if (!canCreate && title && options.creationUnavailable)
-            append(results, 'p', 'reader-picker-description', options.creationUnavailable);
           if (!visible.length && !results.children.length)
             append(
               results,
@@ -560,17 +525,6 @@ export function chooseHighlightHost(
             if (active()) finish({ kind: 'pick-in-article', nodes });
           }),
         );
-        this.contentEl.addEventListener(
-          'keydown',
-          (event) => {
-            if (event.key === 'Enter' && (event.ctrlKey || event.metaKey) && multiple) {
-              event.preventDefault();
-              event.stopPropagation();
-              if (!event.repeat && !event.isComposing && confirm && !confirm.disabled) apply();
-            }
-          },
-          { capture: true },
-        );
         search.addEventListener('input', refresh);
         filter.addEventListener('change', refresh);
         search.addEventListener('keydown', (event) => {
@@ -580,22 +534,7 @@ export function chooseHighlightHost(
             if (event.repeat) return;
             if (event.key === 'Enter' && multiple && !query() && confirm && !confirm.disabled)
               apply();
-            else {
-              const creation = [
-                ...results.querySelectorAll<HTMLButtonElement>(
-                  '.reader-highlight-picker-create-row:not(:disabled)',
-                ),
-              ];
-              const exactReuse = exact.find((node) =>
-                ['Exact title', 'Exact alias'].includes(nodeChoiceMatch(node, query()) ?? ''),
-              );
-              if (exactReuse) focusRow(exactReuse.path);
-              else if (query() && creation.length === 1) creation[0].click();
-              else
-                (
-                  creation[0] ?? results.querySelector<HTMLButtonElement>('button:not(:disabled)')
-                )?.focus();
-            }
+            else results.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus();
           }
         });
         results.addEventListener('keydown', (event) => {
@@ -618,15 +557,9 @@ export function chooseHighlightHost(
         });
         clearError();
         refresh();
-        if (active()) {
-          if (Platform.isMobile) {
-            this.contentEl.tabIndex = -1;
-            this.contentEl.focus();
-          } else search.focus();
-        }
+        if (active()) search.focus();
       }
       onClose(): void {
-        creationLifetime.abort();
         options.signal?.removeEventListener('abort', abort);
         this.contentEl.replaceChildren();
         if (!settled) {
@@ -636,10 +569,7 @@ export function chooseHighlightHost(
       }
     }
     const modal = new HighlightHostDialog(app);
-    const abort = () => {
-      if (settled) modal.close();
-      else finish(null);
-    };
+    const abort = () => finish(null);
     options.signal?.addEventListener('abort', abort, { once: true });
     if (options.signal?.aborted) finish(null);
     else modal.open();

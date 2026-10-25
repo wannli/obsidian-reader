@@ -216,7 +216,7 @@ it('switches the same toolbar contextually and restores the exact original actio
   const trigger = button(f.toolbar, 'Highlight mode');
   for (const [action, key] of [
     [trigger, 'H'],
-    [button(f.toolbar, 'Link or create note'), 'C'],
+    [button(f.toolbar, 'Create node'), 'C'],
   ] as const) {
     expect(action.hasAttribute('title')).toBe(false);
     expect(action.getAttribute('aria-keyshortcuts')).toBe(key);
@@ -254,7 +254,7 @@ it('switches the same toolbar contextually and restores the exact original actio
 it('creates a node through the same two-tap and sentence ranges without invoking highlight actions', async () => {
   const action = passageAction();
   const f = fixture({ active: false, canUndo: true, passageActions: () => [action] });
-  button(f.toolbar, 'Link or create note').click();
+  button(f.toolbar, 'Create node').click();
   expect(f.controller.active).toBe(true);
   expect(f.toolbar.classList.contains('reader-tap-node-toolbar')).toBe(true);
   expect(f.host.querySelector('.reader-tap-node-preview')).not.toBeNull();
@@ -282,7 +282,7 @@ it('keeps Done responsive while node creation is waiting on an uncooperative pic
     resolve = settle;
   });
   f.options.save.mockReturnValueOnce(pending);
-  button(f.toolbar, 'Link or create note').click();
+  button(f.toolbar, 'Create node').click();
   tap(f);
   tap(f, 80);
   expect(f.options.save).toHaveBeenCalledExactlyOnceWith(f.inclusive, 'node');
