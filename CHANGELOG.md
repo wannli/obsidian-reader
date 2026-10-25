@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.22.0](https://github.com/wannli/obsidian-reader/compare/0.21.1...0.22.0) (2026-10-25)
+
+
+### Added
+
+* **reader:** simplify typed note highlight actions ([1bf1bb9](https://github.com/wannli/obsidian-reader/commit/1bf1bb9664c1b80cdf77e45d0a89b9c7eb726e1e))
+
 ## [0.21.1](https://github.com/wannli/obsidian-reader/compare/0.21.0...0.21.1) (2026-10-25)
 
 
