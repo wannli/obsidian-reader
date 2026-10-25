@@ -325,7 +325,7 @@ describe('article keyboard boundaries', () => {
       'Delete',
       'List',
       'Highlight mode',
-      'Create node',
+      'Link or create note',
     ]);
     expect(column.classList.contains('reader-has-page-actions')).toBe(true);
     expect(actions.classList.contains('reader-paged-actions')).toBe(true);

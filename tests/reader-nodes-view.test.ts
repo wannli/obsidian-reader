@@ -201,7 +201,7 @@ describe('Nodes v2 linked creation', () => {
           title: 'Typed topic',
           type: 'topic',
         });
-      await menu(f.view, 'Add highlight to notes…');
+      await menu(f.view, 'Notes…');
       expect(mocks.highlightPicker).toHaveBeenCalledWith(
         f.app,
         f.api,
@@ -245,7 +245,7 @@ describe('Nodes v2 linked creation', () => {
         targetBefore = await f.vault.read(f.target);
       if (stage === 'picker') mocks.highlightPicker.mockResolvedValue(null);
       else f.api.createNodeForLink = vi.fn(async () => null);
-      await menu(f.view, 'Add highlight to notes…');
+      await menu(f.view, 'Notes…');
       expect(await f.vault.read(f.article)).toBe(before);
       expect(await f.vault.read(f.target)).toBe(targetBefore);
       expect(f.api.pickNodeForLink).not.toHaveBeenCalled();
@@ -262,7 +262,7 @@ describe('Nodes v2 linked creation', () => {
       await link(f.node);
       return f.node;
     };
-    await expect(menu(f.view, 'Add highlight to notes…')).rejects.toThrow();
+    await expect(menu(f.view, 'Notes…')).rejects.toThrow();
     expect(await f.vault.read(f.article)).toBe(changed);
     expect(f.vault.trashed).toEqual([]);
   });
@@ -292,7 +292,7 @@ describe('Nodes v2 linked creation', () => {
       const f = await fixture();
       f.api.getNode = () => ({ ...f.node, type: 'Other', classes });
       mocks.highlightPicker.mockResolvedValue({ kind: 'existing', node: f.node });
-      await menu(f.view, 'Add highlight to notes…');
+      await menu(f.view, 'Notes…');
       expect((await f.store.read(f.article.path)).body).toBe(f.linkedBody);
     },
   );
@@ -334,7 +334,7 @@ describe('Nodes v2 linked creation', () => {
         order.push('required completion');
         return f.node;
       });
-      const creation = menu(f.view, 'Add highlight to notes…');
+      const creation = menu(f.view, 'Notes…');
       await entered.promise;
       expect((await f.store.read(f.article.path)).body).toBe(f.linkedBody);
       expect(order).toEqual(['created', 'linked']);
@@ -371,7 +371,7 @@ describe('Nodes v2 linked creation', () => {
         await stopped.promise;
         return null;
       };
-      const creation = menu(f.view, 'Add highlight to notes…');
+      const creation = menu(f.view, 'Notes…');
       await linked.promise;
       expect(requestSignal.aborted).toBe(false);
       const oldPath = f.article.path;
@@ -411,7 +411,7 @@ describe('Nodes v2 linked creation', () => {
       await stopped.promise;
       return null;
     };
-    const creation = menu(f.view, 'Add highlight to notes…');
+    const creation = menu(f.view, 'Notes…');
     await entered.promise;
     f.vault.bytes.set(f.article, createDocument({ type: 'article' }, 'External edit'));
     await f.view.changed({ path: f.article.path });
@@ -446,7 +446,7 @@ describe('Nodes v2 linked creation', () => {
         await stopped.promise;
         return null;
       };
-      const creation = menu(f.view, 'Add highlight to notes…');
+      const creation = menu(f.view, 'Notes…');
       await linked.promise;
       let transition: Promise<void> | undefined;
       if (action === 'open') transition = f.view.openArticle(next.path);
@@ -489,7 +489,7 @@ describe('Nodes v2 linked creation', () => {
         await expect(link(f.node)).rejects.toThrow('request has finished');
         return f.node;
       });
-      const creation = menu(f.view, 'Add highlight to notes…');
+      const creation = menu(f.view, 'Notes…');
       await entered.promise;
       const transition =
         action === 'open'
@@ -528,7 +528,7 @@ describe('Nodes v2 linked creation', () => {
         return new Promise<NodeResult | null>(() => {}); // Never settles, even after abort.
       });
       try {
-        const creation = menu(f.view, 'Add highlight to notes…');
+        const creation = menu(f.view, 'Notes…');
         await entered.promise;
         const targetExpected =
           phase === 'after' ? expectedFiledTarget(f, targetBefore) : targetBefore;
@@ -560,8 +560,8 @@ describe('Nodes v2 linked creation', () => {
   it.each(
     ['before', 'after'].flatMap((phase) =>
       [
-        'Add highlight to notes…',
-        'Add highlight to notes…',
+        'Notes…',
+        'Notes…',
         'Remove references (article only)',
         'Remove highlight (article only)',
       ].map((label) => ({ phase, label })),
@@ -586,7 +586,7 @@ describe('Nodes v2 linked creation', () => {
         return new Promise<NodeResult | null>(() => {});
       });
       try {
-        const creation = menu(f.view, 'Add highlight to notes…');
+        const creation = menu(f.view, 'Notes…');
         await entered.promise;
         const targetExpected =
           phase === 'after' ? expectedFiledTarget(f, targetBefore) : targetBefore;
@@ -640,8 +640,8 @@ describe('Nodes v2 linked creation', () => {
         ['link', 'new-leaf'],
         ['link', 'external'],
         ['menu', 'Open note'],
-        ['menu', 'Add highlight to notes…'],
-        ['menu', 'Add highlight to notes…'],
+        ['menu', 'Notes…'],
+        ['menu', 'Notes…'],
         ['menu', 'Remove references (article only)'],
         ['menu', 'Remove highlight (article only)'],
       ].map(([route, label]) => ({ phase, route, label })),
@@ -669,7 +669,7 @@ describe('Nodes v2 linked creation', () => {
         return f.node;
       });
       try {
-        const creation = menu(f.view, 'Add highlight to notes…');
+        const creation = menu(f.view, 'Notes…');
         await entered.promise;
         const targetExpected =
           phase === 'after' ? expectedFiledTarget(f, targetBytes) : targetBytes;
@@ -701,9 +701,8 @@ describe('Nodes v2 linked creation', () => {
             f.api,
             expect.objectContaining({ title: 'Related notes', multiple: true }),
           );
-        if (label === 'Add highlight to notes…')
-          expect(f.api.createNodeForLink).toHaveBeenCalledTimes(2);
-        if (label === 'Add highlight to notes…') expect(calls).toBe(2);
+        if (label === 'Notes…') expect(f.api.createNodeForLink).toHaveBeenCalledTimes(2);
+        if (label === 'Notes…') expect(calls).toBe(2);
         if (label === 'Archive') {
           expect(f.article.path).toBe('Reading/Treasury/A.md');
           expect((await f.store.read(f.article.path)).properties.status).toBe('archive');
@@ -795,7 +794,7 @@ describe('Nodes v2 linked creation', () => {
         return f.node;
       };
       try {
-        const creation = menu(f.view, 'Add highlight to notes…');
+        const creation = menu(f.view, 'Notes…');
         const rejected = expect(creation).rejects.toThrow(/request.*(finished|cancelled)/);
         await dispatched.promise;
         const intent = f.click(route, label);
@@ -841,7 +840,7 @@ describe('Nodes v2 linked creation', () => {
         return f.node;
       });
       try {
-        const creation = menu(f.view, 'Add highlight to notes…');
+        const creation = menu(f.view, 'Notes…');
         await entered.promise;
         const external = createDocument({ type: 'note', custom: 'keep' }, 'External source');
         f.vault.bytes.set(f.article, external);
@@ -893,7 +892,7 @@ describe('Nodes v2 linked creation', () => {
           await release.promise;
         });
         await entered.promise;
-        const creation = menu(f.view, 'Add highlight to notes…');
+        const creation = menu(f.view, 'Notes…');
         await f.click(route, label);
         release.resolve();
         await busy;
@@ -924,7 +923,7 @@ describe('Nodes v2 linked creation', () => {
       return f.node;
     };
     try {
-      const creation = menu(f.view, 'Add highlight to notes…');
+      const creation = menu(f.view, 'Notes…');
       await entered.promise;
       // Palette availability checks and in-article scrolling do not cancel completion.
       for (const id of ['move', 'topics', 'open-markdown'])
@@ -964,7 +963,7 @@ describe('Nodes v2 linked creation', () => {
       await release.promise;
     });
     await entered.promise;
-    const creation = menu(f.view, 'Add highlight to notes…'),
+    const creation = menu(f.view, 'Notes…'),
       navigation = f.view.readingList();
     release.resolve();
     await busy;
@@ -989,7 +988,7 @@ describe('Nodes v2 linked creation', () => {
         if (kind === 'reject') throw rejection;
         return null;
       };
-      const creation = menu(f.view, 'Add highlight to notes…');
+      const creation = menu(f.view, 'Notes…');
       if (kind === 'reject') await expect(creation).rejects.toBe(rejection);
       else await creation;
       expect((await f.store.read(f.article.path)).body).toBe(f.linkedBody);
@@ -1010,7 +1009,7 @@ describe('Nodes v2 linked creation', () => {
         late = link;
         return result === 'null' ? null : f.node;
       };
-      await menu(f.view, 'Add highlight to notes…');
+      await menu(f.view, 'Notes…');
       await expect(late(f.node)).rejects.toThrow('request has finished');
       expect((await f.store.read(f.article.path)).body).toBe('==words==');
       expect(annotate).not.toHaveBeenCalled();
@@ -1037,7 +1036,7 @@ describe('Nodes v2 linked creation', () => {
       await entered.promise;
       return null;
     };
-    const creation = menu(f.view, 'Add highlight to notes…');
+    const creation = menu(f.view, 'Notes…');
     const rejectedCreation = expect(creation).rejects.toThrow('request has finished');
     await entered.promise;
     // Reader observes the premature return but drains its dispatched write before
@@ -1060,7 +1059,7 @@ describe('Nodes v2 linked creation', () => {
       await link(f.node);
       return f.node;
     };
-    await expect(menu(f.view, 'Add highlight to notes…')).rejects.toThrow('callback already ran');
+    await expect(menu(f.view, 'Notes…')).rejects.toThrow('callback already ran');
     expect(annotate).toHaveBeenCalledOnce();
     expect((await f.store.read(f.article.path)).body).toBe(f.linkedBody);
     expect(f.vault.file(f.target.path)).toBe(f.target);
@@ -1107,7 +1106,7 @@ describe('Nodes v2 linked creation', () => {
         completion();
         return f.node;
       };
-      await expect(menu(f.view, 'Add highlight to notes…')).rejects.toThrow();
+      await expect(menu(f.view, 'Notes…')).rejects.toThrow();
       expect(completion).not.toHaveBeenCalled();
       expect(f.api.createNode).not.toHaveBeenCalled();
       expect((await f.store.read(f.article.path)).body).toBe(
@@ -1133,7 +1132,7 @@ describe('Nodes v2 linked creation', () => {
       completion();
       return f.node;
     };
-    await expect(menu(f.view, 'Add highlight to notes…')).rejects.toThrow(
+    await expect(menu(f.view, 'Notes…')).rejects.toThrow(
       /source annotation was saved.*quotation was not filed/,
     );
     expect(completion).not.toHaveBeenCalled();
@@ -1152,7 +1151,7 @@ describe('Nodes v2 linked creation', () => {
       await link(f.node);
       return f.node;
     };
-    const creation = menu(f.view, 'Add highlight to notes…');
+    const creation = menu(f.view, 'Notes…');
     await entered.promise;
     f.probe.persistPosition('words');
     await f.probe.positionWrite;
@@ -1182,7 +1181,7 @@ describe('Nodes v2 linked creation', () => {
       if (mode === 'standalone') {
         // Linked creation is optional for choosing an existing typed destination.
         mocks.highlightPicker.mockResolvedValue({ kind: 'existing', node: f.node });
-        await menu(f.view, 'Add highlight to notes…');
+        await menu(f.view, 'Notes…');
         expected = expectedHosted(original, f.target.path);
         const blockId = paragraphAnchors(expected)[0].blockId;
         targetExpected = appendQuotation(
@@ -1193,9 +1192,7 @@ describe('Nodes v2 linked creation', () => {
         expect((await f.store.read(f.article.path)).body).toBe(expected);
         expect(await f.vault.read(f.target)).toBe(targetExpected);
         mocks.highlightPicker.mockResolvedValue({ kind: 'create', title: 'legacy', type: 'topic' });
-        await expect(menu(f.view, 'Add highlight to notes…')).rejects.toThrow(
-          'createNodeForLink support',
-        );
+        await expect(menu(f.view, 'Notes…')).rejects.toThrow('createNodeForLink support');
       } else {
         f.probe.surface.selectionValue = { quote: 'new words', before: 'legacy and ', after: '' };
         await expect(f.probe.saveSelection()).rejects.toThrow(/Fileclass Inline.*v2/);
@@ -1417,7 +1414,7 @@ describe('Reader web-link capture', () => {
       return file;
     });
     f.host.ingestion.acquire.mockClear();
-    const save = f.save(new AbortController().signal).catch((error) => error);
+    const save = f.save(new AbortController().signal).catch((error: unknown) => error);
     await entered.promise;
     await f.view.readingList();
     release.resolve();

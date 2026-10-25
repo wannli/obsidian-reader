@@ -232,7 +232,7 @@ describe('commit-time annotation targets', () => {
       started.resolve();
       await finish.promise;
     });
-    const linking = menu(f.view, 'Add highlight to notes…');
+    const linking = menu(f.view, 'Notes…');
     await started.promise;
     f.probe.persistPosition('words');
     await f.probe.positionWrite;
@@ -253,9 +253,7 @@ describe('commit-time annotation targets', () => {
       f.vault.files.set(target.path, { path: target.path });
       return original(file, transform);
     });
-    await expect(menu(f.view, 'Add highlight to notes…')).rejects.toThrow(
-      'typed destination changed',
-    );
+    await expect(menu(f.view, 'Notes…')).rejects.toThrow('typed destination changed');
     expect((await f.store.read(article.path)).body).toBe('==words==');
   });
 
@@ -293,7 +291,7 @@ describe('commit-time annotation targets', () => {
         else f.vault.files.set(target.path, { path: target.path });
         return original(file, transform);
       });
-      await expect(menu(f.view, 'Add highlight to notes…')).rejects.toThrow(
+      await expect(menu(f.view, 'Notes…')).rejects.toThrow(
         /Fileclass Inline changed|typed destination changed/,
       );
       expect(api.pickNodeForLink).not.toHaveBeenCalled();
@@ -384,9 +382,7 @@ describe('commit-time annotation targets', () => {
       f.vault.files.delete(target.path);
       return raw;
     });
-    await expect(menu(f.view, 'Add highlight to notes…')).rejects.toThrow(
-      'typed destination changed',
-    );
+    await expect(menu(f.view, 'Notes…')).rejects.toThrow('typed destination changed');
     expect(article.path).toBe('Reading/Stream/A.md');
     expect((await f.store.read(article.path)).properties.status).toBe('later');
     expect((await f.store.read(article.path)).body).toBe('==words==');

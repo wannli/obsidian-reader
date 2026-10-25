@@ -503,7 +503,7 @@ function expectedPassageActions({ linked = false, provider = true, undo = false 
   return [
     ...(linked ? ['Open note'] : []),
     ...(provider
-      ? ['Add highlight to notes…', 'Convert to note link…']
+      ? ['Notes…', 'Convert to note link…']
       : [
           'Add highlight to notes… (requires Fileclass Inline v2)',
           'Convert to note link… (requires Fileclass Inline v2)',
@@ -555,7 +555,7 @@ function menu(view: ReaderView, title: string) {
       kind: 'pick-in-article',
       nodes: probe.typedDestinations(passage.hosts ?? []),
     });
-    passageButton(view, 'Add highlight to notes…').click();
+    passageButton(view, 'Notes…').click();
   } else passageButton(view, title).click();
   return probe.operations as Promise<void>;
 }

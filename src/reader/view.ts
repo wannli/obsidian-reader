@@ -1756,6 +1756,7 @@ export class ReaderView extends ItemView {
             '',
             {
               title: 'Related notes',
+              description: 'One selected note receives new highlights automatically.',
               tone: 'neutral',
               multiple: true,
               selectedPaths,
@@ -1933,6 +1934,7 @@ export class ReaderView extends ItemView {
       directNodes?: NodeResult[];
       includeNodes?: NodeResult[];
       title?: string;
+      description?: string;
       multiple?: boolean;
       selectedPaths?: string[];
       minSelection?: number;
@@ -2126,6 +2128,11 @@ export class ReaderView extends ItemView {
             fixedChoice ??
               chooseHighlightHost(this.app, api, {
                 title: options.title ?? 'Add highlight to notes',
+                description:
+                  options.description ??
+                  (options.selectedPaths
+                    ? 'Removing a note also removes its unchanged collected quotation.'
+                    : undefined),
                 query: title,
                 preferredPaths: preferred.map((node) => node.path),
                 multiple: options.multiple !== false,
@@ -2274,23 +2281,7 @@ export class ReaderView extends ItemView {
           );
         this.sendToNodes(nodes);
       } else {
-        const source = this.snapshot;
-        if (!source) throw new Error('The article is no longer open.');
-        this.assertDisplayed(source);
-        const index = reference?.getAttribute('data-reader-passage');
-        const passage =
-          index && /^\d+$/.test(index) ? this.passages(source.body)[Number(index)] : undefined;
-        if (!passage)
-          throw new Error(
-            'This reference cannot be matched safely to a highlight. Open Markdown to edit it.',
-          );
-        this.passageMenu(passage, event);
-        const edit = this.passageActions?.find((action) => action.id === 'link-note');
-        if (!edit || edit.disabled)
-          throw new Error(
-            'Editing highlight destinations requires Fileclass Inline public Nodes API v2.',
-          );
-        void Promise.resolve(edit.run()).catch((error) => this.error(error));
+        void this.openLinked(target).catch((error) => this.error(error));
       }
     } catch (error) {
       this.error(error);
@@ -2828,9 +2819,7 @@ export class ReaderView extends ItemView {
     const pick = (mode: 'highlight' | 'mention', epoch: number) =>
       this.editPassage(snapshot, passage, mode, epoch, intent);
     if (api) {
-      action('link-note', 'Add highlight to notes…', 'highlighter', (epoch) =>
-        pick('highlight', epoch),
-      );
+      action('link-note', 'Notes…', 'highlighter', (epoch) => pick('highlight', epoch));
       action('convert-node', 'Convert to note link…', 'file-symlink', (epoch) =>
         pick('mention', epoch),
       );

@@ -201,7 +201,7 @@ describe('bounded Reader UI', () => {
         'Trash article and advance',
         'List',
         'Highlight mode',
-        'Create node',
+        'Link or create note',
       ]);
       expect(setTooltip).toHaveBeenCalledWith(buttons[0], 'Related notes (T)');
       expect(setTooltip).toHaveBeenCalledWith(
@@ -210,7 +210,7 @@ describe('bounded Reader UI', () => {
       );
       expect(buttons.every((button) => !button.hasAttribute('title'))).toBe(true);
       expect(setTooltip).toHaveBeenCalledWith(buttons[4], 'Highlight mode (H)');
-      expect(setTooltip).toHaveBeenCalledWith(buttons[5], 'Create node (C)');
+      expect(setTooltip).toHaveBeenCalledWith(buttons[5], 'Link or create note (C)');
       expect(setTooltip).toHaveBeenCalledWith(
         f.probe.surface.title,
         'J/K: next/previous article · Space: page · D/U: half-page · gg/G: top/bottom · Q: list · ?: shortcuts',

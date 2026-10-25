@@ -396,7 +396,7 @@ describe('public reading-list command and URI', () => {
         return new Promise(() => {});
       };
       mocks.highlightPicker.mockResolvedValue({ kind: 'create', title: 'words', type: 'topic' });
-      const creating = menu(f.view, 'Add highlight to notes…');
+      const creating = menu(f.view, 'Notes…');
       await entered.promise;
       invoke(route);
       expect(requestSignal.aborted).toBe(true);
