@@ -33,6 +33,8 @@ Each destination is an ordinary Fileclass-typed note. Collect a self-contained s
 
 ## Reader interaction
 
+Native text selection is copy-only: it never creates a highlight, opens a picker or saves on navigation. Use Highlight mode (H) and first/last-word, Sentence or Paragraph controls to annotate.
+
 All destinations for one highlight share a single pill using Obsidian’s native tag sizing, padding, radius and theme tokens. Each destination retains its own Fileclass icon/name and independent link; no generic marker is rendered. The ordinary `(※ …)` citation grammar remains unchanged in Markdown. They remain note-reference links, not tag-search controls; they do not enlarge paragraph line boxes or add invisible hit areas over adjacent prose. Floating actions and picker rows retain ≥44px targets. All links to publicly recognized Fileclass notes keep their resolved node icon, falling back only to a matching registered class icon. Icons and reference labels are decoration, not quotation text. Publisher links and untyped notes keep their normal presentation. No raw-YAML class inference or private Fileclass icon lookup.
 
 - One main action, **Add highlight to notes…**, opens initially empty full-width search, never preset to the highlighted quotation, and quiet native-style suggestion rows with checked multiselection, compact icons and visibly separated title/type metadata. No existing/create mode switch, selected-details panel or **Link** confirmation. Choose several notes, then apply once.

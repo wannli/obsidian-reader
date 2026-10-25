@@ -202,8 +202,7 @@ describe('hosted highlight UI integration', () => {
       range.selectNodeContents(root.querySelector('p')!);
       document.getSelection()!.removeAllRanges();
       document.getSelection()!.addRange(range);
-      document.dispatchEvent(new Event('selectionchange'));
-      await vi.advanceTimersByTimeAsync(1000);
+      void f.probe.operation(() => f.probe.saveSelection()).catch(() => {});
     }
     await expect(f.probe.operations).rejects.toThrow(/source annotation was saved/i);
     await f.probe.positionWrite;
@@ -1569,21 +1568,21 @@ describe('hosted highlight UI integration', () => {
     await leaving;
     expect(mocks.highlightPicker).not.toHaveBeenCalled();
   });
-  it('captures and drains a sole-default native selection on normal close even after the native range disappears', async () => {
+  it('leaves native selection unannotated on close', async () => {
     const f = await fixture({ defaults: [0] });
     f.probe.surface.selectionValue = { quote: 'first words', before: 'Before ', after: ' after.' };
     const closing = f.view.onClose();
     f.probe.surface.selectionValue = undefined;
     await closing;
-    expect(passages((await f.store.read(f.article.path)).body)[0].hosts).toEqual(['Nodes/Concept']);
-    expect(await f.vault.read(f.targets[0])).toContain('> first words');
+    expect(passages((await f.store.read(f.article.path)).body)).toEqual([]);
+    expect(await f.vault.read(f.targets[0])).not.toContain('> first words');
     expect(mocks.highlightPicker).not.toHaveBeenCalled();
   });
-  it('finishes a sole-default pending native selection before navigation without starting a picker', async () => {
+  it('leaves native selection unannotated on navigation', async () => {
     const f = await fixture({ defaults: [1] });
     f.probe.surface.selectionValue = { quote: 'first words', before: 'Before ', after: ' after.' };
     await f.view.readingList();
-    expect(passages((await f.store.read(f.article.path)).body)[0].hosts).toEqual(['Nodes/Project']);
+    expect(passages((await f.store.read(f.article.path)).body)).toEqual([]);
     expect(f.probe.snapshot).toBeUndefined();
     expect(mocks.highlightPicker).not.toHaveBeenCalled();
   });

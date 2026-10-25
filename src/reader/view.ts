@@ -10,13 +10,7 @@ import {
   type ViewStateResult,
   type WorkspaceLeaf,
 } from 'obsidian';
-import {
-  changePassage,
-  locateSelection,
-  passages,
-  UnmappableSelection,
-  type Passage,
-} from '../core/annotations';
+import { changePassage, locateSelection, passages, type Passage } from '../core/annotations';
 import { ReadingQueue } from '../core/catalog';
 import { matchesTopicArticle, type TopicFilter } from '../core/topic-filter';
 import { chooseTopicFilter } from '../host/topic-filter-dialog';
@@ -50,7 +44,7 @@ import { chooseHighlightHost } from '../host/highlight-picker';
 import { hasNodeClass } from '../core/node-choices';
 import type { LibraryChange } from '../host/vault';
 import { ReadingSurface } from './surface';
-import { selectedPassage, selectionRange } from './render';
+import { selectedPassage } from './render';
 import { TapHighlighter, type TapToolbarAction } from './tap-highlighter';
 
 export const READER_VIEW = 'obsidian-reader';
@@ -129,9 +123,6 @@ export class ReaderView extends ItemView {
   private loadingPath?: string;
   private listFrame?: number;
   private selectionState = new SelectionCoordinator();
-  private get selecting(): boolean {
-    return this.selectionState.selecting;
-  }
   private dialog = false;
   private automatic?: Passage;
   private lastSelection = '';
@@ -242,9 +233,6 @@ export class ReaderView extends ItemView {
   onClose(): Promise<void> {
     if (this.lifetime.signal.aborted) return Promise.resolve();
     if (this.closing) return this.closing;
-    const selection = this.surface?.selection(),
-      body = this.surface?.displayedBody;
-    const pending = selection && body !== undefined ? { selection, body } : undefined;
     this.stopping = true;
     this.articleLifetime.abort();
     if (this.listFrame !== undefined) cancelAnimationFrame(this.listFrame);
@@ -256,7 +244,7 @@ export class ReaderView extends ItemView {
         if (!this.host.signal.aborted) {
           this.selectionState.selecting = false;
           this.dialog = false;
-          await this.prepareToLeave(pending);
+          await this.prepareToLeave();
         }
       } catch (error) {
         this.error(error);
@@ -1121,91 +1109,9 @@ export class ReaderView extends ItemView {
     return this.selectionState.invalidate();
   }
   private selectionChanged(): void {
-    if (this.stopping || this.host.signal.aborted || this.dialog) return;
-    const revision = this.invalidateSelection();
-    if (this.tapMode) return;
-    const range = this.surface && selectionRange(this.surface.body);
-    if (!range) {
-      this.automatic = undefined;
-      this.lastSelection = '';
-      this.surface?.refresh();
-      return;
-    }
-    const surface = this.surface,
-      source = this.snapshot,
-      generation = this.generation;
-    if (
-      !this.selecting &&
-      !this.dialog &&
-      surface &&
-      !surface.pointerActive &&
-      source &&
-      surface.displayedBody !== undefined
-    ) {
-      // Keep live events cheap: materialize quote/context only after the quiet period.
-      // Copy endpoints, not a live Range (whose boundaries can follow DOM mutations).
-      const start = range.startContainer,
-        startOffset = range.startOffset,
-        end = range.endContainer,
-        endOffset = range.endOffset,
-        body = surface.displayedBody;
-      const currentRange = () => {
-        const live = selectionRange(surface.body);
-        return (
-          live?.startContainer === start &&
-          live.startOffset === startOffset &&
-          live.endContainer === end &&
-          live.endOffset === endOffset
-        );
-      };
-      const active = (hosted = false) => {
-        return !(
-          this.stopping ||
-          this.selecting ||
-          surface.pointerActive ||
-          (this.dialog && !hosted) ||
-          this.selectionState.revision !== revision ||
-          this.surface !== surface ||
-          !this.current(source, generation) ||
-          surface.displayedBody !== body ||
-          !this.acceptsSource(this.snapshot!, body, true)
-        );
-      };
-      let pending: PendingSelection;
-      const valid = (hosted = false) => {
-        if (!active(hosted)) return false;
-        // A destination modal owns focus/Selection. Its captured source words stay
-        // immutable; modal text selection must not invalidate that source intent.
-        if (hosted && this.dialog) return true;
-        if (!currentRange()) return false;
-        // Native selectionchange can itself be queued: check the current text too.
-        const live = surface.selection();
-        return (
-          live?.quote === pending.selection.quote &&
-          live.before === pending.selection.before &&
-          live.after === pending.selection.after
-        );
-      };
-      // Require 900ms of quiet after the last adjustment/release; never
-      // write while a pointer is held. Tokens still guard every asynchronous boundary.
-      this.selectionState.schedule(() => {
-        if (!active() || !currentRange()) return;
-        const selection = surface.selection();
-        if (!selection) return;
-        // Immutable text/source snapshot is captured before entering any async queue.
-        pending = {
-          selection: { quote: selection.quote, before: selection.before, after: selection.after },
-          body,
-        };
-        void this.operation(async () => {
-          try {
-            await this.saveSelection(pending, valid);
-          } catch (error) {
-            if (!(error instanceof UnmappableSelection)) throw error;
-          }
-        }).catch((error) => this.error(error));
-      }, 900);
-    }
+    // Native selection is for copying. Only explicit tap mode creates annotations.
+    this.invalidateSelection();
+    if (!this.containerEl.ownerDocument.getSelection()?.toString()) this.surface?.refresh();
   }
   private async saveSelection(
     pending?: PendingSelection,
@@ -1214,12 +1120,7 @@ export class ReaderView extends ItemView {
   ): Promise<void> {
     await this.positionWrite;
     const closing = leaving && this.stopping && !!pending && !this.host.signal.aborted;
-    if (
-      this.tapMode ||
-      ((this.stopping || this.articleLifetime.signal.aborted) && !closing) ||
-      !valid()
-    )
-      return;
+    if (((this.stopping || this.articleLifetime.signal.aborted) && !closing) || !valid()) return;
     const selection = pending?.selection ?? this.surface?.selection(),
       snapshot = this.snapshot;
     if (
@@ -1420,51 +1321,23 @@ export class ReaderView extends ItemView {
         throw new Error('The article changed. Tap the first word again.');
       this.assertDisplayed(base);
       locateSelection(base.body, selection.quote, selection.before, selection.after);
-      let edit: HostedHighlight | undefined;
-      const promise = this.withHighlightHost(
-        base,
-        '',
-        { inherit: true },
-        async (source, nodes, createdPaths, validate, authorize) => {
-          const guard = () => {
-            if (signal.aborted || this.stopping || !this.current(base, generation))
-              throw new Error('The article changed before the highlight could be saved.');
-            this.assertDisplayed(source);
-            validate();
-          };
-          guard();
-          edit = hostSelection(
-            source.body,
-            selection,
-            nodes.map((node) => node.path),
-          );
-          try {
-            return await this.collectHosted(source, edit, nodes, createdPaths, guard);
-          } catch (cause) {
-            this.offerCollectionRetry(
-              source,
-              edit,
-              nodes,
-              createdPaths,
-              undefined,
-              cause,
-              authorize,
-            );
-            throw cause;
-          }
-        },
-      );
-      this.writing = promise;
+      this.automatic = undefined;
+      this.lastSelection = '';
+      const promise = (async () => {
+        await this.saveSelection(
+          { selection, body: displayed! },
+          () => !signal.aborted && !this.stopping && this.current(base, generation),
+        );
+        return this.snapshot?.body !== base.body ? this.snapshot : undefined;
+      })();
       try {
         const saved = await promise;
         if (!saved || signal.aborted || !this.current(base, generation) || this.stopping) return;
+        const passage = this.automatic;
         this.automatic = undefined;
         this.lastSelection = '';
         this.ownDeferred = undefined;
         this.clearTapUndo();
-        const passage = edit
-          ? this.passageAfterWrite(edit.body, edit.passage, saved.body)
-          : undefined;
         if (passage) {
           // Source-local Undo retains the paragraph anchor and remembered hosts.
           // Destination quotations are user-owned snapshots and are never reversed.
@@ -1593,12 +1466,15 @@ export class ReaderView extends ItemView {
       })
       .catch((error) => this.error(error));
   }
-  private async prepareToLeave(pending?: PendingSelection): Promise<void> {
+  private async prepareToLeave(): Promise<void> {
     this.selectionState.cancel();
     await this.positionWrite;
-    // Leaving can finish a known sole typed default, but must never start a new
-    // picker after the navigation/close intent has already cancelled modal work.
-    await this.saveSelection(pending, () => true, true);
+    // Leaving never turns a native text selection into an annotation.
+    if (this.snapshot) {
+      const current = await this.host.store.read(this.snapshot.file.path);
+      if (current.body !== this.snapshot.body)
+        throw new Error('Article changed before navigation.');
+    }
     await this.writing;
     this.surface?.flush();
     await this.positionWrite;
