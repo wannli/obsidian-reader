@@ -1071,3 +1071,25 @@ dialog.reader-image-viewer,
   font-size: var(--font-ui-medium);
   margin: 0 0 8px;
 }
+
+/* Short dialogs fit phone and e-ink viewports without opening the keyboard. */
+.modal:has(.reader-compact-dialog) {
+  width: min(440px, calc(100vw - 24px));
+}
+.reader-compact-dialog {
+  max-height: min(65dvh, 480px);
+  overflow-y: auto;
+}
+.reader-compact-dialog input,
+.reader-compact-dialog button,
+.reader-compact-dialog select {
+  min-height: 44px;
+}
+.reader-compact-dialog .reader-topic-filter-options {
+  max-height: min(36dvh, 264px);
+}
+.reader-picker-count {
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+  margin-inline-end: auto;
+}
