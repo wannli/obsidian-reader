@@ -32,6 +32,12 @@ export function showFeeds(
     onOpen(): void {
       this.setTitle('Subscriptions');
       this.modalEl.classList.add('reader-feeds-modal');
+      if (Platform.isMobile)
+        queueMicrotask(() => {
+          if (lifetime.signal.aborted) return;
+          this.contentEl.tabIndex = -1;
+          this.contentEl.focus();
+        });
       this.render();
     }
     private element<K extends keyof HTMLElementTagNameMap>(
@@ -118,7 +124,12 @@ export function showFeeds(
               );
             save.addEventListener('click', () => void commit());
             editor.addEventListener('keydown', (event) => {
-              if (event.key === 'Enter' && !event.isComposing && !event.repeat) {
+              if (
+                event.key === 'Enter' &&
+                (event.target === title || event.target === prefix) &&
+                !event.isComposing &&
+                !event.repeat
+              ) {
                 event.preventDefault();
                 void commit();
               }

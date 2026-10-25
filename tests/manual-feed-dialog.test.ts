@@ -106,3 +106,17 @@ it('retains failed input and shows the error in the same modal', async () => {
   expect(document.querySelector<HTMLInputElement>('input')!.value).toBe('bad');
   expect(document.querySelectorAll('.reader-feeds-modal')).toHaveLength(1);
 });
+
+it('keeps Enter on feed action buttons available to native keyboard activation', async () => {
+  const { ingestion } = fixture();
+  const details = document.querySelector('details')!;
+  details.open = true;
+  details.dispatchEvent(new Event('toggle'));
+  await vi.waitFor(() => expect(button('Pause feed')).toBeDefined());
+  const event = new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true });
+  button('Pause feed').dispatchEvent(event);
+  expect(event.defaultPrevented).toBe(false);
+  expect(ingestion.editFeed).not.toHaveBeenCalled();
+  button('Pause feed').click();
+  await vi.waitFor(() => expect(ingestion.setFeed).toHaveBeenCalledOnce());
+});
