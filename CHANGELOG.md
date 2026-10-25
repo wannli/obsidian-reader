@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.21.0](https://github.com/wannli/obsidian-reader/compare/0.20.0...0.21.0) (2026-10-25)
+
+
+### Added
+
+* **dialogs:** keep capture and filters compact on small screens ([e03d04e](https://github.com/wannli/obsidian-reader/commit/e03d04e138b5ad9790f348bc13722884e9aec61e))
+* **feeds:** add and edit subscriptions in one compact dialog ([05d9806](https://github.com/wannli/obsidian-reader/commit/05d98061b4eb2c96afaee033b9ba24c52d566d3b))
+* **highlights:** require explicit highlight mode ([d84802e](https://github.com/wannli/obsidian-reader/commit/d84802e9a5cfbc40abcfa5e32acf3e07d00c0ef5))
+* **highlights:** undo newly collected quotation copies ([01960a5](https://github.com/wannli/obsidian-reader/commit/01960a54ff1f50ab17378e6b7ef45530e7e179d9))
+* **links:** open websites directly and save from context menu ([60a46d8](https://github.com/wannli/obsidian-reader/commit/60a46d89e6261adac16a927aa27c389358927d65))
+* **notes:** complete creation within the destination dialog ([a8fbb61](https://github.com/wannli/obsidian-reader/commit/a8fbb616c90bfa7400a62b3d14950081aab382a8))
+* **notes:** open references directly and clarify note actions ([1723e9d](https://github.com/wannli/obsidian-reader/commit/1723e9dd80a3048d4218f14e19661dfdc4b087e1))
+* **picker:** compact destination dialogs and add keyboard apply ([4fb0e78](https://github.com/wannli/obsidian-reader/commit/4fb0e787df3cd822ef4798653701d1f0e3ee4614))
+* **settings:** suggest folders directly in input fields ([0d67049](https://github.com/wannli/obsidian-reader/commit/0d670492c6780a589ab7a84d670eda25d0df8f4f))
+* **status:** add direct destination commands ([a40cac5](https://github.com/wannli/obsidian-reader/commit/a40cac539a50a962a145643eb8c288f19ad993b0))
+
+
+### Fixed
+
+* **feeds:** preserve native keyboard actions in inline editor ([13482a4](https://github.com/wannli/obsidian-reader/commit/13482a44ffc967761ad6357610bfd8906b302ef3))
+
 ## [0.20.0](https://github.com/wannli/obsidian-reader/compare/0.19.0...0.20.0) (2026-10-24)
 
 
