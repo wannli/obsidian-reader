@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Reader queue and status — review simulation</title>
+<style>
+  :root { color-scheme: light; --bg:#f5f3ef; --pane:#fff; --ink:#252525; --muted:#696761; --line:#d9d6cf; --hover:#e9e6df; --accent:#524f47; font:15px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
+  * { box-sizing:border-box }
+  body { margin:0; background:var(--bg); color:var(--ink) }
+  button,select { font:inherit; color:inherit }
+  button { cursor:pointer }
+  button:disabled { opacity:.5; cursor:not-allowed }
+  button:focus-visible,select:focus-visible { outline:2px solid var(--ink); outline-offset:2px }
+  .page { max-width:1100px; margin:auto; padding:20px; display:grid; gap:16px; grid-template-columns:minmax(0,1fr) 270px }
+  header,.controls,.notes { grid-column:1/-1 }
+  h1 { font-size:1.35rem; margin:0 0 4px }
+  h2 { font-size:1rem; margin:0 0 12px }
+  p { margin:0 0 10px }
+  .muted,small { color:var(--muted) }
+  .controls,.notes,.panel { background:var(--pane); border:1px solid var(--line); border-radius:8px; padding:14px }
+  .controls { display:flex; flex-wrap:wrap; align-items:center; gap:14px }
+  .controls label { display:flex; align-items:center; gap:7px }
+  select,.plain { border:1px solid var(--line); border-radius:5px; background:var(--pane); min-height:44px; padding:8px 10px }
+  .stage-wrap { display:flex; align-items:flex-start; justify-content:center; min-width:0 }
+  .stage { width:100%; height:560px; background:var(--pane); border:1px solid var(--line); border-radius:8px; position:relative; overflow:hidden; display:flex; flex-direction:column; padding:12px; }
+  .stage.phone { width:375px; max-width:100%; height:650px }
+  .stage.boox { width:460px; max-width:100%; height:650px; filter:grayscale(1) }
+  .reader-head { display:flex; justify-content:space-between; gap:10px; align-items:center; font-size:.85rem; color:var(--muted); border-bottom:1px solid var(--line); padding:2px 3px 10px }
+  .reader-head b { color:var(--ink) }
+  .reading { max-width:620px; width:100%; margin:auto; padding:26px 12px 90px; overflow:auto; flex:1 }
+  .reading h2 { font-size:1.45rem; line-height:1.2; margin:0 0 15px }
+  .reading p { font-family:Georgia,serif; font-size:1.07rem; line-height:1.7; }
+  .source { font-size:.8rem; color:var(--muted); margin-bottom:15px }
+  .toolbar { position:absolute; z-index:2; left:50%; bottom:12px; transform:translateX(-50%); display:flex; gap:4px; padding:4px; background:var(--pane); border:1px solid var(--line); border-radius:6px }
+  .toolbar button { width:44px; height:44px; border:1px solid var(--line); border-radius:4px; background:#f8f7f4; font-size:19px }
+  .toolbar button:hover,.choice:hover,.command:hover { background:var(--hover) }
+  .list { flex:1; overflow:auto; padding:14px 5px 90px }
+  .list button { display:block; width:100%; text-align:left; min-height:44px; border:0; background:none; border-bottom:1px solid var(--line); padding:10px 4px }
+  .overlay { position:absolute; z-index:4; inset:0; background:#0005; display:flex; align-items:flex-start; justify-content:center; padding:60px 12px 12px }
+  .overlay[hidden] { display:none }
+  .dialog { width:min(430px,100%); max-height:100%; overflow:auto; background:var(--pane); border:1px solid var(--line); border-radius:8px; padding:12px; box-shadow:0 5px 24px #0002 }
+  .dialog h2 { margin-bottom:7px }
+  .choice,.command { display:block; width:100%; min-height:44px; text-align:left; padding:10px; border:0; border-bottom:1px solid var(--line); background:var(--pane) }
+  .cancel { margin-top:8px; width:100%; min-height:44px; border:1px solid var(--line); border-radius:4px; background:var(--pane) }
+  .panel { min-width:0 }
+  .panel button { width:100%; margin-bottom:7px; text-align:left }
+  .state { padding:10px; background:var(--bg); border-radius:4px; font-size:.87rem; overflow-wrap:anywhere }
+  .log { min-height:100px; font-size:.85rem; padding-left:20px; margin:8px 0 0 }
+  .log li { margin-bottom:6px }
+  kbd { border:1px solid var(--line); padding:1px 4px; border-radius:3px; background:var(--pane) }
+  .notes { font-size:.87rem }
+  .notes ul { margin:5px 0 0; padding-left:20px }
+  @media(max-width:760px) { .page { display:block; padding:10px } .page>* { margin-bottom:12px } .controls { gap:8px } .stage { height:600px } }
+</style>
+<main class="page">
+  <header><h1>Queue moves and status</h1><p class="muted">Interactive review simulation · synthetic articles · no vault writes or native device proof</p></header>
+  <div class="controls">
+    <label>Behavior <select id="version"><option value="after">Proposed (a40cac5)</option><option value="before">Current 0.21.1</option></select></label>
+    <label>Layout <select id="device"><option value="desktop">Desktop</option><option value="phone">iPhone width</option><option value="boox">Boox width / grayscale</option></select></label>
+    <button class="plain" id="reset">Reset articles and counts</button>
+  </div>
+  <div class="stage-wrap"><section class="stage" id="stage" aria-label="Simulated Reader"><div class="reader-head"><span>READER · <b id="context">Inbox</b></span><span id="viewlabel">Article</span></div><div id="content"></div><div class="toolbar" id="toolbar"></div><div class="overlay" id="overlay" hidden></div></section></div>
+  <aside class="panel"><h2>Try a path</h2><button class="plain" id="palette">Open command palette <kbd>⌘P</kbd></button><button class="plain" id="status">Toolbar status <kbd>S</kbd></button><button class="plain" id="later">Desktop: Later <kbd>L</kbd></button><button class="plain" id="archive">Desktop: Archive <kbd>A</kbd></button><div class="state" id="state"></div><h2 style="margin-top:18px">Action log</h2><ol class="log" id="log"></ol></aside>
+  <section class="notes"><strong>What this models</strong><ul><li>Toolbar status and desktop <kbd>S</kbd>/<kbd>L</kbd>/<kbd>A</kbd> move the article and advance within its original browsing queue; at the end, Reader returns to that list.</li><li>The existing palette “Change article status…” opens a picker and keeps the same article open. The proposal adds direct bindable Inbox/Later/Feed/Archive palette commands that also keep it open.</li><li>Queue is determined by folder, even if YAML disagrees. A Reader move writes YAML status then relocates the note. This demo represents a successful move only; it does not model guarded write failures, acquisition or native modal styling. Counts include the demo palette button, not any extra steps needed to open Obsidian’s palette on a device.</li></ul></section>
+</main>
+<script>
+(() => {
+  const $ = id => document.getElementById(id);
+  const queues = ['Inbox','Later','Feed','Archive'];
+  const articles = [
+    {id:'a',title:'A map of the city at night',excerpt:'A short synthetic article about finding a route through familiar streets.',queue:'Inbox'},
+    {id:'b',title:'The quiet library',excerpt:'Another synthetic article waits next in the original Inbox list.',queue:'Inbox'}
+  ];
+  let current='a', origin=['a','b'], modal=null, count=0, keys=0;
+  const get = () => articles.find(x=>x.id===current);
+  const el = (tag,txt,cls) => { const n=document.createElement(tag); if(txt!==undefined)n.textContent=txt; if(cls)n.className=cls; return n };
+  function log(message,kind='click') { if(kind==='click')count++; else if(kind==='key')keys++; const li=el('li',message); $('log').prepend(li); }
+  function reset() { articles[0].queue='Inbox'; articles[1].queue='Inbox'; current='a'; origin=['a','b']; modal=null; count=keys=0; $('log').replaceChildren(); render(); }
+  function move(destination,advance,kind) {
+    const a=get(); if(!a)return;
+    const title=a.title, from=a.queue;
+    a.queue=destination;
+    if(advance) { const next=origin.slice(origin.indexOf(current)+1).find(id=>articles.some(x=>x.id===id&&x.queue==='Inbox')); current=next||null; }
+    modal=null;
+    log(`${title}: ${from} → ${destination}; ${advance ? (current?'next Inbox article opens':'original Inbox list opens') : 'same article stays open'}.`,kind);
+    render();
+  }
+  function openPicker(advance,kind) { if(!get())return; modal={type:'picker',advance}; log(`Opened ${advance?'toolbar':'palette'} status picker.`,kind); render(); }
+  function palette(kind='click') { if(!get())return; modal={type:'palette'}; log('Opened command palette.',kind); render(); }
+  function chooseCommand(name) { log(`Selected “${name}”.`); if(name==='Change article status…') { modal={type:'picker',advance:false}; render(); } else move(name.match(/to (Inbox|Later|Feed|Archive)/)[1],false,'none'); }
+  function close() { modal=null; render(); }
+  function render() {
+    const version=$('version').value, device=$('device').value, a=get(), content=$('content'), toolbar=$('toolbar'), overlay=$('overlay');
+    $('stage').className='stage '+(device==='desktop'?'':device);
+    $('later').disabled=$('archive').disabled=device!=='desktop';
+    $('context').textContent='Inbox'; $('viewlabel').textContent=a?'Article':'Reading list';
+    content.replaceChildren(); toolbar.replaceChildren();
+    if(a) {
+      const area=el('article',undefined,'reading'); area.append(el('div',`${a.queue} · Synthetic reading article`,'source'),el('h2',a.title),el('p',a.excerpt),el('p','The reader can decide where this article belongs while remaining in the reading flow. Its saved place and text travel with it when the folder changes.'));
+      content.append(area);
+      [['♧','Related notes',()=>{}],['☷','Change article status and advance',()=>openPicker(true,'click')],['⌫','Delete',()=>{}],['≡','List',()=>{current=null;log('Returned to original Inbox list.');render();}],['✎','Tap mode',()=>{}]].forEach(([icon,label,action])=>{const b=el('button',icon);b.type='button';b.title=label;b.setAttribute('aria-label',label);b.onclick=action;toolbar.append(b)});
+    } else {
+      const list=el('div',undefined,'list');list.append(el('h2','Inbox'));
+      articles.filter(x=>x.queue==='Inbox').forEach(x=>{const b=el('button',x.title);b.onclick=()=>{current=x.id;log(`Opened ${x.title}.`);render()};list.append(b)});
+      content.append(list);
+    }
+    $('state').textContent=`Open: ${a?a.title:'Inbox list'} · A: ${articles[0].queue} · B: ${articles[1].queue} · clicks/taps: ${count} · keys: ${keys}`;
+    overlay.hidden=!modal; overlay.replaceChildren();
+    if(modal) {
+      const dialog=el('div',undefined,'dialog');dialog.setAttribute('role','dialog');dialog.setAttribute('aria-modal','true');
+      dialog.append(el('h2',modal.type==='palette'?'Command palette':'Change article status…'));
+      if(modal.type==='palette') {
+        const names=['Change article status…',...(version==='after'?queues.map(q=>`Move article to ${q} (stay here)`):[])];
+        names.forEach(name=>{const b=el('button',name,'command');b.onclick=()=>chooseCommand(name);dialog.append(b)});
+      } else {
+        const choices=version==='after'?queues.filter(q=>q!==a.queue):queues;
+        choices.forEach(q=>{const b=el('button',q,'choice');b.onclick=()=>move(q,modal.advance,'click');dialog.append(b)});
+      }
+      const cancel=el('button','Cancel / Esc','cancel');cancel.onclick=close;dialog.append(cancel);overlay.append(dialog);
+    }
+  }
+  $('version').onchange=reset; $('device').onchange=render; $('reset').onclick=reset;
+  $('palette').onclick=()=>palette(); $('status').onclick=()=>openPicker(true,'click');
+  $('later').onclick=()=>move('Later',true,'click'); $('archive').onclick=()=>move('Archive',true,'click');
+  document.addEventListener('keydown',e=>{
+    if(e.key==='Escape'&&modal){e.preventDefault();close();return}
+    if(['SELECT','INPUT','TEXTAREA'].includes(document.activeElement?.tagName))return;
+    if((e.metaKey||e.ctrlKey)&&e.key.toLowerCase()==='p'){e.preventDefault();palette('key');return}
+    if(modal||$('device').value!=='desktop'||e.repeat||e.altKey||e.ctrlKey||e.metaKey||e.shiftKey)return;
+    const key=e.key.toLowerCase();
+    if(key==='s'){e.preventDefault();openPicker(true,'key')}
+    if(key==='l'){e.preventDefault();move('Later',true,'key')}
+    if(key==='a'){e.preventDefault();move('Archive',true,'key')}
+  });
+  reset();
+})();
+</script>
+</html>
