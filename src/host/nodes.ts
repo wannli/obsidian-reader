@@ -9,6 +9,7 @@ export interface NodeResult {
 }
 export interface NodesApi {
   readonly version: 2;
+  readonly embeddedCreation?: true;
   listTypes(): { type: string; label: string; icon?: string }[];
   searchNodes(query: string): NodeResult[];
   getNode(path: string): NodeResult | null;
@@ -19,7 +20,13 @@ export interface NodesApi {
     signal?: AbortSignal;
   }): Promise<NodeResult | null>;
   createNodeForLink?(
-    options: { type?: string; suggestedTitle?: string; sourcePath: string; signal?: AbortSignal },
+    options: {
+      type?: string;
+      suggestedTitle?: string;
+      sourcePath: string;
+      signal?: AbortSignal;
+      completionContainer?: HTMLElement;
+    },
     link: (node: NodeResult) => Promise<void>,
   ): Promise<NodeResult | null>;
   pickNodeForLink?(

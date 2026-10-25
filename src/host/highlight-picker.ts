@@ -12,11 +12,18 @@ export type HighlightHostChoice =
   | { kind: 'existing'; node: NodeResult }
   | { kind: 'existing-many'; nodes: NodeResult[] }
   | { kind: 'pick-in-article'; nodes: NodeResult[] }
-  | { kind: 'create'; title: string; type: string; existingNodes?: NodeResult[] };
+  | {
+      kind: 'create';
+      title: string;
+      type: string;
+      existingNodes?: NodeResult[];
+      completion?: { container: HTMLElement; signal: AbortSignal; close(): void };
+    };
 
 export interface HighlightHostPickerOptions {
   title?: string;
   description?: string;
+  keepCreationOpen?: boolean;
   query?: string;
   preferredPaths?: readonly string[];
   signal?: AbortSignal;
@@ -66,12 +73,29 @@ export function chooseHighlightHost(
   const action = actionLabel.charAt(0).toLocaleLowerCase() + actionLabel.slice(1);
   return new Promise((resolve) => {
     let settled = false;
+    const creationLifetime = new AbortController();
     const active = () => !settled && !options.signal?.aborted;
     const finish = (choice: HighlightHostChoice | null) => {
       if (settled || (choice && !active())) return;
       settled = true;
-      resolve(choice);
-      modal.close();
+      if (choice?.kind === 'create' && options.keepCreationOpen) {
+        modal.contentEl.replaceChildren();
+        modal.contentEl.classList.add('reader-creation-fields');
+        append(modal.contentEl, 'p', 'reader-picker-description', 'Creating note…');
+        const cancel = append(modal.contentEl, 'button', '', 'Cancel');
+        cancel.addEventListener('click', () => modal.close());
+        resolve({
+          ...choice,
+          completion: {
+            container: modal.contentEl,
+            signal: creationLifetime.signal,
+            close: () => modal.close(),
+          },
+        });
+      } else {
+        resolve(choice);
+        modal.close();
+      }
     };
     class HighlightHostDialog extends Modal {
       onOpen(): void {
@@ -105,6 +129,8 @@ export function chooseHighlightHost(
         const message = append(this.contentEl, 'div', 'reader-highlight-picker-message');
         message.setAttribute('role', 'alert');
         const footer = append(this.contentEl, 'div', 'reader-highlight-picker-footer');
+        const count = multiple ? append(footer, 'span', 'reader-picker-count') : undefined;
+        if (count) count.setAttribute('aria-live', 'polite');
         const cancel = append(footer, 'button', '', 'Cancel');
         const retry = append(footer, 'button', '', 'Retry');
         const fromArticle =
@@ -145,6 +171,7 @@ export function chooseHighlightHost(
           setIcon(element, name);
         };
         const updateFooter = () => {
+          if (count) count.textContent = `${selected.size} selected`;
           if (fromArticle) fromArticle.disabled = hasError || !initialized;
           if (confirm) {
             confirm.disabled = hasError || !initialized || selected.size < minimum;
@@ -579,6 +606,7 @@ export function chooseHighlightHost(
         }
       }
       onClose(): void {
+        creationLifetime.abort();
         options.signal?.removeEventListener('abort', abort);
         this.contentEl.replaceChildren();
         if (!settled) {
@@ -588,7 +616,10 @@ export function chooseHighlightHost(
       }
     }
     const modal = new HighlightHostDialog(app);
-    const abort = () => finish(null);
+    const abort = () => {
+      if (settled) modal.close();
+      else finish(null);
+    };
     options.signal?.addEventListener('abort', abort, { once: true });
     if (options.signal?.aborted) finish(null);
     else modal.open();

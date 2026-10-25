@@ -451,7 +451,7 @@ describe('hosted highlight UI integration', () => {
     expect(await f.vault.read(f.targets[0])).toBe(copy);
     expect(await f.vault.read(f.targets[1])).not.toContain('> first words');
   });
-  it('links a created related note before completion but keeps other edits staged when Cancel follows', async () => {
+  it('applies checked related notes together with creation without a second picker', async () => {
     const f = await fixture({ defaults: [0] }),
       entered = gate(),
       release = gate();
@@ -481,23 +481,15 @@ describe('hosted highlight UI integration', () => {
     const pending = f.probe.topics();
     await entered.promise;
     expect((await f.store.read(f.article.path)).properties.topics).toEqual([
-      '[[Nodes/Concept]]',
+      '[[Nodes/Project.md]]',
       '[[Nodes/New.md]]',
     ]);
     expect(await f.vault.read(file)).toContain('New authored note.');
     release.resolve();
     await pending;
-    expect(mocks.highlightPicker).toHaveBeenLastCalledWith(
-      f.app,
-      f.api,
-      expect.objectContaining({
-        selectedPaths: ['Nodes/Project.md', 'Nodes/New.md'],
-        allowCreate: false,
-        actionLabel: 'Apply',
-      }),
-    );
+    expect(mocks.highlightPicker).toHaveBeenCalledOnce();
     expect((await f.store.read(f.article.path)).properties.topics).toEqual([
-      '[[Nodes/Concept]]',
+      '[[Nodes/Project.md]]',
       '[[Nodes/New.md]]',
     ]);
     expect(f.vault.trashed).toEqual([]);
@@ -880,7 +872,7 @@ describe('hosted highlight UI integration', () => {
         ),
       );
       expect((await f.store.read(f.article.path)).raw).toBe(before.raw);
-      expect(mocks.highlightPicker).toHaveBeenCalledTimes(2);
+      expect(mocks.highlightPicker).toHaveBeenCalledTimes(1);
       expect(f.api.createNodeForLink).not.toHaveBeenCalled();
     },
   );
@@ -1533,8 +1525,9 @@ describe('hosted highlight UI integration', () => {
     expect(mocks.highlightPicker).toHaveBeenLastCalledWith(
       f.app,
       f.api,
-      expect.objectContaining({ selectedPaths: [f.nodes[0].path] }),
+      expect.objectContaining({ selectedPaths: [] }),
     );
+    expect(mocks.highlightPicker).toHaveBeenCalledTimes(1);
     expect((await f.store.read(f.article.path)).raw).toBe(original.raw);
   });
   it('does not revive a queued picker after a newer explicit navigation intent', async () => {

@@ -1048,3 +1048,26 @@ dialog.reader-image-viewer,
   overflow-wrap: anywhere;
 }
 
+.reader-highlight-picker.reader-creation-fields {
+  display: block;
+  overflow-y: auto;
+  max-height: min(65dvh, 480px);
+}
+.reader-creation-fields .setting-item {
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.reader-creation-fields .setting-item-control {
+  flex-wrap: wrap;
+  max-width: 100%;
+}
+.reader-creation-fields input,
+.reader-creation-fields select,
+.reader-creation-fields button {
+  min-height: 44px;
+  max-width: 100%;
+}
+.reader-creation-fields h2 {
+  font-size: var(--font-ui-medium);
+  margin: 0 0 8px;
+}

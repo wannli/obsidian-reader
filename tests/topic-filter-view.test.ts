@@ -558,6 +558,7 @@ describe('topic-filter view integration', () => {
     const node = { path: topic.path, title: 'Old', type: 'topic', classes: ['topic'], aliases: [] };
     const api = {
       version: 2,
+      embeddedCreation: true,
       listTypes: vi.fn(() => [{ type: 'topic', label: 'Topic' }]),
       searchNodes: vi.fn(() => [node]),
       getNode: vi.fn((path: string) => (path === topic.path ? node : null)),

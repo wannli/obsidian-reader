@@ -1732,8 +1732,7 @@ export class ReaderView extends ItemView {
         throw new Error(
           'Editing related notes requires Fileclass Inline public Nodes API v2. Existing topic filters remain available.',
         );
-      let selectedPaths = this.relatedNodes(snapshot, api).map((node) => node.path);
-      let createdOnce = false;
+      const selectedPaths = this.relatedNodes(snapshot, api).map((node) => node.path);
       const alive = () =>
         !signal.aborted &&
         !this.lifetime.signal.aborted &&
@@ -1743,13 +1742,11 @@ export class ReaderView extends ItemView {
         this.current(snapshot, generation) &&
         this.snapshot?.body === snapshot.body;
       const active = () => alive() && nodesApi(this.app) === api;
-      while (active()) {
+      if (active()) {
         const base = this.snapshot!,
           originals = this.relatedNodes(base, api),
           baseline = originals.map((node) => node.path),
           validateOriginals = this.nodeAuthority(api, originals);
-        let created = false,
-          attempted = false;
         try {
           await this.withHighlightHost(
             base,
@@ -1762,19 +1759,11 @@ export class ReaderView extends ItemView {
               selectedPaths,
               minSelection: 0,
               actionLabel: 'Apply',
-              allowCreate: !createdOnce,
+              allowCreate: true,
               allowDeferred: true,
               epoch,
-              onSelected: (nodes) => {
-                selectedPaths = nodes.map((node) => node.path);
-              },
-              onCreateAttempt: (nodes) => {
-                createdOnce = true;
-                attempted = true;
-                selectedPaths = nodes.map((node) => node.path);
-              },
             },
-            async (source, nodes, createdPaths, validate) => {
+            async (source, nodes, _createdPaths, validate) => {
               const guard = () => {
                 if (!active()) throw new Error('The article changed. Reopen Related notes.');
                 this.assertDisplayed(source, true);
@@ -1782,11 +1771,8 @@ export class ReaderView extends ItemView {
                 validateOriginals();
               };
               guard();
-              // Only the created note's link is durable before completion. Other
-              // checked/unchecked choices remain a draft until an explicit Apply.
-              const paths = createdPaths.length
-                ? [...new Set([...baseline, ...createdPaths])]
-                : nodes.map((node) => node.path);
+              // Create is also the explicit apply action for all checked defaults.
+              const paths = nodes.map((node) => node.path);
               const saved = await this.host.store.setRelatedNodes(source, paths, baseline, guard);
               if (this.current(snapshot, generation) && !this.stopping) {
                 this.adoptSnapshot(saved);
@@ -1797,34 +1783,11 @@ export class ReaderView extends ItemView {
                   this.surface?.setBody(saved.body, text(saved.properties.url));
                 this.controls();
               }
-              created = createdPaths.length > 0;
               return saved;
             },
           );
-          if (!created && !attempted) return;
         } catch (cause) {
-          if (!alive()) return;
-          this.error(cause);
-          if (!active()) return;
-        }
-        await this.positionWrite;
-        if (!active()) return;
-        // Reopen after any settled creation attempt, including provider Cancel,
-        // null-without-callback, or failure. Keep the draft, never auto-retry a
-        // write, adopt arbitrary bytes, or allow a second creation attempt.
-        const known = this.snapshot;
-        if (!known || !this.acceptsSource(known, this.surface?.displayedBody, true)) return;
-        try {
-          const current = await this.host.store.read(known.path);
-          if (
-            !active() ||
-            this.snapshot !== known ||
-            current.file !== known.file ||
-            current.raw !== known.raw
-          )
-            return;
-        } catch {
-          return;
+          if (alive()) this.error(cause);
         }
       }
     });
@@ -2001,6 +1964,7 @@ export class ReaderView extends ItemView {
     let accepting = true,
       attempted = false;
     let saved: Snapshot<TFile> | undefined, pendingLink: Promise<void> | undefined;
+    let completion: { container: HTMLElement; signal: AbortSignal; close(): void } | undefined;
     const check = () => {
       if (!accepting)
         throw new Error(
@@ -2140,7 +2104,8 @@ export class ReaderView extends ItemView {
                 minSelection: minimum,
                 actionLabel: options.actionLabel ?? 'Add highlight',
                 tone: options.tone ?? 'highlight',
-                allowCreate: options.allowCreate,
+                allowCreate: options.allowCreate !== false && api.embeddedCreation === true,
+                keepCreationOpen: api.embeddedCreation === true,
                 allowPickFromArticle: !!options.onPickFromArticle,
                 signal: request.controller.signal,
               }),
@@ -2163,6 +2128,11 @@ export class ReaderView extends ItemView {
           );
         if (!types.some(({ type }) => type === choice.type))
           throw new Error('The chosen Fileclass is no longer available.');
+        completion = choice.completion;
+        if (completion) {
+          if (completion.signal.aborted) return;
+          completion.signal.addEventListener('abort', abort, { once: true });
+        }
         const existing = selection(choice.existingNodes ?? []).selected;
         options.onCreateAttempt?.(existing);
         // The single-use durable callback precedes required completion. Never
@@ -2172,6 +2142,7 @@ export class ReaderView extends ItemView {
             {
               type: choice.type,
               suggestedTitle: choice.title,
+              ...(completion ? { completionContainer: completion.container } : {}),
               sourcePath: request.source.path,
               signal: request.controller.signal,
             },
@@ -2187,6 +2158,8 @@ export class ReaderView extends ItemView {
       return saved;
     } finally {
       accepting = false;
+      completion?.signal.removeEventListener('abort', abort);
+      completion?.close();
       signal.removeEventListener('abort', abort);
       this.host.signal.removeEventListener('abort', abort);
       request.controller.signal.removeEventListener('abort', settleCancellation);

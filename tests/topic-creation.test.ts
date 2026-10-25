@@ -16,6 +16,7 @@ afterAll(() => dom.teardown(globalThis));
 const notices = vi.hoisted(() => [] as string[]);
 vi.mock('../src/reader/surface', () => ({ ReadingSurface: class {} }));
 vi.mock('obsidian', () => ({
+  Platform: { isMobile: false },
   ItemView: class {
     app: any;
     contentEl = document.createElement('div');
@@ -89,6 +90,8 @@ const button = (label: string) => {
   if (!found) throw new Error(`Missing button: ${label}`);
   return found;
 };
+const dismiss = () =>
+  [...document.querySelectorAll('button')].find((el) => el.textContent === 'Cancel')?.click();
 const rows = () => [
   ...document.querySelectorAll<HTMLButtonElement>('.reader-highlight-picker-result[data-path]'),
 ];
@@ -193,6 +196,7 @@ async function fixture() {
   };
   const api: NodesApi = {
     version: 2,
+    embeddedCreation: true,
     listTypes: () => [{ type: 'topic', label: 'Topic' }],
     searchNodes: (query) =>
       [...publicNodes.values()].filter((entry) =>
@@ -381,14 +385,7 @@ describe('typed related-note assignment', () => {
       expect(await f.vault.read(f.article)).toBe(before);
       expect((await f.saved()).properties.topics).toEqual(['[[Topics/Old.md]]']);
       expect(visibleErrors().some(Boolean)).toBe(true);
-      if (change === 'provider') {
-        // Never offer an old-provider draft as a fresh, authorized selection.
-        expect(document.querySelector('.reader-highlight-picker')).toBeNull();
-      } else {
-        expect(document.querySelector('.reader-highlight-picker')).not.toBeNull();
-        expect(button('Cancel').disabled).toBe(false);
-        button('Cancel').click();
-      }
+      expect(document.querySelector('.reader-highlight-picker')).toBeNull();
       await pending;
     },
   );
@@ -421,7 +418,7 @@ describe('typed related-note assignment', () => {
       await tick();
       expect(await f.vault.read(f.article)).toBe(before);
       expect(visibleErrors().some(Boolean)).toBe(true);
-      button('Cancel').click();
+      dismiss();
       await pending;
     },
   );
@@ -434,7 +431,10 @@ describe('related-note creation and staged draft', () => {
     const modal = document.querySelector('.reader-highlight-picker-modal')!;
     const content = modal.querySelector('.reader-highlight-picker')!;
     expect(modal.querySelector('h2')!.textContent).toBe('Related notes');
-    expect(content.querySelectorAll('p, .setting-item, input[type="radio"]')).toHaveLength(0);
+    expect(content.querySelectorAll('.setting-item, input[type="radio"]')).toHaveLength(0);
+    expect(content.textContent).toContain(
+      'One selected note receives new highlights automatically.',
+    );
     expect(content.querySelectorAll('.reader-highlight-picker-footer')).toHaveLength(1);
     const footer = content.querySelector('.reader-highlight-picker-footer')!;
     expect(
@@ -452,7 +452,7 @@ describe('related-note creation and staged draft', () => {
     expect(create().getAttribute('aria-label')).toContain('Topic');
     expect(content.textContent).not.toContain('Create and link immediately');
     expect(f.api.createNodeForLink).not.toHaveBeenCalled();
-    button('Cancel').click();
+    dismiss();
     await pending;
   });
 
@@ -475,7 +475,7 @@ describe('related-note creation and staged draft', () => {
     expect(checked('Other')).toBe(true);
     expect(document.querySelector('.reader-highlight-picker-selected')).toBeNull();
     expect((await f.saved()).properties.topics).toEqual(['[[Topics/Old.md]]']);
-    button('Cancel').click();
+    dismiss();
     await pending;
     expect(write).not.toHaveBeenCalled();
     expect(await f.vault.read(f.article)).toBe(before);
@@ -501,7 +501,7 @@ describe('related-note creation and staged draft', () => {
       expect(candidate.title).toContain(candidate.dataset.path);
     }
     expect(checked('Old')).toBe(true);
-    button('Cancel').click();
+    dismiss();
     await pending;
   });
 
@@ -518,7 +518,7 @@ describe('related-note creation and staged draft', () => {
     );
     expect(checked('Other')).toBe(false);
     expect(document.activeElement).toBe(row('Other'));
-    button('Cancel').click();
+    dismiss();
     await pending;
   });
 
@@ -543,47 +543,32 @@ describe('related-note creation and staged draft', () => {
     expect(checked('Extra109')).toBe(true);
     expect(checked('Other')).toBe(true);
     expect((await f.saved()).properties.topics).toEqual(['[[Topics/Old.md]]']);
-    button('Cancel').click();
+    dismiss();
     await pending;
   });
 
-  it('returns from completed creation with focused staged search and the durable new note checked', async () => {
+  it('finishes creation in the original modal without reopening staged search', async () => {
     const f = await fixture();
     const { pending } = await f.open();
-    const previousSearch = searchInput();
+    const modal = document.querySelector('.reader-highlight-picker-modal');
     startCreate();
-    await tick();
-    expect(previousSearch.isConnected).toBe(false);
-    expect(searchInput()).toBe(document.activeElement);
-    expect(checked('New')).toBe(true);
-    expect(creates()).toHaveLength(0); // No second creation in this flow.
-    button('Cancel').click();
     await pending;
+    expect(modal?.isConnected).toBe(false);
+    expect(document.querySelector('.reader-highlight-picker')).toBeNull();
     expect((await f.saved()).properties.topics).toContain('[[Topics/New.md]]');
+    expect(f.api.createNodeForLink).toHaveBeenCalledOnce();
   });
 
-  it('awaits guarded Apply, retains the draft after failure, and retries without losing choices', async () => {
+  it('reports a guarded Apply failure without silently reopening or writing', async () => {
     const f = await fixture();
     const { pending } = await f.open();
     toggle('Other', true);
-    search('Other');
-    const write = f.store.setRelatedNodes.bind(f.store);
-    vi.spyOn(f.store, 'setRelatedNodes')
-      .mockRejectedValueOnce(new Error('Write refused'))
-      .mockImplementation(write);
-    button('Apply').click();
-    await tick();
-    expect(visibleErrors().some((message) => message.includes('Write refused'))).toBe(true);
-    expect(checked('Other')).toBe(true);
-    expect(checked('Old')).toBe(true);
-    expect(searchInput()).toBe(document.activeElement);
-    expect((await f.saved()).properties.topics).toEqual(['[[Topics/Old.md]]']);
+    vi.spyOn(f.store, 'setRelatedNodes').mockRejectedValueOnce(new Error('Write refused'));
     button('Apply').click();
     await pending;
-    expect((await f.saved()).properties.topics).toEqual([
-      '[[Topics/Old.md]]',
-      '[[Topics/Other.md]]',
-    ]);
+    expect(visibleErrors().some((message) => message.includes('Write refused'))).toBe(true);
+    expect((await f.saved()).properties.topics).toEqual(['[[Topics/Old.md]]']);
+    expect(document.querySelector('.reader-highlight-picker')).toBeNull();
   });
 
   it('drains an in-flight Apply after navigation cancellation without a second commit', async () => {
@@ -644,7 +629,7 @@ describe('related-note creation and staged draft', () => {
       oldOther = row('Old')!;
     oldCreate.click();
     await tick();
-    expect(document.querySelector('.reader-highlight-picker')).toBeNull();
+    expect(document.querySelectorAll('.reader-highlight-picker')).toHaveLength(1);
     oldCreate.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     oldApply.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     oldOther.click();
@@ -653,8 +638,8 @@ describe('related-note creation and staged draft', () => {
     expect((await f.saved()).properties.topics).toEqual(['[[Topics/Old.md]]']);
     complete();
     await tick();
-    expect(checked('Old')).toBe(true);
-    button('Cancel').click();
+    expect(document.querySelector('.reader-highlight-picker')).toBeNull();
+    dismiss();
     await pending;
   });
 
@@ -676,14 +661,14 @@ describe('related-note creation and staged draft', () => {
     const { pending } = await f.open();
     startCreate();
     await tick();
-    expect(document.querySelector('.reader-highlight-picker')).toBeNull();
+    expect(document.querySelectorAll('.reader-highlight-picker')).toHaveLength(1);
     expect(document.activeElement).toBe(provider);
     expect((await f.saved()).properties.topics).toContain('[[Topics/New.md]]');
     complete();
     await tick();
-    expect(searchInput()).toBe(document.activeElement);
-    expect(checked('New')).toBe(true);
-    button('Cancel').click();
+    expect(document.querySelector('.reader-highlight-picker')).toBeNull();
+
+    dismiss();
     await pending;
     expect((await f.saved()).properties.topics).toContain('[[Topics/New.md]]');
   });
@@ -695,11 +680,11 @@ describe('related-note creation and staged draft', () => {
     toggle('Other', true);
     startCreate('Not created');
     await tick();
-    expect(searchInput()).toBe(document.activeElement);
-    expect(checked('Other')).toBe(true);
-    expect(checked('Old')).toBe(true);
+    expect(document.querySelector('.reader-highlight-picker')).toBeNull();
+
+    expect(document.querySelector('.reader-highlight-picker')).toBeNull();
     expect((await f.saved()).properties.topics).toEqual(['[[Topics/Old.md]]']);
-    button('Cancel').click();
+    dismiss();
     await pending;
     expect(f.vault.file('Topics/New.md')).toBeUndefined();
   });
@@ -724,49 +709,33 @@ describe('related-note creation and staged draft', () => {
           expect.any(Function),
         );
       }
-      button('Cancel').click();
+      dismiss();
       await pending;
     },
   );
 
-  it.each(['Apply', 'Cancel'] as const)(
-    'commits only the created note before completion, preserving staged choices on %s',
-    async (finish) => {
-      const f = await fixture();
-      let complete = false;
-      f.api.createNodeForLink = vi.fn(async (options, link) => {
-        expect(options.type).toBe('topic');
-        expect(options.sourcePath).toBe('Reading/Stream/Article.md');
-        await f.note('Topics/New.md', { type: 'topic' });
-        await link(f.node('Topics/New.md'));
-        const saved = await f.saved();
-        expect(saved.properties.status).toBe('later');
-        expect(saved.properties.topics).toEqual(['[[Topics/Old.md]]', '[[Topics/New.md]]']);
-        complete = true;
-        return null;
-      });
-      const { pending } = await f.open();
-      toggle('Old', false);
-      toggle('Other', true);
-      startCreate();
-      await tick();
-      expect(complete).toBe(true);
-      expect(checked('Old')).toBe(false);
-      expect(checked('Other')).toBe(true);
-      expect(checked('New')).toBe(true);
-      search('Another new note');
-      expect(creates()).toHaveLength(0);
-      button(finish).click();
-      await pending;
-      expect((await f.saved()).properties.topics).toEqual(
-        finish === 'Apply'
-          ? ['[[Topics/New.md]]', '[[Topics/Other.md]]']
-          : ['[[Topics/Old.md]]', '[[Topics/New.md]]'],
-      );
-      expect(f.vault.file('Topics/New.md')).toBeDefined();
-      expect(f.api.createNode).not.toHaveBeenCalled();
-    },
-  );
+  it('applies checked defaults and a new note together before required completion', async () => {
+    const f = await fixture();
+    f.api.createNodeForLink = vi.fn(async (options, link) => {
+      expect(options.completionContainer?.isConnected).toBe(true);
+      expect(document.querySelectorAll('.reader-highlight-picker-modal')).toHaveLength(1);
+      await f.note('Topics/New.md', { type: 'topic' });
+      await link(f.node('Topics/New.md'));
+      expect((await f.saved()).properties.topics).toEqual([
+        '[[Topics/Other.md]]',
+        '[[Topics/New.md]]',
+      ]);
+      return null;
+    });
+    const { pending } = await f.open();
+    toggle('Old', false);
+    toggle('Other', true);
+    startCreate();
+    await pending;
+    expect(f.api.createNodeForLink).toHaveBeenCalledOnce();
+    expect(document.querySelector('.reader-highlight-picker')).toBeNull();
+    expect(f.vault.file('Topics/New.md')).toBeDefined();
+  });
 
   it('keeps callback-committed creation after a provider error and lets Apply commit the retained draft', async () => {
     const f = await fixture();
@@ -783,15 +752,14 @@ describe('related-note creation and staged draft', () => {
     expect(visibleErrors().some((message) => message.includes('Required completion failed'))).toBe(
       true,
     );
-    expect((await f.saved()).properties.topics).toEqual(['[[Topics/Old.md]]', '[[Topics/New.md]]']);
-    expect(checked('New')).toBe(true);
-    expect(checked('Other')).toBe(true);
-    expect(checked('Old')).toBe(false);
-    button('Apply').click();
+    expect((await f.saved()).properties.topics).toEqual([
+      '[[Topics/Other.md]]',
+      '[[Topics/New.md]]',
+    ]);
     await pending;
     expect((await f.saved()).properties.topics).toEqual([
-      '[[Topics/New.md]]',
       '[[Topics/Other.md]]',
+      '[[Topics/New.md]]',
     ]);
   });
 
@@ -827,26 +795,22 @@ describe('related-note creation and staged draft', () => {
       return null;
     });
     const first = await f.open();
+    toggle('Other', true);
     startCreate('New1');
     await tick();
     expect(f.article.path).toBe('Reading/Later/Article.md');
     expect(setBody).toHaveBeenCalledOnce();
-    search('New2');
-    expect(creates()).toHaveLength(0);
-    search('');
-    toggle('Other', true);
-    button('Apply').click();
+    expect(document.querySelector('.reader-highlight-picker')).toBeNull();
     await first.pending;
     const second = await f.open();
     startCreate('New2');
     await tick();
-    button('Apply').click();
     await second.pending;
     expect(f.api.createNodeForLink).toHaveBeenCalledTimes(2);
     expect((await f.saved()).properties.topics).toEqual([
       '[[Topics/Old.md]]',
-      '[[Topics/New1.md]]',
       '[[Topics/Other.md]]',
+      '[[Topics/New1.md]]',
       '[[Topics/New2.md]]',
     ]);
     expect((await f.saved()).body).toBe('rewritten [[Topics/Old.md]] body');
@@ -869,7 +833,7 @@ describe('related-note creation and staged draft', () => {
     await tick();
     expect((await f.saved()).properties.topics).toEqual(['[[Topics/Old.md]]']);
     expect(visibleErrors().some(Boolean)).toBe(true);
-    button('Cancel').click();
+    dismiss();
     await pending;
     expect(f.vault.file('Topics/New.md')).toBeDefined();
   });
@@ -901,7 +865,7 @@ describe('related-note creation and staged draft', () => {
     const destination = readDocument(await f.vault.read(created));
     expect(destination.properties.type).toBeUndefined();
     expect(destination.body).toBe('body');
-    button('Cancel').click();
+    dismiss();
     await pending;
     expect((await f.saved()).properties.topics).toEqual(['[[Topics/Old.md]]', '[[Topics/New.md]]']);
   });
@@ -939,14 +903,13 @@ describe('related-note creation and staged draft', () => {
       );
       expect(f.vault.file('Topics/New.md')).toBeDefined();
       if (mode === 'duplicate') {
-        expect(checked('New')).toBe(true);
-        button('Cancel').click();
+        expect(document.querySelector('.reader-highlight-picker')).toBeNull();
+        dismiss();
         await pending;
       } else {
         // A changed source/provider is not a valid continuation of the old dialog.
         expect(document.querySelector('.reader-highlight-picker')).toBeNull();
-        if (mode === 'getNode') await expect(pending).rejects.toThrow('provider reloading');
-        else await pending;
+        await pending;
       }
     },
   );
@@ -973,11 +936,10 @@ describe('related-note creation and staged draft', () => {
     expect(linked).toBe(true);
     await f.view.changed({ path: f.article.path, metadataChanged: true });
     expect(signal.aborted).toBe(false);
-    expect(document.querySelector('.reader-highlight-picker')).toBeNull();
+    expect(document.querySelectorAll('.reader-highlight-picker')).toHaveLength(1);
     finish();
     await tick();
     expect(signal.aborted).toBe(false);
-    button('Apply').click();
     await pending;
     expect((await f.saved()).properties.topics).toEqual(['[[Topics/Old.md]]', '[[Topics/New.md]]']);
   });
@@ -1016,6 +978,7 @@ describe('related-note creation and staged draft', () => {
       const durable = await f.vault.read(f.article);
       expect((await f.saved()).properties.topics).toEqual([
         '[[Topics/Old.md]]',
+        '[[Topics/Other.md]]',
         '[[Topics/New.md]]',
       ]);
       let settled = false;

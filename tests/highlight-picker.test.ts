@@ -1231,3 +1231,18 @@ it('does not focus a text input automatically on touch devices', async () => {
     Object.assign(Platform, { isMobile: false });
   }
 });
+
+it('keeps one modal alive while the provider uses its creation surface', async () => {
+  const { choice } = open({ query: 'Fresh title', keepCreationOpen: true });
+  create('concept').click();
+  const result = await choice;
+  expect(result?.kind).toBe('create');
+  if (result?.kind !== 'create' || !result.completion)
+    throw new Error('Missing completion surface');
+  expect(document.querySelectorAll('.reader-highlight-picker-modal')).toHaveLength(1);
+  expect(result.completion.container.isConnected).toBe(true);
+  expect(result.completion.signal.aborted).toBe(false);
+  result.completion.close();
+  expect(result.completion.signal.aborted).toBe(true);
+  expect(document.querySelectorAll('.reader-highlight-picker-modal')).toHaveLength(0);
+});
