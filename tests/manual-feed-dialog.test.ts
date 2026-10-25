@@ -1,125 +1,108 @@
-import { afterEach, expect, it, vi } from 'vitest';
-
-const ui = vi.hoisted(() => ({
-  buttons: new Map<string, () => void>(),
-  toggle: undefined as ((enabled: boolean) => void) | undefined,
-  modal: undefined as { close(): void } | undefined,
-  copy: [] as string[],
-}));
+// @vitest-environment node
+import { afterAll, afterEach, expect, it, vi } from 'vitest';
+const dom = await vi.hoisted(async () => {
+  const { builtinEnvironments } = await import('vitest/runtime');
+  return builtinEnvironments.jsdom.setup(globalThis, {});
+});
+afterAll(() => dom.teardown(globalThis));
+const ui = vi.hoisted(() => ({ modal: undefined as any }));
 vi.mock('obsidian', () => ({
+  Platform: { isMobile: false },
   Notice: class {},
   PluginSettingTab: class {},
+  Setting: class {},
   Modal: class {
-    contentEl = {
-      empty() {
-        ui.buttons.clear();
-        ui.copy = [];
-      },
-      createEl(_tag: string, options: { text: string }) {
-        ui.copy.push(options.text);
-      },
-    };
+    contentEl = document.createElement('div');
+    modalEl = document.createElement('div');
     constructor() {
+      this.modalEl.append(this.contentEl);
       ui.modal = this;
     }
     setTitle() {}
     onOpen() {}
     onClose() {}
     open() {
+      document.body.append(this.modalEl);
       this.onOpen();
     }
     close() {
       this.onClose();
-    }
-  },
-  Setting: class {
-    setName() {
-      return this;
-    }
-    setDesc() {
-      return this;
-    }
-    addButton(configure: (button: any) => void) {
-      let label = '';
-      configure({
-        setButtonText(text: string) {
-          label = text;
-          return this;
-        },
-        setWarning() {
-          return this;
-        },
-        onClick(callback: () => void) {
-          ui.buttons.set(label, callback);
-          return this;
-        },
-      });
-      return this;
-    }
-    addToggle(configure: (toggle: any) => void) {
-      configure({
-        setValue() {
-          return this;
-        },
-        onChange(callback: (enabled: boolean) => void) {
-          ui.toggle = callback;
-          return this;
-        },
-      });
-      return this;
+      this.modalEl.remove();
     }
   },
 }));
-vi.mock('../src/host/folder-picker', () => ({ FolderPicker: class {} }));
-vi.mock('../src/host/dialogs', () => ({ input: vi.fn() }));
+vi.mock('../src/host/folder-picker', () => ({ FolderSuggest: class {} }));
 import { showFeeds } from '../src/host/settings';
-import { input } from '../src/host/dialogs';
-
 afterEach(() => {
   ui.modal?.close();
-  ui.modal = undefined;
-  ui.toggle = undefined;
-  ui.buttons.clear();
-  vi.clearAllMocks();
+  document.body.replaceChildren();
 });
-
-it('only the explicit Sync button refreshes: opening, Add and enablement do not', async () => {
+const button = (name: string) =>
+  [...document.querySelectorAll('button')].find((b) => b.textContent === name)!;
+function fixture() {
   const feed = {
     path: 'Subscriptions/Example.md',
     title: 'Example',
-    url: 'https://example.com/feed',
+    prefix: 'Example',
+    url: 'https://example.test/feed',
     enabled: true,
   };
-  const store = { catalog: { feeds: () => [feed] } };
+  const store = {
+    catalog: { feeds: () => [feed] },
+    vault: { file: () => ({}), read: async () => 'original bytes' },
+  };
   const ingestion = {
     subscribe: vi.fn(async () => {}),
+    editFeed: vi.fn(async () => {}),
     setFeed: vi.fn(async () => {}),
+    unsubscribe: vi.fn(async () => {}),
     refreshAll: vi.fn(async () => {}),
   };
-  const lifetime = new AbortController();
-  showFeeds({} as any, store as any, ingestion as any, lifetime.signal);
+  const app = { workspace: { openLinkText: vi.fn() } };
+  showFeeds(app as any, store as any, ingestion as any, new AbortController().signal);
+  return { ingestion, feed, app };
+}
+it('adds inline without opening another modal or implicitly syncing', async () => {
+  const { ingestion } = fixture();
+  const url = document.querySelector<HTMLInputElement>('input')!;
+  url.value = 'https://example.test/feed';
+  document
+    .querySelector('form')!
+    .dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+  await vi.waitFor(() => expect(ingestion.subscribe).toHaveBeenCalledOnce());
+  expect(document.querySelectorAll('.reader-feeds-modal')).toHaveLength(1);
   expect(ingestion.refreshAll).not.toHaveBeenCalled();
-  expect(ui.copy.join(' ')).toContain('Adding saves a subscription without fetching');
-  ui.buttons.get('Add feed')!();
-  const add = vi.mocked(input).mock.calls[0][3];
-  await add(feed.url, lifetime.signal);
-  expect(ingestion.subscribe).toHaveBeenCalledExactlyOnceWith(feed.url, lifetime.signal);
-  ui.toggle!(false);
-  await Promise.resolve();
-  expect(ingestion.setFeed).toHaveBeenCalledExactlyOnceWith(feed, false);
-  expect(ingestion.refreshAll).not.toHaveBeenCalled();
-  ui.buttons.get('Sync')!();
-  await Promise.resolve();
-  expect(ingestion.refreshAll).toHaveBeenCalledOnce();
-  lifetime.abort();
-  expect(ui.buttons.size).toBe(0);
+  await vi.waitFor(() => expect(document.querySelector<HTMLInputElement>('input')!.value).toBe(''));
+  button('Sync').click();
+  await vi.waitFor(() => expect(ingestion.refreshAll).toHaveBeenCalledOnce());
 });
-
-it('does not expose Sync or run work for an already-stopped generation', () => {
-  const lifetime = new AbortController();
-  lifetime.abort();
-  const refreshAll = vi.fn();
-  showFeeds({} as any, {} as any, { refreshAll } as any, lifetime.signal);
-  expect(ui.buttons.size).toBe(0);
-  expect(refreshAll).not.toHaveBeenCalled();
+it('edits title and prefix in place against the bytes that were displayed', async () => {
+  const { ingestion, feed } = fixture();
+  const details = document.querySelector('details')!;
+  details.open = true;
+  details.dispatchEvent(new Event('toggle'));
+  await vi.waitFor(() => expect(button('Save')).toBeDefined());
+  const inputs = details.querySelectorAll('input');
+  inputs[0].value = 'New name';
+  inputs[1].value = 'Short';
+  inputs[1].dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+  await vi.waitFor(() =>
+    expect(ingestion.editFeed).toHaveBeenCalledWith(
+      feed,
+      { title: 'New name', prefix: 'Short' },
+      'original bytes',
+    ),
+  );
+  expect(ingestion.refreshAll).not.toHaveBeenCalled();
+});
+it('retains failed input and shows the error in the same modal', async () => {
+  const { ingestion } = fixture();
+  ingestion.subscribe.mockRejectedValue(new Error('Invalid feed'));
+  document.querySelector<HTMLInputElement>('input')!.value = 'bad';
+  document.querySelector('form')!.dispatchEvent(new Event('submit', { cancelable: true }));
+  await vi.waitFor(() =>
+    expect(document.querySelector('[role=status]')?.textContent).toBe('Invalid feed'),
+  );
+  expect(document.querySelector<HTMLInputElement>('input')!.value).toBe('bad');
+  expect(document.querySelectorAll('.reader-feeds-modal')).toHaveLength(1);
 });

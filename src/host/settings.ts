@@ -1,10 +1,17 @@
-import { Modal, Notice, PluginSettingTab, Setting, type App, type Plugin } from 'obsidian';
+import {
+  Modal,
+  Notice,
+  Platform,
+  PluginSettingTab,
+  Setting,
+  type App,
+  type Plugin,
+} from 'obsidian';
 import { folderKeys, folderLabels, validateFolders, type ReaderFolders } from '../core/folders';
 import { FolderSuggest } from './folder-picker';
 import type { Ingestion } from './ingestion';
 import type { ArticleStore } from '../core/store';
 import type { TFile } from 'obsidian';
-import { input } from './dialogs';
 import { articleStatuses, type ArticleStatus } from '../core/model';
 import {
   defaultStatusFolders,
@@ -18,68 +25,155 @@ export function showFeeds(
   ingestion: Ingestion,
   signal: AbortSignal,
 ): void {
+  const lifetime = new AbortController();
   class Feeds extends Modal {
-    private closed = false;
+    private busy = false;
+    private status!: HTMLElement;
     onOpen(): void {
       this.setTitle('Subscriptions');
+      this.modalEl.classList.add('reader-feeds-modal');
       this.render();
     }
-    private render(): void {
-      if (this.closed) return;
-      this.contentEl.empty();
-      const run = async (action: () => Promise<void>) => {
-        try {
-          await action();
+    private element<K extends keyof HTMLElementTagNameMap>(
+      parent: HTMLElement,
+      tag: K,
+      text = '',
+    ): HTMLElementTagNameMap[K] {
+      const element = parent.ownerDocument.createElement(tag);
+      element.textContent = text;
+      parent.append(element);
+      return element;
+    }
+    private async run(action: () => Promise<void>, success: string): Promise<void> {
+      if (this.busy || lifetime.signal.aborted) return;
+      this.busy = true;
+      this.status.textContent = 'Working…';
+      this.contentEl
+        .querySelectorAll<HTMLInputElement | HTMLButtonElement>('input,button')
+        .forEach((el) => (el.disabled = true));
+      try {
+        await action();
+        if (!lifetime.signal.aborted) {
           this.render();
-        } catch (error) {
-          if (!this.closed) new Notice(error instanceof Error ? error.message : String(error));
+          this.status.textContent = success;
         }
-      };
-      for (const feed of store.catalog.feeds())
-        new Setting(this.contentEl)
-          .setName(feed.title)
-          .setDesc(feed.error ?? feed.url)
-          .addToggle((toggle) =>
-            toggle.setValue(feed.enabled).onChange((enabled) => {
-              void run(() => ingestion.setFeed(feed, enabled));
-            }),
-          )
-          .addButton((button) =>
-            button
-              .setButtonText('Unsubscribe')
-              .setWarning()
-              .onClick(() => {
-                void run(() => ingestion.unsubscribe(feed));
-              }),
-          );
-      this.contentEl.createEl('p', {
-        text: 'Adding saves a subscription without fetching. Edit its note before clicking Sync. Unsubscribing trashes only the subscription note; existing articles are kept.',
+      } catch (error) {
+        if (!lifetime.signal.aborted)
+          this.status.textContent = error instanceof Error ? error.message : String(error);
+      } finally {
+        this.busy = false;
+        this.contentEl
+          .querySelectorAll<HTMLInputElement | HTMLButtonElement>('input,button')
+          .forEach((el) => (el.disabled = false));
+      }
+    }
+    private render(): void {
+      if (lifetime.signal.aborted) return;
+      this.contentEl.replaceChildren();
+      const add = this.element(this.contentEl, 'form');
+      add.className = 'reader-feed-add';
+      const url = this.element(add, 'input');
+      url.type = 'url';
+      url.placeholder = 'Feed URL';
+      url.setAttribute('aria-label', 'Feed URL');
+      url.required = true;
+      const submit = this.element(add, 'button', 'Add');
+      submit.type = 'submit';
+      add.addEventListener('submit', (event) => {
+        event.preventDefault();
+        void this.run(async () => {
+          await ingestion.subscribe(url.value.trim(), lifetime.signal);
+        }, 'Subscription added. Sync when ready.').then(() => {
+          if (!Platform.isMobile && !lifetime.signal.aborted)
+            this.contentEl.querySelector<HTMLInputElement>('input[type=url]')?.focus();
+        });
       });
-      new Setting(this.contentEl)
-        .addButton((button) =>
-          button.setButtonText('Add feed').onClick(() => {
-            input(
-              app,
-              'Subscribe to RSS or Atom',
-              'Feed URL',
-              async (url, lifetime) => {
-                await ingestion.subscribe(url, lifetime);
-                this.render();
-              },
-              signal,
+      const list = this.element(this.contentEl, 'div');
+      list.className = 'reader-feed-list';
+      for (const feed of store.catalog.feeds()) {
+        const row = this.element(list, 'details');
+        this.element(row, 'summary', feed.title);
+        const editor = this.element(row, 'div');
+        let loaded = false;
+        row.addEventListener('toggle', () => {
+          if (!row.open || loaded) return;
+          loaded = true;
+          void (async () => {
+            const file = store.vault.file(feed.path);
+            if (!file) throw new Error('Subscription no longer exists.');
+            const expected = await store.vault.read(file);
+            if (lifetime.signal.aborted) return;
+            const titleLabel = this.element(editor, 'label', 'Title');
+            const title = this.element(titleLabel, 'input');
+            title.value = feed.title;
+            const prefixLabel = this.element(editor, 'label', 'Filename prefix');
+            const prefix = this.element(prefixLabel, 'input');
+            prefix.value = feed.prefix ?? '';
+            const save = this.element(editor, 'button', 'Save');
+            const commit = () =>
+              this.run(
+                () =>
+                  ingestion.editFeed(feed, { title: title.value, prefix: prefix.value }, expected),
+                'Subscription saved.',
+              );
+            save.addEventListener('click', () => void commit());
+            editor.addEventListener('keydown', (event) => {
+              if (event.key === 'Enter' && !event.isComposing && !event.repeat) {
+                event.preventDefault();
+                void commit();
+              }
+            });
+            const open = this.element(editor, 'button', 'Open note');
+            open.addEventListener('click', () => {
+              this.close();
+              void app.workspace.openLinkText(feed.path, '', false);
+            });
+            const toggle = this.element(
+              editor,
+              'button',
+              feed.enabled ? 'Pause feed' : 'Enable feed',
             );
-          }),
-        )
-        .addButton((button) =>
-          button.setButtonText('Sync').onClick(() => {
-            void run(() => ingestion.refreshAll());
-          }),
-        );
+            toggle.addEventListener(
+              'click',
+              () =>
+                void this.run(
+                  () => ingestion.setFeed(feed, !feed.enabled),
+                  'Subscription updated.',
+                ),
+            );
+            const unsubscribe = this.element(editor, 'button', 'Unsubscribe');
+            unsubscribe.addEventListener(
+              'click',
+              () =>
+                void this.run(
+                  () => ingestion.unsubscribe(feed),
+                  'Unsubscribed. Existing articles were kept.',
+                ),
+            );
+            this.element(editor, 'small', feed.error ?? feed.url);
+          })().catch((error) => {
+            this.status.textContent = String(error);
+            loaded = false;
+          });
+        });
+      }
+      this.status = this.element(
+        this.contentEl,
+        'p',
+        'Adding saves locally. Only Sync imports articles.',
+      );
+      this.status.setAttribute('role', 'status');
+      this.status.setAttribute('aria-live', 'polite');
+      const sync = this.element(this.contentEl, 'button', 'Sync');
+      sync.addEventListener(
+        'click',
+        () => void this.run(() => ingestion.refreshAll(), 'Feeds synced.'),
+      );
     }
     onClose(): void {
-      this.closed = true;
-      this.contentEl.empty();
+      lifetime.abort();
       signal.removeEventListener('abort', abort);
+      this.contentEl.replaceChildren();
     }
   }
   const modal = new Feeds(app),

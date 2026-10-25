@@ -181,6 +181,26 @@ export class Ingestion {
       clients.delete(client);
     }
   }
+  async editFeed(
+    feed: Subscription,
+    values: { title: string; prefix: string },
+    expected: string,
+  ): Promise<void> {
+    this.assert();
+    const file = this.store.vault.file(feed.path);
+    if (!file) throw new Error('Subscription no longer exists.');
+    const raw = await this.store.vault.process(file, (current) => {
+      this.assert();
+      if (this.store.vault.file(feed.path) !== file || current !== expected)
+        throw new Error('Subscription changed. Reopen it before saving.');
+      this.store.vault.assertWritable(file, current);
+      const doc = readDocument(current);
+      if (doc.properties.type !== 'feed' || text(doc.properties.url) !== feed.url)
+        throw new Error('Subscription changed. Reopen it before saving.');
+      return patchProperties(current, { title: values.title.trim(), prefix: values.prefix.trim() });
+    });
+    this.store.catalog.update(file.path, readDocument(raw).properties);
+  }
   async setFeed(feed: Subscription, enabled: boolean): Promise<void> {
     this.assert();
     const file = this.store.vault.file(feed.path);

@@ -1006,3 +1006,45 @@ dialog.reader-image-viewer,
   font-size: var(--font-ui-small);
   color: var(--text-muted);
 }
+
+.reader-feeds-modal {
+  width: min(440px, calc(100vw - 24px));
+  max-height: calc(100dvh - 24px);
+}
+.reader-feed-add {
+  display: flex;
+  gap: 8px;
+}
+.reader-feed-add input {
+  min-width: 0;
+  flex: 1;
+}
+.reader-feed-list {
+  max-height: min(40dvh, 300px);
+  overflow-y: auto;
+}
+.reader-feed-list summary,
+.reader-feeds-modal button,
+.reader-feeds-modal input {
+  min-height: 44px;
+}
+.reader-feed-list summary {
+  display: list-item;
+  padding: 10px 4px;
+  box-sizing: border-box;
+  cursor: pointer;
+}
+.reader-feed-list label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-block: 8px;
+}
+.reader-feed-list button {
+  margin: 2px;
+}
+.reader-feed-list small {
+  display: block;
+  overflow-wrap: anywhere;
+}
+

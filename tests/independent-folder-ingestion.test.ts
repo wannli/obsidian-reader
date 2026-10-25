@@ -140,3 +140,29 @@ it('creates subscriptions safely at the vault root', async () => {
   expect(external.request).not.toHaveBeenCalled();
   ingestion.stop();
 });
+
+it('edits subscription metadata without fetching and rejects stale or dirty editor bytes', async () => {
+  const vault = new MemoryVault(),
+    store = storeFor(vault),
+    ingestion = new Ingestion(store, vi.fn());
+  try {
+    await ingestion.subscribe('https://example.com/feed');
+    const feed = store.catalog.feeds()[0],
+      file = vault.file(feed.path)!;
+    const expected = await vault.read(file);
+    await ingestion.editFeed(feed, { title: 'Edited', prefix: 'Short' }, expected);
+    const saved = await vault.read(file);
+    expect(readDocument(saved).properties).toMatchObject({
+      title: 'Edited',
+      prefix: 'Short',
+      url: feed.url,
+    });
+    expect(external.request).not.toHaveBeenCalled();
+    await expect(
+      ingestion.editFeed(feed, { title: 'Stale', prefix: '' }, expected),
+    ).rejects.toThrow('changed');
+    expect(await vault.read(file)).toBe(saved);
+  } finally {
+    ingestion.stop();
+  }
+});
