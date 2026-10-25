@@ -1,4 +1,5 @@
 import { FuzzySuggestModal, Modal, Setting, type App, type TFile } from 'obsidian';
+import { bindModalSubmit } from './modal-submit';
 
 export function choose<T>(
   app: App,
@@ -85,7 +86,16 @@ export function input(
               void save(button.buttonEl);
             });
           field.addEventListener('keydown', (event) => {
-            if (event.key === 'Enter' && !button.buttonEl.disabled) void save(button.buttonEl);
+            if (
+              event.key === 'Enter' &&
+              !event.metaKey &&
+              !event.ctrlKey &&
+              !button.buttonEl.disabled
+            )
+              void save(button.buttonEl);
+          });
+          bindModalSubmit(this, () => {
+            if (!button.buttonEl.disabled) void save(button.buttonEl);
           });
         });
     }
@@ -117,9 +127,11 @@ export function confirmArticleReplacement(
       });
       const error = this.contentEl.createEl('p', { attr: { role: 'alert' } });
       let pending = false;
+      let replaceButton: HTMLButtonElement;
       new Setting(this.contentEl)
         .addButton((button) => button.setButtonText('Cancel').onClick(() => this.close()))
-        .addButton((button) =>
+        .addButton((button) => {
+          replaceButton = button.buttonEl;
           button
             .setButtonText('Replace content')
             .setWarning()
@@ -136,8 +148,11 @@ export function confirmArticleReplacement(
                 pending = false;
                 button.setDisabled(false);
               }
-            }),
-        );
+            });
+        });
+      bindModalSubmit(this, () => {
+        if (!replaceButton.disabled) replaceButton.click();
+      });
     }
     onClose(): void {
       lifetime.abort();
@@ -166,6 +181,7 @@ export function confirmWebLink(
       this.contentEl.createEl('p', { text: url });
       const error = this.contentEl.createEl('p', { attr: { role: 'alert' } });
       let pending = false;
+      let saveButton: HTMLButtonElement;
       new Setting(this.contentEl)
         .addButton((button) => button.setButtonText('Cancel').onClick(() => this.close()))
         .addButton((button) =>
@@ -175,7 +191,8 @@ export function confirmWebLink(
             this.close();
           }),
         )
-        .addButton((button) =>
+        .addButton((button) => {
+          saveButton = button.buttonEl;
           button
             .setButtonText('Save to Inbox')
             .setCta()
@@ -193,8 +210,11 @@ export function confirmWebLink(
                 pending = false;
                 button.setDisabled(false);
               }
-            }),
-        );
+            });
+        });
+      bindModalSubmit(this, () => {
+        if (!saveButton.disabled) saveButton.click();
+      });
     }
     onClose(): void {
       lifetime.abort();
@@ -421,6 +441,9 @@ export function chooseTopics(
               if (!controller.signal.aborted) setBusy(false);
             }
           })();
+        });
+        bindModalSubmit(this, () => {
+          if (!saveButton.disabled) saveButton.click();
         });
       }
       onClose(): void {

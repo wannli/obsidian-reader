@@ -1,5 +1,6 @@
 import { Modal, Setting, type App } from 'obsidian';
 import type { TopicFilter } from '../core/topic-filter';
+import { bindModalSubmit } from './modal-submit';
 
 /** null cancels; a free-text choice is a filter, never a request to create a note. */
 export function chooseTopicFilter(
@@ -59,6 +60,15 @@ export function chooseTopicFilter(
             event.preventDefault();
             select({ label: input.value.trim(), terms: [input.value.trim()] });
           }
+        });
+        bindModalSubmit(this, () => {
+          const focused = this.contentEl.ownerDocument.activeElement;
+          if (results.contains(focused) && focused?.tagName === 'BUTTON') {
+            (focused as HTMLButtonElement).click();
+            return;
+          }
+          const query = input.value.trim();
+          if (query) select({ label: query, terms: [query] });
         });
         new Setting(this.contentEl).addButton((button) =>
           button.setButtonText('Cancel').onClick(() => this.close()),

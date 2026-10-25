@@ -755,6 +755,19 @@ describe('lean multi-selection and native list context', () => {
     expect(await choice).toEqual({ kind: 'existing-many', nodes: [exact] });
   });
 
+  it('uses Cmd-Enter to apply selected notes from a populated search', async () => {
+    const { choice } = open({ multiple: true, query: 'Memory' });
+    row(exact.path).click();
+    key(searchInput(), 'Enter', { metaKey: true });
+    expect(await choice).toEqual({ kind: 'existing-many', nodes: [exact] });
+  });
+
+  it('uses Cmd-Enter to choose the first available single-note result', async () => {
+    const { choice } = open({ query: 'Memory' });
+    key(searchInput(), 'Enter', { metaKey: true });
+    expect(await choice).toEqual({ kind: 'existing', node: exact });
+  });
+
   it('shows public node icons or listed class icons, never the primary type as a fallback', async () => {
     source.index.set(exact.path, { ...exact, type: 'topic' });
     source.index.set(fuzzy.path, { ...fuzzy, icon: 'lightbulb' });

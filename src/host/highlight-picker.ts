@@ -7,6 +7,7 @@ import {
   type NodeChoiceType,
 } from '../core/node-choices';
 import type { NodeResult, NodesApi } from './nodes';
+import { bindModalSubmit } from './modal-submit';
 
 export type HighlightHostChoice =
   | { kind: 'existing'; node: NodeResult }
@@ -516,6 +517,18 @@ export function chooseHighlightHost(
         cancel.addEventListener('click', () => finish(null));
         retry.addEventListener('click', refresh);
         confirm?.addEventListener('click', apply);
+        bindModalSubmit(this, () => {
+          if (multiple) {
+            if (confirm && !confirm.disabled) apply();
+          } else {
+            const focused = this.contentEl.ownerDocument.activeElement;
+            const row =
+              results.contains(focused) && focused?.tagName === 'BUTTON'
+                ? (focused as HTMLButtonElement)
+                : results.querySelector<HTMLButtonElement>('button:not(:disabled)');
+            if (row && !row.disabled) row.click();
+          }
+        });
         fromArticle?.addEventListener('click', () =>
           run(() => {
             readTypes();
@@ -529,7 +542,10 @@ export function chooseHighlightHost(
         filter.addEventListener('change', refresh);
         search.addEventListener('keydown', (event) => {
           if (event.isComposing) return;
-          if (event.key === 'ArrowDown' || event.key === 'Enter') {
+          if (
+            event.key === 'ArrowDown' ||
+            (event.key === 'Enter' && !event.metaKey && !event.ctrlKey)
+          ) {
             event.preventDefault();
             if (event.repeat) return;
             if (event.key === 'Enter' && multiple && !query() && confirm && !confirm.disabled)

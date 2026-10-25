@@ -43,6 +43,7 @@ vi.mock('obsidian', () => ({
       const element = document.createElement('button');
       this.element.append(element);
       const button = {
+        buttonEl: element,
         setButtonText(text: string) {
           element.textContent = text;
           return button;
@@ -142,6 +143,39 @@ it('prevents repeated saves and aborts pending work on Cancel', () => {
   expect(save).toHaveBeenCalledOnce();
   click('Cancel');
   expect((save.mock.calls[0] as unknown as [AbortSignal])[0].aborted).toBe(true);
+});
+
+it('uses Cmd-Enter for the primary link action only once', () => {
+  const save = vi.fn(() => new Promise<void>(() => {}));
+  const open = vi.spyOn(window, 'open').mockReturnValue(null);
+  confirmWebLink({} as App, 'https://example.test/', save, []);
+  const shortcut = () =>
+    document.querySelector('button')!.dispatchEvent(
+      new KeyboardEvent('keydown', {
+        key: 'Enter',
+        metaKey: true,
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+  shortcut();
+  shortcut();
+  expect(save).toHaveBeenCalledOnce();
+  expect(open).not.toHaveBeenCalled();
+});
+
+it('uses Ctrl-Enter for the replacement confirmation', () => {
+  const replace = vi.fn(() => new Promise<void>(() => {}));
+  confirmArticleReplacement({} as App, 'Target.md', replace, new AbortController().signal);
+  document.querySelector('button')!.dispatchEvent(
+    new KeyboardEvent('keydown', {
+      key: 'Enter',
+      ctrlKey: true,
+      bubbles: true,
+      cancelable: true,
+    }),
+  );
+  expect(replace).toHaveBeenCalledOnce();
 });
 
 it('shows failures and allows retry without opening the URL', async () => {

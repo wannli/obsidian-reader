@@ -1,5 +1,6 @@
 import { type App, Modal, Setting } from 'obsidian';
 import { csvUrls } from '../core/csv-urls';
+import { bindModalSubmit } from './modal-submit';
 
 export function importCsvDialog(
   app: App,
@@ -20,9 +21,11 @@ export function importCsvDialog(
         field.placeholder = 'www.google.com,www.bing.com;www.brave.com';
       });
       const error = this.contentEl.createEl('p', { attr: { role: 'alert' } });
+      let addButton: HTMLButtonElement;
       new Setting(this.contentEl)
         .addButton((button) => button.setButtonText('Cancel').onClick(() => this.close()))
-        .addButton((button) =>
+        .addButton((button) => {
+          addButton = button.buttonEl;
           button
             .setButtonText('Add articles')
             .setCta()
@@ -47,8 +50,11 @@ export function importCsvDialog(
                 }
               };
               void run();
-            }),
-        );
+            });
+        });
+      bindModalSubmit(this, () => {
+        if (!addButton.disabled) addButton.click();
+      });
       field.focus();
     }
     onClose(): void {
