@@ -6,6 +6,7 @@ import { articleInfo } from '../src/core/model';
 import { createDocument } from '../src/core/document';
 import { TopicScanner } from '../src/reader/topic-scan';
 import { ReaderView } from '../src/reader/view';
+import { bindNodesApi } from '../src/host/nodes';
 
 const dom = await vi.hoisted(async () => {
   const { builtinEnvironments } = await import('vitest/runtime');
@@ -564,7 +565,7 @@ describe('topic-filter view integration', () => {
       createNode: vi.fn(async () => null),
       createNodeForLink: vi.fn(async () => null),
     };
-    f.host.app.plugins = { getPlugin: () => ({ api }) };
+    bindNodesApi(f.host.app, () => api as any);
     await f.view.openArticle(article.path);
     let apply!: (choice: { kind: 'existing-many'; nodes: never[] }) => void;
     mocks.highlightHost.mockImplementation(

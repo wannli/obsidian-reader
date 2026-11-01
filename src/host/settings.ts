@@ -5,6 +5,7 @@ import type { Ingestion } from './ingestion';
 import type { ArticleStore } from '../core/store';
 import type { TFile } from 'obsidian';
 import { input } from './dialogs';
+import { validateSettings as validateTypedNotes, type NodesSettings } from './fileclass/settings';
 import { articleStatuses, type ArticleStatus } from '../core/model';
 import {
   defaultStatusFolders,
@@ -98,6 +99,8 @@ export class ReaderSettings extends PluginSettingTab {
     private savePaged: (value: boolean) => void,
     private statusFolders: StatusFolders = defaultStatusFolders,
     private saveStatusFolders: (folders: StatusFolders) => Promise<void> = async () => {},
+    private typedNotes?: NodesSettings,
+    private saveTypedNotes: (settings: NodesSettings) => Promise<void> = async () => {},
   ) {
     super(app, plugin);
   }
@@ -187,6 +190,42 @@ export class ReaderSettings extends PluginSettingTab {
         }
       }),
     );
+    if (this.typedNotes) {
+      this.containerEl.createEl('h3', { text: 'Typed notes' });
+      this.containerEl.createEl('p', {
+        text: 'Reader uses Fileclass’s public API for existing classes and required fields. It creates new notes only in the folder below; applying these settings never moves or rewrites existing notes.',
+      });
+      const draft = { ...this.typedNotes };
+      new Setting(this.containerEl).setName('New typed-note folder').addText((control) =>
+        control.setValue(draft.nodesFolder).onChange((value) => {
+          draft.nodesFolder = value;
+        }),
+      );
+      new Setting(this.containerEl)
+        .setName('Fallback class binding property')
+        .setDesc('Used only when Fileclass does not expose its configured alias.')
+        .addText((control) =>
+          control.setValue(draft.classProperty).onChange((value) => {
+            draft.classProperty = value;
+          }),
+        );
+      new Setting(this.containerEl).setName('Apply typed-note settings').addButton((button) =>
+        button.setButtonText('Apply').onClick(async () => {
+          button.setDisabled(true);
+          try {
+            const invalid = validateTypedNotes(draft);
+            if (invalid) throw new Error(invalid);
+            await this.saveTypedNotes(draft);
+            this.typedNotes = { ...draft };
+            new Notice('Typed-note settings applied. Existing notes were not changed.');
+          } catch (error) {
+            new Notice(error instanceof Error ? error.message : String(error));
+          } finally {
+            button.setDisabled(false);
+          }
+        }),
+      );
+    }
     new Setting(this.containerEl)
       .setName('Boox / e-ink pagination (this device)')
       .setDesc(

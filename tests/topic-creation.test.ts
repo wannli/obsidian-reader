@@ -2,7 +2,7 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { TFile, type App } from 'obsidian';
 import { ReaderView } from '../src/reader/view';
-import { nodesApi, type NodesApi, type NodeResult } from '../src/host/nodes';
+import { bindNodesApi, nodesApi, type NodesApi, type NodeResult } from '../src/host/nodes';
 import { ArticleStore } from '../src/core/store';
 import { createDocument, patchProperties, readDocument } from '../src/core/document';
 import { defaultFolders } from '../src/core/folders';
@@ -209,6 +209,7 @@ async function fixture() {
     }),
   };
   app.plugins = { getPlugin: () => ({ api }) };
+  bindNodesApi(app, () => app.plugins.getPlugin()?.api);
   const saved = () => store.read(article.path);
   const open = async () => {
     const pending: Promise<void> = probe.topics();
@@ -352,7 +353,7 @@ describe('typed related-note assignment', () => {
     const before = await f.vault.read(f.article);
     const write = vi.spyOn(f.store, 'setRelatedNodes');
     f.app.plugins.getPlugin = () => undefined;
-    await expect(f.probe.topics()).rejects.toThrow('public Nodes API v2');
+    await expect(f.probe.topics()).rejects.toThrow('public API v1');
     expect(document.querySelector('.reader-highlight-picker')).toBeNull();
     expect(write).not.toHaveBeenCalled();
     expect(await f.vault.read(f.article)).toBe(before);

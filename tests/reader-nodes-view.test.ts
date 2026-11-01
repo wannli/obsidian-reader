@@ -20,7 +20,7 @@ import { paragraphAnchors } from '../src/core/hosted-highlights';
 import { appendQuotation, originLink, rememberOrigin } from '../src/core/quotation';
 import { ReaderView, nativeLinkPath, openExistingNote } from '../src/reader/view';
 import ReaderPlugin from '../src/main';
-import type { NodesApi, NodeResult } from '../src/host/nodes';
+import { bindNodesApi, type NodesApi, type NodeResult } from '../src/host/nodes';
 import { gate } from './helpers/memory-vault';
 
 describe('Nodes v2 linked creation', () => {
@@ -79,6 +79,7 @@ describe('Nodes v2 linked creation', () => {
     const plugin = new ReaderPlugin(f.app, {} as any);
     (plugin as any).app = f.app;
     await plugin.onload();
+    bindNodesApi(f.app, () => (f.app as any).plugins?.getPlugin?.()?.api);
     plugin.store = f.store;
     vi.mocked(f.app.workspace.getActiveViewOfType).mockReturnValue(f.view);
     f.host.edit = vi.fn((view: ReaderView, file: TFile) => plugin.edit(view, file));
@@ -1167,11 +1168,11 @@ describe('Nodes v2 linked creation', () => {
         expect(await f.vault.read(f.target)).toBe(targetExpected);
         mocks.highlightPicker.mockResolvedValue({ kind: 'create', title: 'legacy', type: 'topic' });
         await expect(menu(f.view, 'Add highlight to notes…')).rejects.toThrow(
-          'createNodeForLink support',
+          'current Fileclass connection',
         );
       } else {
         f.probe.surface.selectionValue = { quote: 'new words', before: 'legacy and ', after: '' };
-        await expect(f.probe.saveSelection()).rejects.toThrow(/Fileclass Inline.*v2/);
+        await expect(f.probe.saveSelection()).rejects.toThrow(/require Fileclass.*API v1/);
         f.probe.surface.selectionValue = undefined;
         expect((await f.store.read(f.article.path)).body).toBe(original);
         expect(mocks.highlightPicker).not.toHaveBeenCalled();

@@ -1814,7 +1814,7 @@ export class ReaderView extends ItemView {
     api: NodesApi | undefined,
     nodes: readonly NodeResult[],
   ): (paths?: readonly string[]) => void {
-    if (!api) throw new Error('Fileclass Inline changed. Reopen the note picker.');
+    if (!api) throw new Error('Fileclass connection changed. Reopen the note picker.');
     const types = new Set(api.listTypes().map((type) => type.type));
     const originals = nodes.map((node) => ({
       path: node.path,
@@ -1823,7 +1823,7 @@ export class ReaderView extends ItemView {
     }));
     return (paths) => {
       if (nodesApi(this.app) !== api)
-        throw new Error('Fileclass Inline changed. Reopen the note picker.');
+        throw new Error('Fileclass connection changed. Reopen the note picker.');
       const registered = new Set(api.listTypes().map((type) => type.type));
       if (paths?.some((path) => !originals.some((node) => node.path === path)))
         throw new Error('The original destination is no longer known. Reopen the note picker.');
@@ -1859,7 +1859,7 @@ export class ReaderView extends ItemView {
         api = nodesApi(this.app);
       if (!api)
         throw new Error(
-          'Editing related notes requires Fileclass Inline public Nodes API v2. Existing topic filters remain available.',
+          'Editing related notes requires Fileclass with its public API v1. Existing topic filters remain available.',
         );
       let selectedPaths = this.relatedNodes(snapshot, api).map((node) => node.path);
       let createdOnce = false;
@@ -2100,7 +2100,7 @@ export class ReaderView extends ItemView {
     if (!api) {
       if (options.noPicker) return;
       throw new Error(
-        'Hosted highlights and related notes require Fileclass Inline public Nodes API v2. Existing highlights remain readable and editable.',
+        'Hosted highlights and related notes require Fileclass with its public API v1. Existing highlights remain readable and editable.',
       );
     }
     const types = api.listTypes(),
@@ -2137,7 +2137,7 @@ export class ReaderView extends ItemView {
       if (!this.current(snapshot, generation) || (this.stopping && !options.closing))
         throw new Error('The article changed or the highlight destination request was cancelled.');
       if (nodesApi(this.app) !== api)
-        throw new Error('Fileclass Inline changed. Choose the highlight destination again.');
+        throw new Error('Fileclass connection changed. Choose the highlight destination again.');
     };
     const selection = (nodes: NodeResult[], required?: { path: string; type: string }) => {
       const selected = [...new Map(nodes.map((node) => [node?.path, node])).values()].map(
@@ -2166,7 +2166,7 @@ export class ReaderView extends ItemView {
       // a newly created note's requested Fileclass must never be reacquired.
       const authorize = (paths?: readonly string[]) => {
         if (nodesApi(this.app) !== api)
-          throw new Error('Fileclass Inline changed. Choose the highlight destination again.');
+          throw new Error('Fileclass connection changed. Choose the highlight destination again.');
         if (paths?.some((path) => !targets.some((target) => target.path === path)))
           throw new Error('The original destination is no longer known. Reopen the note picker.');
         const currentTypes = api.listTypes();
@@ -2278,7 +2278,7 @@ export class ReaderView extends ItemView {
           throw new Error('Only one new note may be created in this selection flow.');
         if (!api.createNodeForLink)
           throw new Error(
-            'Creating a typed destination requires Fileclass Inline createNodeForLink support. Choose an existing typed note instead.',
+            'Creating a typed destination requires a current Fileclass connection. Choose an existing typed note instead.',
           );
         if (!types.some(({ type }) => type === choice.type))
           throw new Error('The chosen Fileclass is no longer available.');
@@ -2360,7 +2360,7 @@ export class ReaderView extends ItemView {
     const source = this.snapshot,
       api = nodesApi(this.app);
     if (!source || !api)
-      throw new Error('Sending highlights requires Fileclass Inline public Nodes API v2.');
+      throw new Error('Sending highlights requires Fileclass with its public API v1.');
     const types = api.listTypes(),
       nodes: NodeResult[] = [];
     for (const target of paths) {
@@ -2905,7 +2905,7 @@ export class ReaderView extends ItemView {
     } else {
       actions.push({
         id: 'link-note',
-        label: 'Add highlight to notes… (requires Fileclass Inline v2)',
+        label: 'Add highlight to notes… (requires Fileclass)',
         icon: 'file-input',
         disabled: true,
         run() {},

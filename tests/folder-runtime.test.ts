@@ -89,7 +89,7 @@ it('ignores legacy settings, applies the whole group, and recreates only Reader 
 it('leaves obsolete and unknown saved settings untouched on load and folder saves', async () => {
   const saved = { extra: { keep: true }, showPagedArticleButtons: true };
   const f = await runtimeFixture(saved);
-  expect(f.plugin.settings.args).toHaveLength(8);
+  expect(f.plugin.settings.args).toHaveLength(10);
   expect(f.reader.view.host).not.toHaveProperty('showPagedArticleButtons');
   expect(f.reader.view.host.paged).toBe(false);
   expect(f.plugin.data).toEqual(saved);
