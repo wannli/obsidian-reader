@@ -1572,7 +1572,7 @@ describe('commit-time annotation targets', () => {
         return original(file, transform);
       });
       await expect(menu(f.view, 'Add highlight to notes…')).rejects.toThrow(
-        /Fileclass Inline changed|typed destination changed/,
+        /Fileclass connection changed|typed destination changed/,
       );
       expect(api.pickNodeForLink).not.toHaveBeenCalled();
       expect(await f.vault.read(article)).toBe(before);

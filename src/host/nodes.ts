@@ -1,4 +1,6 @@
 import type { App } from 'obsidian';
+
+/** Reader's public-facing typed-note seam; Fileclass v1 is the sole external authority. */
 export interface NodeResult {
   path: string;
   title: string;
@@ -29,17 +31,21 @@ export interface NodesApi {
     link: (node: NodeResult) => Promise<void>,
   ): Promise<NodeResult | null>;
   pickNodeForLink?(
-    options: {
-      suggestedTitle?: string;
-      sourcePath: string;
-      signal?: AbortSignal;
-    },
+    options: { suggestedTitle?: string; sourcePath: string; signal?: AbortSignal },
     link: (node: NodeResult) => Promise<void>,
   ): Promise<NodeResult | null>;
 }
+
+const readers = new WeakMap<App, () => NodesApi | undefined>();
+/** Owned by ReaderPlugin's lifetime. Also provides an explicit isolated test seam. */
+export function bindNodesApi(app: App, provider: () => NodesApi | undefined): () => void {
+  readers.set(app, provider);
+  return () => {
+    if (readers.get(app) === provider) readers.delete(app);
+  };
+}
 export function nodesApi(app: App): NodesApi | undefined {
-  const host = app as App & { plugins?: { getPlugin(id: string): { api?: NodesApi } | undefined } };
-  const api = host.plugins?.getPlugin('fileclass-inline')?.api;
+  const api = readers.get(app)?.();
   return api?.version === 2 &&
     ['listTypes', 'searchNodes', 'getNode', 'createNode'].every(
       (key) => typeof (api as unknown as Record<string, unknown>)[key] === 'function',

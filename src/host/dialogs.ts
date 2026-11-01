@@ -372,7 +372,8 @@ export function chooseTopics(
         addButton.classList.add('reader-topic-add');
         const description = creation?.create
           ? 'Create and link immediately. Cancel keeps the new topic and link; other selections need Save.'
-          : (creation?.disabledReason ?? 'Enable Fileclass Inline topic creation to add a topic.');
+          : (creation?.disabledReason ??
+            'Enable Fileclass and configure a typed-note folder in Reader to add a topic.');
         addButton.title = description;
         addButton.setAttribute('aria-description', description);
         const cancelButton = footer.createEl('button', { text: 'Cancel', type: 'button' });

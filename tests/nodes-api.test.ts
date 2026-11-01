@@ -1,6 +1,6 @@
 import { expect, it, vi } from 'vitest';
 import type { App } from 'obsidian';
-import { nodesApi, type NodesApi } from '../src/host/nodes';
+import { bindNodesApi, nodesApi, type NodesApi } from '../src/host/nodes';
 
 const api = (): NodesApi => ({
   version: 2,
@@ -9,18 +9,17 @@ const api = (): NodesApi => ({
   getNode: vi.fn(() => null),
   createNode: vi.fn(async () => null),
 });
-const app = (value: unknown) => ({
-  plugins: {
-    getPlugin: vi.fn((id: string) => (id === 'fileclass-inline' ? { api: value } : undefined)),
-  },
-});
-const detect = (value: unknown) => nodesApi(app(value) as unknown as App);
+const app = (value: unknown) => {
+  const host = {} as App;
+  bindNodesApi(host, () => value as NodesApi | undefined);
+  return host;
+};
+const detect = (value: unknown) => nodesApi(app(value));
 
-it('accepts the public version-2 API without shared picker and uses only the public plugin ID', () => {
+it('accepts the Reader-owned API without looking up Fileclass Inline', () => {
   const value = api(),
     host = app(value);
-  expect(nodesApi(host as unknown as App)).toBe(value);
-  expect(host.plugins.getPlugin).toHaveBeenCalledExactlyOnceWith('fileclass-inline');
+  expect(nodesApi(host)).toBe(value);
   for (const name of ['listTypes', 'searchNodes', 'getNode', 'createNode'] as const)
     expect(value[name]).not.toHaveBeenCalled();
 });
@@ -48,9 +47,13 @@ it.each([null, false, 'not a method'])(
   },
 );
 
-it('keeps Nodes optional when the plugin or plugin manager is absent', () => {
-  expect(nodesApi({} as App)).toBeUndefined();
-  expect(nodesApi({ plugins: { getPlugin: () => undefined } } as unknown as App)).toBeUndefined();
+it('keeps Nodes optional when Reader is absent or disposed', () => {
+  const host = {} as App;
+  expect(nodesApi(host)).toBeUndefined();
+  const unbind = bindNodesApi(host, api);
+  expect(nodesApi(host)).toBeDefined();
+  unbind();
+  expect(nodesApi(host)).toBeUndefined();
   expect(detect(undefined)).toBeUndefined();
 });
 

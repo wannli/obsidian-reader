@@ -31,6 +31,13 @@ import { type LibraryChange } from './host/vault';
 import { FolderRuntime } from './host/folder-runtime';
 import { READER_VIEW, ReaderView } from './reader/view';
 import { nativeLinkPath } from './host/note-links';
+import { bindNodesApi } from './host/nodes';
+import { ReaderNodes } from './host/fileclass/reader-nodes';
+import {
+  DEFAULT_SETTINGS as defaultTypedNotes,
+  validateSettings as validateTypedNotes,
+  type NodesSettings,
+} from './host/fileclass/settings';
 
 export default class ReaderPlugin extends Plugin {
   private runtime = new FolderRuntime();
@@ -54,6 +61,8 @@ export default class ReaderPlugin extends Plugin {
   private routingLeaves = new WeakSet<WorkspaceLeaf>();
   private sourceLeaves = new Map<WorkspaceLeaf, { file: TFile; transitioning: boolean }>();
   private statusFolders: ResolvedStatusFolders = defaultStatusFolders;
+  private typedNotes?: ReaderNodes;
+  private unbindNodes?: () => void;
   // These adapters preserve command/test seams; the generation owns the actual state.
   private get attempted() {
     return this.runtime.attempted;
@@ -133,6 +142,18 @@ export default class ReaderPlugin extends Plugin {
       invalid = true;
       this.notice(`Reader is paused until its folder settings are corrected: ${String(error)}`);
     }
+    const typedData =
+      data && typeof data === 'object' ? (data as Record<string, unknown>).typedNotes : undefined;
+    const typedCandidate =
+      typedData && typeof typedData === 'object'
+        ? { ...defaultTypedNotes, ...(typedData as Partial<NodesSettings>) }
+        : defaultTypedNotes;
+    const typedSettings = validateTypedNotes(typedCandidate) ? defaultTypedNotes : typedCandidate;
+    if (typedSettings !== typedCandidate)
+      this.notice('Invalid typed-note settings; using defaults.');
+    this.typedNotes = new ReaderNodes(this.app, typedSettings);
+    this.typedNotes.start();
+    this.unbindNodes = bindNodesApi(this.app, () => this.typedNotes?.api());
     this.startFolders(folders);
     this.statusFolders = statusFolders;
     this.store.setStatusFolders(statusFolders);
@@ -246,6 +267,20 @@ export default class ReaderPlugin extends Plugin {
                 this.views().map((view) => view.changed({ path: '', metadataChanged: true })),
               );
             }
+          }),
+        typedSettings,
+        (next) =>
+          this.folderSaves.run('folders', async () => {
+            if (this.unloaded) throw new Error('Reader has stopped.');
+            const invalid = validateTypedNotes(next);
+            if (invalid) throw new Error(invalid);
+            const stored = await this.loadData();
+            if (this.unloaded) throw new Error('Reader has stopped.');
+            await this.saveData({
+              ...(stored && typeof stored === 'object' ? stored : {}),
+              typedNotes: next,
+            });
+            if (!this.unloaded) this.typedNotes?.configure(next);
           }),
       ),
     );
@@ -1062,6 +1097,10 @@ export default class ReaderPlugin extends Plugin {
     }
   }
   onunload(): void {
+    this.unbindNodes?.();
+    this.unbindNodes = undefined;
+    this.typedNotes?.dispose();
+    this.typedNotes = undefined;
     // Obsidian does not await this hook. Stop writes rather than allow old instances
     // to finish mutations after Hot Reload. Normal closes/visibility changes drain earlier;
     // abrupt unload/process termination cannot guarantee the final unsaved selection/position.

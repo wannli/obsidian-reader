@@ -5,7 +5,7 @@ Start with the [codebase map](docs/map.md), [approved scope](docs/rebuild-spec.m
 ## Identity and compatibility
 
 - Product: Reader. Obsidian plugin ID: `obsidian-reader`; GitHub repository: `wannli/obsidian-reader`.
-- Reader alone requires Obsidian ≥1.8.0. New hosted highlights require Obsidian ≥1.12.7 and public `fileclass-inline.api` v2 typed-note discovery; typed creation additionally requires `createNodeForLink`. No old plugin-ID fallback or migration.
+- Reader alone requires Obsidian ≥1.8.0. New hosted highlights require Obsidian ≥1.12.7 and Fileclass public API v1 for typed-note discovery and creation. Reader does not depend on Fileclass Inline; no plugin-ID fallback or migration.
 - This is a standalone plugin. Do not import or migrate settings, hotkeys, workspace views, plugin enablement, or vault data from another plugin without Wannes's explicit migration plan.
 - Preserve unknown Markdown/frontmatter and user-authored content. Before changing persisted note schemas or data structure, present the proposal and wait for approval. Do not add `created-by` properties to Markdown files.
 - Keep documentation under 200 lines unless approved otherwise.
@@ -16,7 +16,7 @@ Start with the [codebase map](docs/map.md), [approved scope](docs/rebuild-spec.m
 - `src/core/` owns Markdown snapshots, metadata indexing, capture-destination validation and guarded writes. Recheck source bytes, file identity and dirty-editor safety at mutation boundaries.
 - `src/content/` bounds and sanitizes external content. `src/host/` adapts native vault, network, dialogs/settings and optional Nodes APIs; keep uncancellable native requests in their occupied slots until settlement.
 - `src/reader/` renders the list/articles. `src/reader/styles.css` is the sole source stylesheet: leaf-owned floating controls, ≥44px targets, scrollbar/final-content clearance and aligned paged column geometry.
-- Use ordinary Fileclass-typed notes, not a separate Reader node entity. Reader owns the highlight-specific typed picker; Fileclass Inline owns schema-aware creation/required completion through its public API. No untyped/All files route or standalone creation fallback. New highlights require a host; existing content remains readable without the provider. Follow [hosted highlights](docs/hosted-highlights.md), including source citations, quotation snapshots and new-note `origin`. Cancellation never authorizes deleting a created note or blocking navigation on an uncooperative provider.
+- Use ordinary Fileclass-typed notes, not a separate Reader node entity. Reader owns the highlight-specific typed picker, creation and required-field UI; Fileclass public API v1 supplies class membership, schemas and writes. No untyped/All files route or creation without Fileclass. New highlights require Fileclass; existing content remains readable without it. Follow [hosted highlights](docs/hosted-highlights.md), including source citations, quotation snapshots and new-note `origin`. Cancellation never authorizes deleting a created note or blocking navigation on an uncooperative provider.
 - All article entry resumes the destination's saved position. Preserve explicit Open Markdown, dirty/uncertain editors, selection/modal/input guards and held-key protection.
 
 ## Development and release

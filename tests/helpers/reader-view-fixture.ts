@@ -10,7 +10,7 @@ import { articleTopicPill, type ArticleTopic } from '../../src/reader/topic-pill
 import { ArticleAnalysis } from '../../src/reader/article-analysis';
 import { ReaderView } from '../../src/reader/view';
 import ReaderPlugin from '../../src/main';
-import type { NodesApi, NodeResult } from '../../src/host/nodes';
+import { bindNodesApi, type NodesApi, type NodeResult } from '../../src/host/nodes';
 import { MemoryVault } from './memory-vault';
 
 // Obsidian has declarations only: server-side mock resolution plus a local DOM,
@@ -345,6 +345,8 @@ function hostFixture(folders: ReaderFolders = defaultFolders) {
       revealLeaf: vi.fn(async () => {}),
     },
   };
+  // Legacy test DTOs are injected explicitly; production never looks up Inline.
+  bindNodesApi(app, () => app.plugins?.getPlugin?.()?.api);
   const store = new ArticleStore(vault as unknown as VaultPort<TFile>, folders);
   const signal = new AbortController();
   const host: any = {
@@ -416,9 +418,8 @@ async function enableHighlightHost(f: ReturnType<typeof hostFixture>, ...article
     createNodeForLink: vi.fn(async () => null),
     pickNodeForLink: vi.fn(async () => null),
   };
-  (f.app as any).plugins = {
-    getPlugin: (id: string) => (id === 'fileclass-inline' ? { api } : undefined),
-  };
+  (f.app as any).plugins = { getPlugin: () => ({ api }) };
+  bindNodesApi(f.app, () => (f.app as any).plugins?.getPlugin?.()?.api);
   mocks.highlightPicker.mockImplementation(async (_app, current) =>
     current === api ? { kind: 'existing', node } : null,
   );
@@ -446,9 +447,8 @@ function enableTypedTopics(f: ReturnType<typeof hostFixture>) {
     getNode: vi.fn(nodeAt),
     createNode: vi.fn(async () => null),
   };
-  (f.app as any).plugins = {
-    getPlugin: (id: string) => (id === 'fileclass-inline' ? { api } : undefined),
-  };
+  (f.app as any).plugins = { getPlugin: () => ({ api }) };
+  bindNodesApi(f.app, () => (f.app as any).plugins?.getPlugin?.()?.api);
   return api;
 }
 
@@ -493,9 +493,7 @@ function expectedPassageActions({
   undo = false,
 }: { linked?: boolean; provider?: boolean; undo?: boolean } = {}): string[] {
   return [
-    ...(provider
-      ? ['Add highlight to notes…']
-      : ['Add highlight to notes… (requires Fileclass Inline v2)']),
+    ...(provider ? ['Add highlight to notes…'] : ['Add highlight to notes… (requires Fileclass)']),
     'Remove highlight (article only)',
     ...(undo ? ['Undo'] : []),
     'Done',

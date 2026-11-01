@@ -955,7 +955,7 @@ describe('hosted highlight UI integration', () => {
   it('shows a clear provider error for new highlights while keeping legacy removal usable', async () => {
     const f = await fixture();
     (f.app as any).plugins = undefined;
-    await expect(f.select()).rejects.toThrow(/Fileclass Inline.*v2/);
+    await expect(f.select()).rejects.toThrow(/require Fileclass.*API v1/);
     expect((await f.store.read(f.article.path)).body).toBe('Before first words after.');
     const old = await f.note('Reading/Inbox/Legacy.md', 'Before ==legacy== after.');
     await f.view.openArticle(old.path);
@@ -1431,7 +1431,7 @@ describe('hosted highlight UI integration', () => {
     const f = await fixture();
     const legacy = await f.note('Topics/Legacy.md', 'An ordinary legacy topic.', 'topic');
     (f.app as any).plugins = undefined;
-    await expect(f.probe.topics()).rejects.toThrow(/Fileclass Inline.*v2/);
+    await expect(f.probe.topics()).rejects.toThrow(/requires Fileclass.*API v1/);
     expect(mocks.topics).not.toHaveBeenCalled();
     await f.view.readingList();
     const { chooseTopicFilter } = await import('../src/host/topic-filter-dialog');
