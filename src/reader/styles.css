@@ -784,6 +784,34 @@ dialog.reader-image-viewer,
   max-height: calc(100dvh - 160px);
   overflow: hidden;
 }
+.reader-highlight-picker-excerpt {
+  display: -webkit-box;
+  width: 100%;
+  box-sizing: border-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+}
+.reader-highlight-picker-selected {
+  width: 100%;
+  min-height: 0;
+  box-sizing: border-box;
+  border-bottom: 1px solid var(--background-modifier-border);
+}
+.reader-highlight-picker-selected-heading {
+  padding-inline: var(--size-4-3);
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+}
+.reader-highlight-picker-selected-results {
+  max-height: min(30dvh, 240px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: var(--size-4-2) var(--size-4-3);
+}
 .reader-highlight-picker-controls {
   display: flex;
   flex-direction: column;
@@ -812,12 +840,6 @@ dialog.reader-image-viewer,
 .reader-highlight-picker .reader-highlight-picker-search:focus-visible {
   background-color: transparent;
   box-shadow: none;
-}
-.reader-highlight-picker .reader-highlight-picker-type-filter {
-  align-self: flex-start;
-  width: auto;
-  max-width: 100%;
-  font-size: var(--font-ui-small);
 }
 .reader-highlight-picker-controls,
 .reader-highlight-picker-footer {
@@ -900,13 +922,6 @@ dialog.reader-image-viewer,
   font-size: 0.8em;
   color: var(--text-muted);
 }
-.reader-highlight-picker-type-badge {
-  min-width: 0;
-  max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
 .reader-highlight-picker-result-path {
   flex: 1 1 12ch;
   min-width: 0;
@@ -928,21 +943,6 @@ dialog.reader-image-viewer,
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-.reader-highlight-picker
-  button.reader-highlight-picker-create-row
-  .reader-highlight-picker-result-meta {
-  flex: 0 0 auto;
-  width: auto;
-  max-width: none;
-}
-.reader-highlight-picker
-  button.reader-highlight-picker-create-row
-  .reader-highlight-picker-type-badge {
-  flex: none;
-  max-width: none;
-  overflow: visible;
-  text-overflow: clip;
 }
 .reader-highlight-picker-icon,
 .reader-highlight-picker-check {

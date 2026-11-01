@@ -19,6 +19,7 @@ export type HighlightHostChoice =
 export interface HighlightHostPickerOptions {
   title?: string;
   query?: string;
+  excerpt?: string;
   preferredPaths?: readonly string[];
   signal?: AbortSignal;
   allowCreate?: boolean;
@@ -83,6 +84,26 @@ export function chooseHighlightHost(
         if (options.tone === 'highlight' || options.tone === 'node')
           this.modalEl.classList.add(`reader-picker-${options.tone}`);
         this.contentEl.classList.add('reader-highlight-picker');
+        if (options.excerpt?.trim()) {
+          const excerpt = append(this.contentEl, 'div', 'reader-highlight-picker-excerpt');
+          const words = Array.from(options.excerpt.replace(/\s+/gu, ' ').trim());
+          const preview = words.slice(0, 220).join('') + (words.length > 220 ? '…' : '');
+          excerpt.textContent = preview;
+          excerpt.setAttribute('aria-label', `Selected passage: ${preview}`);
+        }
+        const selectedSection = append(this.contentEl, 'div', 'reader-highlight-picker-selected');
+        const selectedHeading = append(
+          selectedSection,
+          'div',
+          'reader-highlight-picker-selected-heading',
+        );
+        const selectedResults = append(
+          selectedSection,
+          'div',
+          'reader-highlight-picker-selected-results',
+        );
+        selectedResults.setAttribute('role', 'group');
+        selectedResults.setAttribute('aria-label', 'Selected typed notes');
         const controls = append(this.contentEl, 'div', 'reader-highlight-picker-controls');
         const searchWrap = append(
           controls,
@@ -94,8 +115,6 @@ export function chooseHighlightHost(
         search.placeholder = 'Search notes or enter a new title';
         search.setAttribute('aria-label', 'Search typed notes');
         search.value = nodeChoiceSeed(options.query);
-        const filter = append(controls, 'select', 'reader-highlight-picker-type-filter dropdown');
-        filter.setAttribute('aria-label', 'Fileclass filter');
         const results = append(
           this.contentEl,
           'div',
@@ -124,6 +143,7 @@ export function chooseHighlightHost(
         let rows: NodeResult[] = [];
         let exact: NodeResult[] = [];
         let selected = new Map<string, NodeResult>();
+        const originalPaths = new Set(options.selectedPaths ?? []);
         let initialized = !multiple;
         let canCreate = false;
         let hasError = false;
@@ -215,19 +235,6 @@ export function chooseHighlightHost(
           if (!Array.isArray(found)) throw new Error('Fileclass search is unavailable.');
           return found;
         };
-        const rebuildTypes = () => {
-          const previous = filter.value;
-          filter.replaceChildren();
-          append(filter, 'option', '', 'All types').value = '';
-          for (const type of types) append(filter, 'option', '', type.label).value = type.type;
-          if (previous && !types.some((type) => type.type === previous)) {
-            const unavailable = append(filter, 'option', '', `${previous} (unavailable)`);
-            unavailable.value = previous;
-            unavailable.disabled = true;
-          }
-          filter.value = previous;
-          filter.hidden = types.length < 2 && !previous;
-        };
         const revalidate = (path: string, type = ''): NodeResult => {
           const node = api.getNode(path);
           if (!active()) throw new Error('Selection cancelled.');
@@ -262,9 +269,9 @@ export function chooseHighlightHost(
           return duplicates;
         };
         const focusRow = (path: string) => {
-          const replacement = [...results.querySelectorAll<HTMLButtonElement>('[data-path]')].find(
-            (row) => row.dataset.path === path,
-          );
+          const replacement = [
+            ...this.contentEl.querySelectorAll<HTMLButtonElement>('[data-path]'),
+          ].find((row) => row.dataset.path === path);
           (
             replacement ??
             results.querySelector<HTMLButtonElement>('button:not(:disabled)') ??
@@ -289,11 +296,7 @@ export function chooseHighlightHost(
             if (!canCreate) throw new Error('Fileclass linked-note creation is unavailable.');
             if (title !== query())
               throw new Error('The search changed. Choose a current creation row.');
-            if (
-              !title ||
-              !types.some((entry) => entry.type === type) ||
-              (filter.value && filter.value !== type)
-            )
+            if (!title || !types.some((entry) => entry.type === type))
               throw new Error('Choose an available Fileclass and enter a note title.');
             const nodes = multiple ? validateSelected() : [];
             if (!active()) return;
@@ -317,13 +320,16 @@ export function chooseHighlightHost(
           });
         const renderResults = () => {
           results.replaceChildren();
+          selectedResults.replaceChildren();
+          selectedSection.hidden = !multiple || selected.size === 0;
+          selectedHeading.textContent = [...selected.keys()].some((path) => originalPaths.has(path))
+            ? [...selected.keys()].some((path) => !originalPaths.has(path))
+              ? 'Linked notes and new selections'
+              : 'Already linked'
+            : 'Selected notes';
           const visible = [
-            ...new Map([
-              ...[...selected.values()].map((node) => [node.path, node] as const),
-              ...rows
-                .slice(0, 100)
-                .map((node) => [node.path, selected.get(node.path) ?? node] as const),
-            ]).values(),
+            ...selected.values(),
+            ...rows.filter((node) => !selected.has(node.path)).slice(0, 100),
           ];
           const displayName = (node: NodeResult) =>
             node.title.replace(/\s+/gu, ' ').trim().toLocaleLowerCase();
@@ -338,7 +344,7 @@ export function chooseHighlightHost(
           }
           for (const node of visible) {
             const row = append(
-              results,
+              selected.has(node.path) && multiple ? selectedResults : results,
               'button',
               'reader-highlight-picker-result suggestion-item mod-complex',
             );
@@ -368,22 +374,9 @@ export function chooseHighlightHost(
               'reader-highlight-picker-result-title suggestion-title',
               node.title,
             );
-            content.append(' ');
-            const metadata = append(
-              content,
-              'span',
-              'reader-highlight-picker-result-meta suggestion-note',
-            );
-            const typeBadge = append(
-              metadata,
-              'span',
-              'reader-highlight-picker-type-badge',
-              classNames(node) || 'Unavailable type',
-            );
-            typeBadge.title = typeBadge.textContent ?? '';
             if ((names.get(displayName(node)) ?? 0) > 1) {
-              metadata.append(' ');
-              append(metadata, 'span', 'reader-highlight-picker-result-path', node.path);
+              content.append(' ');
+              append(content, 'span', 'reader-highlight-picker-result-path', node.path);
             }
             const labels = [
               node.title,
@@ -405,7 +398,7 @@ export function chooseHighlightHost(
                 else {
                   readTypes();
                   if (!active()) return;
-                  const fresh = revalidate(node.path, filter.value);
+                  const fresh = revalidate(node.path);
                   if (!active()) return;
                   if (!multiple) {
                     finish({ kind: 'existing', node: fresh });
@@ -421,9 +414,7 @@ export function chooseHighlightHost(
           }
           const title = query();
           if (canCreate && title && !hasError) {
-            for (const type of types.filter(
-              (entry) => !filter.value || entry.type === filter.value,
-            )) {
+            for (const type of types) {
               if (
                 [...exact, ...selected.values()].some(
                   (node) =>
@@ -461,20 +452,13 @@ export function chooseHighlightHost(
               );
               label.append('”');
               content.append(' ');
-              const metadata = append(
-                content,
-                'span',
-                'reader-highlight-picker-result-meta suggestion-note',
-              );
-              append(metadata, 'span', 'reader-highlight-picker-type-badge', type.label).title =
-                type.label;
               const accessibleLabel = `Create “${title}” as ${type.label} and ${action}${multiple ? ` to ${selected.size + 1} notes` : ''}`;
               row.setAttribute('aria-label', accessibleLabel);
               row.title = accessibleLabel;
               row.addEventListener('click', () => create(type.type, title));
             }
           }
-          if (!visible.length && !results.children.length)
+          if (!rows.length && !results.children.length)
             append(
               results,
               'p',
@@ -487,7 +471,6 @@ export function chooseHighlightHost(
           run(() => {
             readTypes();
             if (!active()) return;
-            rebuildTypes();
             if (!initialized) {
               const initial = new Map<string, NodeResult>();
               for (const path of new Set(options.selectedPaths))
@@ -507,15 +490,12 @@ export function chooseHighlightHost(
             if (!active()) return;
             rows = nodeChoices([...preferred, ...found].filter(allowedNode), types, {
               query: term,
-              type: filter.value,
               preferredPaths,
             });
             exact = canCreate ? findExact(term, [...rows, ...selected.values()]) : [];
             if (!active()) return;
             renderResults();
             updateFooter();
-            if (filter.value && !types.some((type) => type.type === filter.value))
-              showError(new Error('This Fileclass is unavailable. Choose another filter.'));
           });
         cancel.addEventListener('click', () => finish(null));
         retry.addEventListener('click', refresh);
@@ -542,7 +522,6 @@ export function chooseHighlightHost(
           }),
         );
         search.addEventListener('input', refresh);
-        filter.addEventListener('change', refresh);
         search.addEventListener('keydown', (event) => {
           if (event.isComposing) return;
           if (
@@ -556,10 +535,12 @@ export function chooseHighlightHost(
             else results.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus();
           }
         });
-        results.addEventListener('keydown', (event) => {
-          const target = [...results.querySelectorAll<HTMLButtonElement>('button')].find(
-            (button) => button === event.target,
-          );
+        const onRowKey = (event: KeyboardEvent) => {
+          const buttons = [
+            ...selectedResults.querySelectorAll<HTMLButtonElement>('button:not(:disabled)'),
+            ...results.querySelectorAll<HTMLButtonElement>('button:not(:disabled)'),
+          ];
+          const target = buttons.find((button) => button === event.target);
           if (event.isComposing || !target) return;
           if (event.key === 'Enter' || event.key === ' ') {
             event.preventDefault();
@@ -567,13 +548,13 @@ export function chooseHighlightHost(
             if (!event.repeat) target.click();
           } else if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
             event.preventDefault();
-            const buttons = [
-              ...results.querySelectorAll<HTMLButtonElement>('button:not(:disabled)'),
-            ];
-            const index = buttons.indexOf(target);
-            (buttons[index + (event.key === 'ArrowDown' ? 1 : -1)] ?? search).focus();
+            (
+              buttons[buttons.indexOf(target) + (event.key === 'ArrowDown' ? 1 : -1)] ?? search
+            ).focus();
           }
-        });
+        };
+        selectedResults.addEventListener('keydown', onRowKey);
+        results.addEventListener('keydown', onRowKey);
         clearError();
         refresh();
         if (active()) search.focus();

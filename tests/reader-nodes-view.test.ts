@@ -207,6 +207,7 @@ describe('Nodes v2 linked creation', () => {
         f.api,
         expect.objectContaining({
           query: '',
+          excerpt: 'words',
           signal: expect.any(AbortSignal),
           title: 'Add highlight to notes',
           multiple: true,
