@@ -739,6 +739,8 @@ dialog.reader-image-viewer,
 
 .reader-highlight-picker-modal {
   width: min(560px, calc(100vw - 24px));
+  max-width: calc(100vw - 24px);
+  max-height: var(--dialog-max-height);
 }
 .reader-highlight-picker-modal.reader-picker-highlight {
   --reader-picker-rgb: var(--color-yellow-rgb, 224, 172, 0);
@@ -768,13 +770,6 @@ dialog.reader-image-viewer,
   .mod-cta {
   background: rgba(var(--reader-picker-rgb), 0.18);
   color: var(--text-normal);
-}
-/* This is a native Modal, not the absolutely positioned command prompt. */
-.reader-highlight-picker-modal.prompt {
-  position: relative;
-  top: auto;
-  max-width: calc(100vw - 24px);
-  max-height: var(--dialog-max-height);
 }
 .reader-highlight-picker {
   display: flex;
@@ -854,10 +849,10 @@ dialog.reader-image-viewer,
   overflow-y: auto;
   overscroll-behavior: contain;
 }
-/* Suggestion classes alone do not reset Obsidian's native button fill/height. */
+/* Reset native button fill/height while keeping each row touch-sized. */
 .reader-highlight-picker button.reader-highlight-picker-result {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   justify-content: space-between;
   gap: var(--size-4-2);
   box-sizing: border-box;
@@ -1006,8 +1001,18 @@ dialog.reader-image-viewer,
   gap: var(--size-4-2);
 }
 .reader-passage-node-types button {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--size-4-2);
   min-height: 44px;
   min-width: 44px;
+}
+.reader-passage-node-type-icon,
+.reader-passage-node-type-icon svg {
+  display: inline-flex;
+  flex: 0 0 1em;
+  width: 1em;
+  height: 1em;
 }
 .reader-passage-node-picker [hidden] {
   display: none !important;

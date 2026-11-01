@@ -283,7 +283,7 @@ describe('native-sized Fileclass reference tags', () => {
       'min-height: 44px',
       'font-size: var(--font-ui-medium)',
       'padding: var(--size-2-3) var(--size-4-3)',
-      'align-items: baseline',
+      'align-items: center',
       'white-space: pre-wrap',
     ]) {
       expect(row).toContain(property);
@@ -320,8 +320,11 @@ describe('native-sized Fileclass reference tags', () => {
     const actions = /\.reader-highlight-picker-footer button \{([^}]+)\}/.exec(css)![1];
     expect(actions).toContain('min-height: 44px');
     expect(actions).not.toMatch(/background|box-shadow/);
-    const modal = /\.reader-highlight-picker-modal\.prompt \{([^}]+)\}/.exec(css)![1];
-    expect(modal).toContain('position: relative');
-    expect(modal).toContain('top: auto');
+    const modal = /\.reader-highlight-picker-modal \{([^}]+)\}/.exec(css)![1];
+    expect(modal).toContain('width: min(560px, calc(100vw - 24px))');
+    expect(css).not.toContain('.reader-highlight-picker-modal.prompt');
+    const typeButton = /\.reader-passage-node-types button \{([^}]+)\}/.exec(css)![1];
+    expect(typeButton).toContain('align-items: center');
+    expect(typeButton).toContain('min-height: 44px');
   });
 });

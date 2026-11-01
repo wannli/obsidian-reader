@@ -1,4 +1,4 @@
-import { Modal, type App } from 'obsidian';
+import { Modal, setIcon, type App } from 'obsidian';
 import { hasNodeClass, nodeChoiceMatch, nodeChoiceSeed } from '../core/node-choices';
 import type { HighlightHostApi, HighlightHostChoice } from './highlight-picker';
 
@@ -73,8 +73,15 @@ export function choosePassageNode(
             if (!types.length) throw new Error('No note types are available.');
             for (const type of types) {
               const button = doc.createElement('button');
-              button.textContent = type.label || type.type;
               button.type = 'button';
+              if (type.icon) {
+                const icon = doc.createElement('span');
+                icon.className = 'reader-passage-node-type-icon';
+                icon.setAttribute('aria-hidden', 'true');
+                setIcon(icon, type.icon);
+                if (icon.hasChildNodes()) button.append(icon);
+              }
+              button.append(doc.createTextNode(type.label || type.type));
               typesEl.append(button);
               button.setAttribute('aria-label', `Create ${type.label || type.type} note`);
               button.addEventListener('click', () => {

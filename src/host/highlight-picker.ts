@@ -80,7 +80,7 @@ export function chooseHighlightHost(
     class HighlightHostDialog extends Modal {
       onOpen(): void {
         this.setTitle(options.title ?? 'Add highlight to notes');
-        this.modalEl.classList.add('reader-highlight-picker-modal', 'prompt');
+        this.modalEl.classList.add('reader-highlight-picker-modal');
         if (options.tone === 'highlight' || options.tone === 'node')
           this.modalEl.classList.add(`reader-picker-${options.tone}`);
         this.contentEl.classList.add('reader-highlight-picker');
@@ -105,21 +105,13 @@ export function chooseHighlightHost(
         selectedResults.setAttribute('role', 'group');
         selectedResults.setAttribute('aria-label', 'Selected typed notes');
         const controls = append(this.contentEl, 'div', 'reader-highlight-picker-controls');
-        const searchWrap = append(
-          controls,
-          'div',
-          'reader-highlight-picker-search-wrap prompt-input-container',
-        );
-        const search = append(searchWrap, 'input', 'reader-highlight-picker-search prompt-input');
+        const searchWrap = append(controls, 'div', 'reader-highlight-picker-search-wrap');
+        const search = append(searchWrap, 'input', 'reader-highlight-picker-search');
         search.type = 'search';
         search.placeholder = 'Search notes or enter a new title';
         search.setAttribute('aria-label', 'Search typed notes');
         search.value = nodeChoiceSeed(options.query);
-        const results = append(
-          this.contentEl,
-          'div',
-          'reader-highlight-picker-results prompt-results',
-        );
+        const results = append(this.contentEl, 'div', 'reader-highlight-picker-results');
         results.setAttribute('role', 'group');
         results.setAttribute('aria-label', 'Typed notes and creation choices');
         const message = append(this.contentEl, 'div', 'reader-highlight-picker-message');
@@ -346,7 +338,7 @@ export function chooseHighlightHost(
             const row = append(
               selected.has(node.path) && multiple ? selectedResults : results,
               'button',
-              'reader-highlight-picker-result suggestion-item mod-complex',
+              'reader-highlight-picker-result',
             );
             row.type = 'button';
             row.dataset.path = node.path;
@@ -358,22 +350,9 @@ export function chooseHighlightHost(
             const classIcon = node.classes
               .map((type) => types.find((entry) => entry.type === type)?.icon)
               .find(Boolean);
-            icon(
-              row,
-              node.icon || classIcon || 'file-text',
-              'reader-highlight-picker-icon suggestion-icon',
-            );
-            const content = append(
-              row,
-              'span',
-              'reader-highlight-picker-result-content suggestion-content',
-            );
-            append(
-              content,
-              'span',
-              'reader-highlight-picker-result-title suggestion-title',
-              node.title,
-            );
+            icon(row, node.icon || classIcon || 'file-text', 'reader-highlight-picker-icon');
+            const content = append(row, 'span', 'reader-highlight-picker-result-content');
+            append(content, 'span', 'reader-highlight-picker-result-title', node.title);
             if ((names.get(displayName(node)) ?? 0) > 1) {
               content.append(' ');
               append(content, 'span', 'reader-highlight-picker-result-path', node.path);
@@ -426,21 +405,17 @@ export function chooseHighlightHost(
               const row = append(
                 results,
                 'button',
-                'reader-highlight-picker-result reader-highlight-picker-create-row suggestion-item mod-complex',
+                'reader-highlight-picker-result reader-highlight-picker-create-row',
               );
               row.type = 'button';
               row.dataset.createType = type.type;
               row.disabled = multiple && (!initialized || selected.size + 1 < minimum);
-              icon(row, type.icon || 'file-plus', 'reader-highlight-picker-icon suggestion-icon');
-              const content = append(
-                row,
-                'span',
-                'reader-highlight-picker-result-content suggestion-content',
-              );
+              icon(row, type.icon || 'file-plus', 'reader-highlight-picker-icon');
+              const content = append(row, 'span', 'reader-highlight-picker-result-content');
               const label = append(
                 content,
                 'span',
-                'reader-highlight-picker-result-title suggestion-title',
+                'reader-highlight-picker-result-title',
                 'Create “',
               );
               const shortTitle = nodeChoiceSeed(title, 48);

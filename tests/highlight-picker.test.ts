@@ -39,6 +39,7 @@ vi.mock('obsidian', () => ({
   },
   setIcon(element: HTMLElement, name: string) {
     element.dataset.icon = name;
+    element.append(document.createElement('svg'));
   },
 }));
 
@@ -148,6 +149,13 @@ describe('one-tap passage note creation', () => {
     expect(document.querySelector('button.mod-cta')).toBeNull();
     expect(document.activeElement).not.toBe(title());
     expect(type('Concept').getAttribute('aria-label')).toBe('Create Concept note');
+    const icon = type('Concept').querySelector<HTMLElement>('.reader-passage-node-type-icon')!;
+    expect(icon.dataset.icon).toBe('brain');
+    expect(icon.getAttribute('aria-hidden')).toBe('true');
+    expect(type('Concept').firstElementChild).toBe(icon);
+    expect(
+      type('Topic').querySelector<HTMLElement>('.reader-passage-node-type-icon')?.dataset.icon,
+    ).toBe('tag');
     const suggested = title().value;
     type('Concept').click();
     expect(await choice).toEqual({ kind: 'create', title: suggested, type: 'concept' });
@@ -1070,20 +1078,23 @@ describe('native suggestion presentation', () => {
     expect(await choice).toBeNull();
   });
 
-  it('exposes full-width search and native action footer hooks without a type switch', async () => {
+  it('isolates modal search and results from command-prompt layout while retaining action buttons', async () => {
     const { choice } = open({ multiple: true });
     const modal = document.querySelector('.reader-highlight-picker-modal')!;
     const controls = modal.querySelector('.reader-highlight-picker-controls')!;
     const searchWrap = controls.querySelector('.reader-highlight-picker-search-wrap')!;
-    expect(modal.classList.contains('prompt')).toBe(true);
-    expect(searchWrap.classList.contains('prompt-input-container')).toBe(true);
+    expect(modal.classList.contains('prompt')).toBe(false);
+    expect(searchWrap.classList.contains('prompt-input-container')).toBe(false);
     expect(searchWrap.children).toHaveLength(1);
     expect(searchInput().parentElement).toBe(searchWrap);
-    expect(searchInput().classList.contains('prompt-input')).toBe(true);
+    expect(searchInput().classList.contains('prompt-input')).toBe(false);
     expect(controls.querySelector('select')).toBeNull();
     expect(
       modal.querySelector('.reader-highlight-picker-results')!.classList.contains('prompt-results'),
-    ).toBe(true);
+    ).toBe(false);
+    expect(
+      modal.querySelector('.suggestion-item, .suggestion-icon, .suggestion-content'),
+    ).toBeNull();
     const footer = modal.querySelector('.reader-highlight-picker-footer')!;
     expect([...footer.children].every((element) => element.tagName === 'BUTTON')).toBe(true);
     expect(footer.querySelector('input, select, .reader-highlight-picker-result')).toBeNull();
@@ -1099,8 +1110,8 @@ describe('native suggestion presentation', () => {
     source.index.set(duplicate.path, duplicate);
     const { choice } = open();
     const candidate = row(exact.path);
-    expect(candidate.classList.contains('suggestion-item')).toBe(true);
-    expect(candidate.classList.contains('mod-complex')).toBe(true);
+    expect(candidate.classList.contains('suggestion-item')).toBe(false);
+    expect(candidate.classList.contains('mod-complex')).toBe(false);
     const content = candidate.querySelector('.reader-highlight-picker-result-content')!;
     const title = content.querySelector('.reader-highlight-picker-result-title')!;
     const path = content.querySelector('.reader-highlight-picker-result-path')!;
