@@ -985,3 +985,30 @@ dialog.reader-image-viewer,
 .reader-highlight-picker [hidden] {
   display: none !important;
 }
+/* Create node is a single-action dialog, not the highlight destination search. */
+.reader-passage-node-picker {
+  display: flex;
+  flex-direction: column;
+  gap: var(--size-4-3);
+  min-width: 0;
+  max-height: calc(100dvh - 120px);
+  overflow-y: auto;
+}
+.reader-passage-node-title {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 44px;
+  font-size: var(--font-ui-medium);
+}
+.reader-passage-node-types {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--size-4-2);
+}
+.reader-passage-node-types button {
+  min-height: 44px;
+  min-width: 44px;
+}
+.reader-passage-node-picker [hidden] {
+  display: none !important;
+}
