@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.26.1](https://github.com/wannli/obsidian-reader/compare/0.26.0...0.26.1) (2026-11-01)
+
+
+### Fixed
+
+* **reader:** prevent related-note picker sections from overlapping ([9506092](https://github.com/wannli/obsidian-reader/commit/95060920ace3e5c7b0d0437cd0fd0b325ecb2613))
+
 ## [0.26.0](https://github.com/wannli/obsidian-reader/compare/0.25.0...0.26.0) (2026-11-01)
 
 
