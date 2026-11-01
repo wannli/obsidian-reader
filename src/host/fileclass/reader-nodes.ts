@@ -1,5 +1,6 @@
 import { parseFrontMatterAliases, TFile, type App } from 'obsidian';
 import { FileclassBridge } from './fileclass';
+import { ReaderRelations } from './relations';
 import { FileclassCache } from './fileclass-cache';
 import { NodeIndex, type NodeEntry } from './index';
 import { CaptureController, type CreatedCapture } from './capture';
@@ -9,6 +10,7 @@ import type { NodesApi, NodeResult } from '../nodes';
 /** Reader-owned typed-note service; Fileclass's public v1 API remains the class authority. */
 export class ReaderNodes {
   private readonly backend: FileclassBridge;
+  private readonly relations: ReaderRelations;
   private readonly index: NodeIndex;
   private readonly cache: FileclassCache;
   private readonly capture: CaptureController;
@@ -24,10 +26,12 @@ export class ReaderNodes {
     if (invalid) throw new Error(invalid);
     this.settings = { ...settings };
     this.backend = new FileclassBridge(app);
+    this.relations = new ReaderRelations(app, () => !this.disposed && this.cache.available());
     this.index = new NodeIndex(app, () => this.backend.members());
     this.capture = new CaptureController(app, this.backend, this.index, () => this.settings);
     this.cache = new FileclassCache(app, this.backend, this.index, () => {
       this.facade = undefined;
+      this.relations.dispose();
       this.capture.cancelAll();
     });
   }
@@ -39,6 +43,7 @@ export class ReaderNodes {
     if (this.disposed) return;
     this.disposed = true;
     this.facade = undefined;
+    this.relations.dispose();
     this.capture.dispose();
     this.cache.dispose();
     this.index.dispose();
@@ -85,6 +90,16 @@ export class ReaderNodes {
   private createFacade(): NodesApi {
     const api: NodesApi = {
       version: 2,
+      relations: {
+        eligibleFields: (request, signal) => {
+          if (this.api() !== api) throw new Error('Fileclass connection changed. Try again.');
+          return this.relations.eligibleFields(request, signal);
+        },
+        assign: (request, signal) => {
+          if (this.api() !== api) throw new Error('Fileclass connection changed. Try again.');
+          return this.relations.assign(request, signal);
+        },
+      },
       listTypes: () =>
         this.api() === api
           ? this.cache

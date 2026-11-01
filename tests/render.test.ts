@@ -58,6 +58,18 @@ it('renders ordinary Markdown, inline highlights and wiki-links', () => {
   dispose();
 });
 
+it('marks a Fileclass-typed link as a Reader target even without an icon', () => {
+  const root = document.createElement('article');
+  renderBody('[[Nodes/Ada|Ada]] and [[Nodes/Book|Book]]', root, '', (target, icon) => {
+    if (target.includes('Nodes/Ada')) icon.dataset.readerTypedPath = 'Nodes/Ada.md';
+  });
+  const [ada, book] = [...root.querySelectorAll<HTMLAnchorElement>('a')];
+  expect(ada.dataset.readerTypedPath).toBe('Nodes/Ada.md');
+  expect(ada.classList.contains('reader-typed-link')).toBe(true);
+  expect(book.dataset.readerTypedPath).toBeUndefined();
+  expect(root.querySelector('.reader-node-icon')).toBeNull();
+});
+
 it('keeps decorative per-pill prefixes and public icons out of source ranges and bookmarks', () => {
   const source =
     'Before ==rich **words**== (※ [[Notes/A|Alpha]], [[Notes/B|Beta]]) after. ^reader-visual\n\nLater paragraph.';

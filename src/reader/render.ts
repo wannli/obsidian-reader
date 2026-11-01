@@ -158,12 +158,15 @@ export function renderBody(
       icon.dataset.readerDecoration = 'reference';
       try {
         referenceIcon(decodeURI(link.getAttribute('href') ?? ''), icon);
+        if (icon.dataset.readerTypedPath)
+          link.dataset.readerTypedPath = icon.dataset.readerTypedPath;
         if (icon.hasChildNodes()) {
           const label = link.querySelector('.reader-reference-label');
           if (label) label.before(icon);
           else link.prepend(icon);
-          link.classList.add('reader-typed-link');
         }
+        if (icon.dataset.readerTypedPath || icon.hasChildNodes())
+          link.classList.add('reader-typed-link');
       } catch {
         // A reloaded/unavailable provider must not hide the native reference or article.
       }

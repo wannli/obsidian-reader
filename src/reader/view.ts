@@ -43,6 +43,7 @@ import {
   type HostedHighlight,
 } from '../core/hosted-highlights';
 import { choose, confirmWebLink } from '../host/dialogs';
+import { connectNodes, type RelationField } from '../host/node-relations';
 import type { Ingestion } from '../host/ingestion';
 import { nodesApi, type NodesApi, type NodeResult } from '../host/nodes';
 import { chooseHighlightHost } from '../host/highlight-picker';
@@ -917,6 +918,7 @@ export class ReaderView extends ItemView {
       }
       this.syncPresentation();
       surface.setBody(snapshot.body, article.url);
+      this.installRelationTargets(surface);
       if (this.surface !== surface) return; // The synchronous error callback installed the escape hatch.
       surface.restore(readingMarker(snapshot.properties.bookmark) ?? '');
       if (this.surface !== surface) return;
@@ -996,12 +998,142 @@ export class ReaderView extends ItemView {
       const node = file && api ? api.getNode(file.path) : null;
       const types = api?.listTypes() ?? [];
       if (!node || node.path !== file?.path || !hasNodeClass(node, types)) return;
+      element.dataset.readerTypedPath = node.path;
       const icon =
         node.icon ?? types.find((type) => type.icon && node.classes.includes(type.type))?.icon;
       if (icon) setIcon(element, icon);
     } catch {
       /* Optional public-provider failures must not hide reference labels. */
     }
+  }
+  /** Only Reader-rendered typed links are drop targets. Click navigation is unchanged. */
+  private installRelationTargets(surface: ReadingSurface): void {
+    let dragged: string | undefined;
+    let hovered: HTMLAnchorElement | null = null;
+    const clearHover = () => {
+      hovered?.classList.remove('reader-relation-drop-target');
+      hovered = null;
+    };
+    surface.body
+      .querySelectorAll<HTMLAnchorElement>('a.reader-typed-link[data-reader-typed-path]')
+      .forEach((link) => {
+        link.draggable = true;
+      });
+    const typed = (target: EventTarget | null): HTMLAnchorElement | null =>
+      target instanceof Element
+        ? target.closest<HTMLAnchorElement>('a.reader-typed-link[data-reader-typed-path]')
+        : null;
+    surface.body.addEventListener('dragstart', (event) => {
+      const link = typed(event.target);
+      dragged = link?.dataset.readerTypedPath;
+      if (dragged) {
+        event.dataTransfer?.setData('application/x-reader-relation', dragged);
+        if (event.dataTransfer) event.dataTransfer.effectAllowed = 'link';
+      }
+    });
+    surface.body.addEventListener('dragend', () => {
+      dragged = undefined;
+      clearHover();
+    });
+    surface.body.addEventListener('dragover', (event) => {
+      const link = typed(event.target);
+      const destination = link?.dataset.readerTypedPath;
+      if (dragged && destination && dragged !== destination) {
+        event.preventDefault();
+        if (event.dataTransfer) event.dataTransfer.dropEffect = 'link';
+        if (hovered !== link) {
+          clearHover();
+          hovered = link;
+          link.classList.add('reader-relation-drop-target');
+        }
+      } else clearHover();
+    });
+    surface.body.addEventListener('drop', (event) => {
+      const destination = typed(event.target)?.dataset.readerTypedPath;
+      const source = dragged;
+      dragged = undefined;
+      clearHover();
+      if (!source || !destination || source === destination) return;
+      event.preventDefault();
+      void this.operation(() => this.connectRelation(source, destination)).catch((error) =>
+        this.error(error),
+      );
+    });
+  }
+  private async connectFromArticle(): Promise<void> {
+    const api = nodesApi(this.app);
+    if (!api?.relations || !this.surface) return;
+    const paths = [
+      ...new Set(
+        [
+          ...this.surface.body.querySelectorAll<HTMLAnchorElement>(
+            'a.reader-typed-link[data-reader-typed-path]',
+          ),
+        ]
+          .map((link) => link.dataset.readerTypedPath)
+          .filter((path): path is string => !!path),
+      ),
+    ];
+    if (paths.length < 2) return;
+    const signal = this.articleLifetime.signal;
+    const source = await choose(
+      this.app,
+      'Connect from note…',
+      paths,
+      (path) => api.getNode(path)?.title ?? path,
+      signal,
+    );
+    if (!source || signal.aborted) return;
+    const destination = await choose(
+      this.app,
+      'Connect into note…',
+      paths.filter((path) => path !== source),
+      (path) => api.getNode(path)?.title ?? path,
+      signal,
+    );
+    if (destination && !signal.aborted)
+      await this.operation(() => this.connectRelation(source, destination));
+  }
+  private async connectRelation(sourcePath: string, destinationPath: string): Promise<void> {
+    const api = nodesApi(this.app);
+    const provider = api?.relations;
+    const signal = this.articleLifetime.signal;
+    if (!provider || !this.snapshot || signal.aborted)
+      throw new Error('Fileclass changed. Choose the connection again.');
+    const source = api.getNode(sourcePath),
+      destination = api.getNode(destinationPath);
+    if (!source || !destination) throw new Error('One typed note changed. Choose it again.');
+    const outcome = await connectNodes(
+      provider,
+      { sourcePath, destinationPath },
+      {
+        chooseField: async (fields) =>
+          (
+            await choose(
+              this.app,
+              `Connect ${source.title} to ${destination.title} as…`,
+              [...fields],
+              (field) => field.label,
+              signal,
+            )
+          )?.id ?? null,
+        confirmReplace: async (field: RelationField) =>
+          (await choose(
+            this.app,
+            `Replace ${field.currentLabel ?? 'current value'} in ${destination.title} → ${field.label}?`,
+            ['Keep current value', `Replace with ${source.title}`],
+            (choice) => choice,
+            signal,
+          )) === `Replace with ${source.title}`,
+      },
+      signal,
+    );
+    if (outcome.kind === 'unavailable')
+      new Notice(`No Fileclass link field on ${destination.title} accepts ${source.title}.`);
+    else if (outcome.kind === 'already-linked')
+      new Notice(`${destination.title} · ${outcome.field.label} already links to ${source.title}.`);
+    else if (outcome.kind === 'saved')
+      new Notice(outcome.changed ? outcome.message : `Already connected: ${outcome.message}`);
   }
   private controls(): void {
     if (!this.snapshot || !this.actions || !this.surface) return;
@@ -1050,6 +1182,20 @@ export class ReaderView extends ItemView {
       'aria-label',
       'Trash article and advance',
     );
+    if (
+      nodesApi(this.app)?.relations &&
+      new Set(
+        [...this.surface.body.querySelectorAll<HTMLElement>('[data-reader-typed-path]')].map(
+          (link) => link.dataset.readerTypedPath,
+        ),
+      ).size > 1
+    )
+      this.button(
+        this.actions,
+        'Connect typed notes',
+        () => this.connectFromArticle(),
+        'git-merge',
+      );
     const related = this.button(this.actions, 'Related notes', () => this.topics(), 'tags', 't');
     related.classList.add('reader-related-notes');
     this.setupTapHighlighter();

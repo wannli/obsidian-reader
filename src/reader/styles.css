@@ -727,6 +727,7 @@ dialog.reader-image-viewer,
   margin-inline-end: 0.2em;
 }
 .reader-view :is(.reader-document, .reader-article-topics) a.reader-reference-pill:focus-visible,
+.reader-view .reader-document a.reader-relation-drop-target,
 .reader-view .reader-document mark.reader-send-source {
   outline: 2px solid var(--interactive-accent, Highlight);
   outline-offset: 2px;
