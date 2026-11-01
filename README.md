@@ -20,7 +20,7 @@ Your articles are ordinary Markdown notes. Your highlights stay in the text. You
 - **Keep the good parts in context.** Highlight a passage and collect an attributed quotation in one or several typed notes—or create one for a new idea. Fileclass supplies types, icons and field validation through its public API; Reader owns the picker and creation flow.
 - **Keep your library yours.** Articles, references and collected quotations are ordinary Markdown. No separate annotation database or custom sync service. Read and edit them even without Reader.
 
-Reader targets Obsidian desktop, iPhone/iPad, and Android/e-ink. Physical-device and cross-device acceptance checks are tracked separately in the [mobile smoke plan](docs/mobile-smoke.md); automated tests are not device certification.
+Reader targets Obsidian desktop, iPhone/iPad, and Android/e-ink. Automated tests are not device certification; physical-device and cross-device behavior requires manual checks.
 
 ## Get started
 
@@ -56,7 +56,7 @@ Choosing a status from the article controls advances to the next article in your
 
 Highlighting or linking a passage in a Feed article moves it to Later before saving the annotation. **Simply opening or reading a Feed article does not keep it.** Choose Later or Archive if you want to retain it.
 
-Only notes in the Feed folder with explicit `status: feed` can expire, one calendar month after their publication date (or filename date as a fallback)—not a month after import. Articles with topics, highlights or other annotations are archived rather than trashed by Reader. In-use and unknown-age notes are protected. A missing or conflicting YAML status never authorizes deletion. See the [storage contract](docs/storage-contract.md) for the full safety rules.
+Only notes in the Feed folder with explicit `status: feed` can expire, one calendar month after their publication date (or filename date as a fallback)—not a month after import. Articles with topics, highlights or other annotations are archived rather than trashed by Reader. In-use and unknown-age notes are protected. A missing or conflicting YAML status never authorizes deletion.
 
 ### Find your way around
 
@@ -103,7 +103,7 @@ Scrolling and paging still work in Highlight mode; article-navigation shortcuts 
 
 New hosted highlights require **Obsidian 1.12.7+** and Fileclass with its public API v1. Reader discovers Fileclass-bound notes and creates typed notes in its configured folder (default `Nodes`). It reads Fileclass’s binding alias when available, and prompts only for unresolved required fields through Fileclass’s public validation and writes. Fileclass Inline is not required. Without Fileclass, existing articles/highlights/links remain readable, but new hosted highlights are unavailable. Configure the folder and fallback binding property in Reader settings before disabling Fileclass Inline; existing plugin settings and vault notes are not imported or rewritten.
 
-The article’s **Related notes** multiselect manages future defaults, not previous quotations. Source/target saves are guarded but not atomic: partial failures report saved source and verified target progress. Filing retries deduplicate quote + paragraph citation without changing its date; completed removals are never blindly retried. Dirty/uncertain editors remain protected. See the [full contract](docs/hosted-highlights.md).
+The article’s **Related notes** multiselect manages future defaults, not previous quotations. Source/target saves are guarded but not atomic: partial failures report saved source and verified target progress. Filing retries deduplicate quote + paragraph citation without changing its date; completed removals are never blindly retried. Dirty/uncertain editors remain protected.
 
 ## Offline reading and capture
 
@@ -162,7 +162,7 @@ deleted_urls:
 
 Subscriptions need only `type: feed` and `url`; `enabled` defaults to true. Optional `deleted_urls` records Reader deletions; remove an entry to allow that URL to be imported again. An optional `error` property on either note type can describe a failed fetch.
 
-Reader preserves unknown properties and user-authored content during normal updates. It adds no article/highlight IDs or sidecars, and does not migrate legacy settings or reading positions. Explicit quotation snapshots belong to you; they are not synchronized copies. New publication dates use Obsidian’s local `YYYY-MM-DDTHH:mm` format; existing dates are not rewritten. For exact capture, date, folder-move, and retention behavior, see the [storage contract](docs/storage-contract.md).
+Reader preserves unknown properties and user-authored content during normal updates. It adds no article/highlight IDs or sidecars, and does not migrate legacy settings or reading positions. Explicit quotation snapshots belong to you; they are not synchronized copies. New publication dates use Obsidian’s local `YYYY-MM-DDTHH:mm` format; existing dates are not rewritten.
 
 ## Development
 
@@ -191,6 +191,4 @@ mise exec -- npm run check                     # format, metadata, types, tests,
 mise exec -- npm run benchmark:scale           # opt-in: 10k articles / 100 feeds
 ```
 
-Targets are under 5 seconds for focused checks and under 10 seconds for the automated test suite locally. There is no general automated E2E suite; [topic-filter acceptance](docs/topic-filter.md) includes a local synthetic-host browser run, not native certification. Native touch, e-ink, and real sync behavior require separate manual checks. The scale benchmark retains synthetic files and measurements in the marked dummy vault, not a personal vault.
-
-Start with the [codebase map](docs/map.md), [approved scope](docs/rebuild-spec.md), [storage contract](docs/storage-contract.md), and [mobile smoke plan](docs/mobile-smoke.md).
+Targets are under 5 seconds for focused checks and under 10 seconds for the automated test suite locally. There is no general automated E2E suite; synthetic-host browser checks are not native certification. Native touch, e-ink, and real sync behavior require separate manual checks. The scale benchmark retains synthetic files and measurements in the marked dummy vault, not a personal vault.

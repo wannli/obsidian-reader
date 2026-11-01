@@ -1,6 +1,6 @@
 # Reader — agent guide
 
-Start with the [codebase map](docs/map.md), [approved scope](docs/rebuild-spec.md), and [storage contract](docs/storage-contract.md).
+Start with [README](README.md), `src/main.ts`, `src/core/model.ts`, and `src/core/document.ts`.
 
 ## Identity and compatibility
 
@@ -16,7 +16,7 @@ Start with the [codebase map](docs/map.md), [approved scope](docs/rebuild-spec.m
 - `src/core/` owns Markdown snapshots, metadata indexing, capture-destination validation and guarded writes. Recheck source bytes, file identity and dirty-editor safety at mutation boundaries.
 - `src/content/` bounds and sanitizes external content. `src/host/` adapts native vault, network, dialogs/settings and optional Nodes APIs; keep uncancellable native requests in their occupied slots until settlement.
 - `src/reader/` renders the list/articles. `src/reader/styles.css` is the sole source stylesheet: leaf-owned floating controls, ≥44px targets, scrollbar/final-content clearance and aligned paged column geometry.
-- Use ordinary Fileclass-typed notes, not a separate Reader node entity. Reader owns the highlight-specific typed picker, creation and required-field UI; Fileclass public API v1 supplies class membership, schemas and writes. No untyped/All files route or creation without Fileclass. New highlights require Fileclass; existing content remains readable without it. Follow [hosted highlights](docs/hosted-highlights.md), including source citations, quotation snapshots and new-note `origin`. Cancellation never authorizes deleting a created note or blocking navigation on an uncooperative provider.
+- Use ordinary Fileclass-typed notes, not a separate Reader node entity. Reader owns the highlight-specific typed picker, creation and required-field UI; Fileclass public API v1 supplies class membership, schemas and writes. No untyped/All files route or creation without Fileclass. New highlights require Fileclass; existing content remains readable without it. Preserve source citations, quotation snapshots and new-note `origin`. Cancellation never authorizes deleting a created note or blocking navigation on an uncooperative provider.
 - All article entry resumes the destination's saved position. Preserve explicit Open Markdown, dirty/uncertain editors, selection/modal/input guards and held-key protection.
 
 ## Development and release
@@ -34,10 +34,10 @@ Start with the [codebase map](docs/map.md), [approved scope](docs/rebuild-spec.m
 
 ## Storage principles
 
-- Markdown is authoritative. Article body and inline highlights use ordinary Markdown; operational reading state is YAML. Keep the article/feed examples in README and the storage contract consistent with implementation.
+- Markdown is authoritative. Article body and inline highlights use ordinary Markdown; operational reading state is YAML. Keep the article/feed examples in README consistent with implementation.
 - Discover articles/subscriptions by exact `type`, excluding Templates and .trash at any depth. Article queue membership comes from four configurable nonoverlapping queue folders (defaults Inbox, Stream/Feed, Later, Treasury/Archive), not YAML `status`; outside folders, typed articles remain readable but unqueued. Reader status actions write YAML then move; external folder/YAML edits do not rewrite the other representation. Only a Feed-folder article with fresh explicit `status: feed` can expire. Manual/browser captures and observed live native/QuickAdd inbox articles enter Inbox; RSS imports enter Feed. The old article capture destination is inert. No startup/settings-apply sweep or automatic migration.
 - Opened-before indicators derive from existing usable `bookmark` text anchors; highlight indicators derive from Markdown. The approved `dog_ear: true` current-article pointer is separate from position and indicators; move it on successful Reader article entry and use newest Inbox as the shortcut fallback. Legacy `reading_position` remains untouched and inert. Feed-folder annotations promote to Later before commit; Reader Delete/expiry archives topic-bearing or annotated articles rather than trashing them. Reads stay bounded/cancellable for visible rows and never persist extra flags or trigger promotion.
-- Preserve unknown properties, titles, authored sections/comments, user text, journals and backlinks. No sidecars or synchronized copies. Quotations are user-owned snapshots: source edits/Undo never prune them; only an explicit highlight-destination removal may delete a uniquely matching unedited copy. Follow the hosted contract for source grouping, local date links and partial removals.
-- Follow the approved [storage contract](docs/storage-contract.md), `src/core/model.ts`, and `src/core/document.ts`. New notes must not persist IDs, cursor/history state, or acquisition metadata; unknown nonempty text remains protected unless ownership is proven from its current bytes.
+- Preserve unknown properties, titles, authored sections/comments, user text, journals and backlinks. No sidecars or synchronized copies. Quotations are user-owned snapshots: source edits/Undo never prune them; only an explicit highlight-destination removal may delete a uniquely matching unedited copy. Preserve source grouping, local date links and partial-removal safety.
+- Use `src/core/model.ts` and `src/core/document.ts` for storage behavior. New notes must not persist IDs, cursor/history state, or acquisition metadata; unknown nonempty text remains protected unless ownership is proven from its current bytes.
 - Every feed refresh is limited to the latest 20 entries before deduplication/age filtering. Do not revive superseded implementations, migrations, QuickAdd assets, or old settings.
 - Runtime must work on Obsidian mobile and avoid Node/Electron-only imports in plugin code.
