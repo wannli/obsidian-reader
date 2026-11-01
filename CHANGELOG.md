@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.23.0](https://github.com/wannli/obsidian-reader/compare/0.22.0...0.23.0) (2026-11-01)
+
+
+### Added
+
+* complete Reader dialogs with Cmd-Enter ([781e50b](https://github.com/wannli/obsidian-reader/commit/781e50b2085a3ffccc86512eb63126b271a32719))
+* **reader:** integrate native typed-note flow ([73714f4](https://github.com/wannli/obsidian-reader/commit/73714f408c823030afaa96cf4966dd14152f7580))
+* **reader:** own typed-note integration through fileclass ([410ba3c](https://github.com/wannli/obsidian-reader/commit/410ba3c682c5fa110a6ac97d7de2355e40472206))
+* **reader:** simplify article navigation actions ([5907e99](https://github.com/wannli/obsidian-reader/commit/5907e997e17ae05367e5fe901e6ac46a1d6d01d5))
+
 ## [0.22.0](https://github.com/wannli/obsidian-reader/compare/0.21.1...0.22.0) (2026-10-25)
 
 
