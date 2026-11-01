@@ -396,14 +396,19 @@ export class ReaderView extends ItemView {
     );
     if (icon) {
       setIcon(button, icon);
-      const tooltip = shortcut ? `${label} (${shortcut.toUpperCase()})` : label;
+      const tooltip = shortcut
+        ? `${label} (${shortcut === 'L' || shortcut === 'T' ? `Shift+${shortcut}` : shortcut.toUpperCase()})`
+        : label;
       setTooltip(button, tooltip);
       button.setAttribute('aria-label', label);
       button.querySelector('svg')?.setAttribute('aria-hidden', 'true');
     }
     if (shortcut) {
       button.dataset.readerKey = shortcut;
-      button.setAttribute('aria-keyshortcuts', shortcut.toUpperCase());
+      button.setAttribute(
+        'aria-keyshortcuts',
+        shortcut === 'L' || shortcut === 'T' ? `Shift+${shortcut}` : shortcut.toUpperCase(),
+      );
     }
     button.addEventListener('click', () => {
       // Let the action register navigation intent synchronously, before yielding.
@@ -510,7 +515,7 @@ export class ReaderView extends ItemView {
           this.showList(name);
         },
         { Inbox: 'inbox', Feed: 'rss', Later: 'clock' }[name],
-        { Inbox: 'i', Feed: 'f', Later: 'l' }[name],
+        { Inbox: 'i', Feed: 'f', Later: 'L' }[name],
       );
       button.classList.toggle('mod-cta', name === queue);
     }
@@ -527,7 +532,7 @@ export class ReaderView extends ItemView {
         this.showList();
       },
       'list-filter',
-      't',
+      'T',
     );
     filterButton.classList.toggle('reader-filter-active', !!this.topicFilter);
     filterButton.setAttribute('aria-pressed', String(!!this.topicFilter));
@@ -682,6 +687,53 @@ export class ReaderView extends ItemView {
           : Math.max(0, Math.min(rows.length - 1, index + (key === 'j' ? 1 : -1)));
     this.selectListRow(rows[next], true);
   }
+  private actOnListArticle(action: 'l' | 'a' | 't'): Promise<void> {
+    if (this.operating) return Promise.resolve();
+    const path = this.listSelectedPath;
+    const row = this.listRows().find((item) => item.dataset.readerPath === path);
+    const article = path && this.host.store.catalog.article(path);
+    const file = path && this.host.store.vault.file(path);
+    if (!row || !article || article.queue !== this.queue || !file) return Promise.resolve();
+    const rows = this.listRows();
+    const index = rows.indexOf(row);
+    const successor = rows[index + 1]?.dataset.readerPath ?? rows[index - 1]?.dataset.readerPath;
+    return this.operation(async () => {
+      if (
+        this.snapshot ||
+        this.listSelectedPath !== path ||
+        !this.listRows().includes(row) ||
+        this.host.store.catalog.article(path)?.queue !== this.queue ||
+        this.host.store.vault.file(path) !== file
+      )
+        return;
+      const snapshot = await this.host.store.read(path);
+      if (snapshot.file !== file) return;
+      const guard = () => {
+        if (this.stopping || this.host.signal.aborted || this.snapshot || !row.isConnected)
+          throw new Error('The reading list changed. Reopen it and retry.');
+      };
+      try {
+        if (action === 't') await this.host.store.trash(snapshot, guard);
+        else {
+          const destination = action === 'l' ? 'Later' : 'Archive';
+          const moved = await this.host.store.move(snapshot, destination, guard);
+          if (action === 'l') {
+            new Notice('Saved to Later');
+            void this.host.ingestion.acquire(moved.path).catch((error) => this.error(error));
+          }
+        }
+      } finally {
+        if (!this.stopping && !this.snapshot && row.isConnected) {
+          this.listSelectedPath =
+            this.host.store.catalog.article(row.dataset.readerPath!)?.queue === this.queue
+              ? row.dataset.readerPath
+              : successor;
+          this.focusSelectedListRow = true;
+          this.refreshList?.();
+        }
+      }
+    });
+  }
   private toggleShortcutHelp(): void {
     if (this.shortcutHelp) {
       this.shortcutHelp.remove();
@@ -709,13 +761,14 @@ export class ReaderView extends ItemView {
             ['j / k', 'Next / previous article'],
             ['gg / G', 'Top / bottom'],
             ['d / u', 'Half page down / up'],
-            ['Space', 'Full page down'],
+            ['Space / Shift+Space', 'Full page down / up'],
             ['q', 'Back to list'],
           ]
       : [
           ['j / k', 'Next / previous row'],
           ['Enter', 'Open selected article'],
           ['gg / G', 'First / last visible row'],
+          ['L / A / T', 'Move selected article to Later / Archive / Trash'],
         ];
     const actions = Array.from(
       this.contentEl.querySelectorAll<HTMLButtonElement>('button[data-reader-key]'),
@@ -724,7 +777,9 @@ export class ReaderView extends ItemView {
       .map(
         (button) =>
           [
-            button.dataset.readerKey!.toUpperCase(),
+            button.dataset.readerKey === 'L' || button.dataset.readerKey === 'T'
+              ? `Shift+${button.dataset.readerKey}`
+              : button.dataset.readerKey!.toUpperCase(),
             button.getAttribute('aria-label') ?? button.textContent ?? '',
           ] as const,
       );
@@ -3230,7 +3285,7 @@ export class ReaderView extends ItemView {
       event.ctrlKey ||
       event.metaKey ||
       event.altKey ||
-      (event.shiftKey && !['G', '?'].includes(event.key)) ||
+      (event.shiftKey && !['G', '?', 'L', 'T', ' '].includes(event.key)) ||
       event.isComposing ||
       this.dialog ||
       doc.getSelection()?.isCollapsed === false
@@ -3336,14 +3391,27 @@ export class ReaderView extends ItemView {
           })
           .catch((error) => this.error(error));
       } else {
-        this.surface?.moveByPage(event.key === 'u' ? -1 : 1, event.key === ' ' ? 1 : 0.5);
+        this.surface?.moveByPage(
+          event.key === 'u' || (event.key === ' ' && event.shiftKey) ? -1 : 1,
+          event.key === ' ' ? 1 : 0.5,
+        );
         this.updatePagingControls();
       }
       return;
     }
     if (event.key !== 'g') this.pendingG = 0;
+    if (!Platform.isMobile && !reading && !event.repeat && ['l', 'a', 't'].includes(event.key)) {
+      const path = this.listSelectedPath;
+      if (path && this.listRows().some((row) => row.dataset.readerPath === path)) {
+        event.preventDefault();
+        void this.actOnListArticle(event.key as 'l' | 'a' | 't').catch((error) =>
+          this.error(error),
+        );
+      }
+      return;
+    }
     // Route visible controls through their shortcuts. Tap mode keeps its own contextual keys.
-    if (!Platform.isMobile && !event.repeat && /^[a-z1-9]$/.test(event.key)) {
+    if (!Platform.isMobile && !event.repeat && /^[a-zA-Z1-9]$/.test(event.key)) {
       const button = Array.from(
         this.contentEl.querySelectorAll<HTMLButtonElement>('button[data-reader-key]'),
       ).find(

@@ -5,6 +5,7 @@ import { Platform, setTooltip } from 'obsidian';
 import { createDocument, patchProperties } from '../src/core/document';
 import { ReaderView } from '../src/reader/view';
 import * as surfaceModule from '../src/reader/surface';
+import { chooseTopicFilter } from '../src/host/topic-filter-dialog';
 
 describe('desktop button shortcuts', () => {
   const press = (view: ReaderView, key: string, options: KeyboardEventInit = {}) => {
@@ -24,7 +25,8 @@ describe('desktop button shortcuts', () => {
     expect(press(f.view, 'b').defaultPrevented).toBe(true);
     await f.probe.operations;
     expect(f.view.contentEl.querySelector('.reader-list')).not.toBeNull();
-    for (const key of ['f', 'l', 'i']) expect(press(f.view, key).defaultPrevented).toBe(true);
+    for (const key of ['f', 'i']) expect(press(f.view, key).defaultPrevented).toBe(true);
+    expect(press(f.view, 'L', { shiftKey: true }).defaultPrevented).toBe(true);
     expect(press(f.view, 'a').defaultPrevented).toBe(false);
     const capture = vi.spyOn(f.host, 'capture');
     expect(press(f.view, 'u').defaultPrevented).toBe(true);
@@ -119,12 +121,99 @@ describe('desktop button shortcuts', () => {
       'Add URL',
       'Filter by topic',
       'Show more',
+      'Move selected article to Later / Archive / Trash',
+      'Shift+L',
+      'Shift+T',
     ])
       expect(listHelp.textContent).toContain(label);
     expect(press(f.view, 'j').defaultPrevented).toBe(true);
     expect(rows()[0].classList.contains('reader-list-selected')).toBe(true);
     expect(press(f.view, 'Escape').defaultPrevented).toBe(true);
     expect(f.view.contentEl.querySelector('[role="dialog"]')).toBeNull();
+  });
+  it('uses shifted list controls without changing the selected article', async () => {
+    const f = hostFixture();
+    const article = await f.note('Reading/Inbox/A.md');
+    f.view.showList();
+    const later = f.view.contentEl.querySelector<HTMLButtonElement>('[data-reader-key="L"]')!;
+    const filter = f.view.contentEl.querySelector<HTMLButtonElement>('[data-reader-key="T"]')!;
+    expect(later.getAttribute('aria-keyshortcuts')).toBe('Shift+L');
+    expect(filter.getAttribute('aria-keyshortcuts')).toBe('Shift+T');
+    expect(setTooltip).toHaveBeenCalledWith(later, 'Later (Shift+L)');
+    expect(setTooltip).toHaveBeenCalledWith(filter, 'Filter by topic (Shift+T)');
+    expect(press(f.view, 'T', { shiftKey: true }).defaultPrevented).toBe(true);
+    expect(chooseTopicFilter).toHaveBeenCalledOnce();
+    expect(press(f.view, 'L', { shiftKey: true }).defaultPrevented).toBe(true);
+    expect(f.view.getState().queue).toBe('Later');
+    expect(article.path).toBe('Reading/Inbox/A.md');
+    expect(press(f.view, 'l').defaultPrevented).toBe(false); // No row in Later.
+    expect(press(f.view, ' ', { shiftKey: true }).defaultPrevented).toBe(false);
+  });
+  it.each([
+    ['l', 'Later', 'later'],
+    ['a', 'Archive', 'archive'],
+  ] as const)(
+    'moves the selected list row with %s and stays in the list',
+    async (key, queue, status) => {
+      const f = hostFixture();
+      const first = await f.note('Reading/Inbox/A.md');
+      const second = await f.note('Reading/Inbox/B.md');
+      f.view.showList();
+      expect(press(f.view, 'j').defaultPrevented).toBe(true);
+      expect(press(f.view, key).defaultPrevented).toBe(true);
+      await f.probe.operations;
+      expect(first.path).toBe('Reading/Inbox/A.md');
+      expect(second.path).toBe(`Reading/${queue === 'Later' ? 'Later' : 'Treasury'}/B.md`);
+      expect((await f.store.read(second.path)).properties.status).toBe(status);
+      expect(f.view.file).toBeUndefined();
+      expect(f.view.getState().queue).toBe('Inbox');
+      expect(document.activeElement?.getAttribute('data-reader-path')).toBe(first.path);
+      expect(f.view.contentEl.querySelectorAll('.reader-list-item')).toHaveLength(1);
+      expect(press(f.view, key, { repeat: true }).defaultPrevented).toBe(false);
+    },
+  );
+  it('keeps the row selected when its shortcut targets its current queue', async () => {
+    const f = hostFixture();
+    const article = await f.note('Reading/Later/A.md');
+    f.view.showList('Later');
+    expect(press(f.view, 'l').defaultPrevented).toBe(true);
+    await f.probe.operations;
+    expect(document.activeElement?.getAttribute('data-reader-path')).toBe(article.path);
+    expect(f.view.contentEl.querySelectorAll('.reader-list-item')).toHaveLength(1);
+  });
+  it('trashes an unprotected row, archives a protected row, and preserves selection', async () => {
+    const f = hostFixture();
+    await f.note('Reading/Inbox/A.md');
+    const second = await f.note('Reading/Inbox/B.md');
+    const raw = await f.vault.read(second);
+    const protectedRaw = patchProperties(raw, { topics: ['[[Topics/Keep]]'] });
+    f.vault.bytes.set(second, protectedRaw);
+    f.store.catalog.update(second.path, (await f.store.read(second.path)).properties);
+    f.view.showList();
+    expect(press(f.view, 't').defaultPrevented).toBe(true);
+    await f.probe.operations;
+    expect(f.vault.trashed).toContain('Reading/Inbox/A.md');
+    expect(document.activeElement?.getAttribute('data-reader-path')).toBe(second.path);
+    expect(press(f.view, 't').defaultPrevented).toBe(true);
+    await f.probe.operations;
+    expect(second.path).toBe('Reading/Treasury/B.md');
+    expect(f.vault.trashed).not.toContain('Reading/Inbox/B.md');
+    expect(f.view.file).toBeUndefined();
+  });
+  it('refuses a changed selected row without mutating it', async () => {
+    const f = hostFixture();
+    const article = await f.note('Reading/Inbox/A.md');
+    f.view.showList();
+    const read = f.store.read.bind(f.store);
+    vi.spyOn(f.store, 'read').mockImplementationOnce(async (path) => {
+      const snapshot = await read(path);
+      f.vault.bytes.set(article, patchProperties(snapshot.raw, { title: 'Edited' }));
+      return snapshot;
+    });
+    expect(press(f.view, 'l').defaultPrevented).toBe(true);
+    await expect(f.probe.operations).rejects.toThrow('The note changed');
+    expect(article.path).toBe('Reading/Inbox/A.md');
+    expect((await f.store.read(article.path)).properties.status).toBe('inbox');
   });
   it('moves within an article without mapping d to Delete or Space to next article', async () => {
     const f = hostFixture();
@@ -141,8 +230,10 @@ describe('desktop button shortcuts', () => {
       expect(press(f.view, key).defaultPrevented).toBe(true);
       expect(move).toHaveBeenLastCalledWith(direction, fraction);
     }
-    expect(press(f.view, ' ', { repeat: true }).defaultPrevented).toBe(true);
-    expect(move).toHaveBeenCalledTimes(3);
+    expect(press(f.view, ' ', { shiftKey: true }).defaultPrevented).toBe(true);
+    expect(move).toHaveBeenLastCalledWith(-1, 1);
+    expect(press(f.view, ' ', { repeat: true, shiftKey: true }).defaultPrevented).toBe(true);
+    expect(move).toHaveBeenCalledTimes(4);
     expect(press(f.view, 'g').defaultPrevented).toBe(true);
     expect(press(f.view, 'g').defaultPrevented).toBe(true);
     expect(jump).toHaveBeenCalledWith(-1);
@@ -152,7 +243,7 @@ describe('desktop button shortcuts', () => {
     expect(f.view.file).toBe(article);
     expect(press(f.view, '?', { shiftKey: true }).defaultPrevented).toBe(true);
     expect(f.view.contentEl.querySelector('[role="dialog"]')?.textContent).toContain(
-      'Full page down',
+      'Full page down / up',
     );
     expect(press(f.view, 'Tab').defaultPrevented).toBe(false);
     expect(document.activeElement?.textContent).toBe('Close shortcuts');
@@ -162,6 +253,7 @@ describe('desktop button shortcuts', () => {
     expect(press(f.view, 'd').defaultPrevented).toBe(true);
     expect(document.activeElement).toBe(button);
     expect(press(f.view, ' ').defaultPrevented).toBe(false);
+    expect(press(f.view, ' ', { shiftKey: true }).defaultPrevented).toBe(false);
     const outside = document.body.appendChild(document.createElement('button'));
     outside.focus();
     const event = new KeyboardEvent('keydown', { key: 'd', bubbles: true, cancelable: true });

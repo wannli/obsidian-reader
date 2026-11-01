@@ -29,7 +29,8 @@ describe('bounded Reader UI', () => {
     for (const button of buttons) {
       expect(button.textContent).toBe('');
       expect(button.querySelector('svg')?.getAttribute('aria-hidden')).toBe('true');
-      const tooltip = `${actionName(button)} (${button.dataset.readerKey!.toUpperCase()})`;
+      const key = button.dataset.readerKey!;
+      const tooltip = `${actionName(button)} (${key === 'L' || key === 'T' ? `Shift+${key}` : key.toUpperCase()})`;
       expect(setTooltip).toHaveBeenCalledWith(button, tooltip);
       expect(button.hasAttribute('title')).toBe(false);
       expect(setIcon).toHaveBeenCalledWith(button, expect.any(String));
