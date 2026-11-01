@@ -769,6 +769,57 @@ describe('hosted highlight UI integration', () => {
     expect(calls.filter((path) => path === f.targets[1].path)).toHaveLength(2);
     expect(f.vault.trashed).toEqual([]);
   });
+  it('connects a dragged Reader typed link into another without rewriting the article', async () => {
+    const f = await fixture({ body: '[[Nodes/Concept|Concept]] and [[Nodes/Project|Project]].' });
+    const raw = await f.vault.read(f.article);
+    const assign = vi.fn(async () => ({
+      fieldLabel: 'supported_by',
+      destinationLabel: 'Project',
+      sourceLabel: 'Concept',
+      changed: true,
+    }));
+    Object.assign(f.api, {
+      relations: {
+        eligibleFields: vi.fn(
+          async () =>
+            [
+              {
+                id: 'supported_by',
+                revision: 'one',
+                label: 'supported_by',
+                cardinality: 'many',
+                occupied: false,
+                containsSource: false,
+              },
+            ] as const,
+        ),
+        assign,
+      },
+    });
+    f.paint();
+    f.probe.installRelationTargets(f.probe.surface);
+    const [source, destination] = [...f.probe.surface.body.querySelectorAll('a.reader-typed-link')];
+    expect(source.dataset.readerTypedPath).toBe('Nodes/Concept.md');
+    expect(destination.dataset.readerTypedPath).toBe('Nodes/Project.md');
+    source.dispatchEvent(new Event('dragstart', { bubbles: true, cancelable: true }));
+    destination.dispatchEvent(new Event('dragover', { bubbles: true, cancelable: true }));
+    expect(destination.classList.contains('reader-relation-drop-target')).toBe(true);
+    destination.dispatchEvent(new Event('drop', { bubbles: true, cancelable: true }));
+    await f.probe.operations;
+    expect(assign).toHaveBeenCalledWith(
+      {
+        sourcePath: 'Nodes/Concept.md',
+        destinationPath: 'Nodes/Project.md',
+        fieldId: 'supported_by',
+        revision: 'one',
+        replaceOccupied: false,
+      },
+      expect.any(AbortSignal),
+    );
+    expect(await f.vault.read(f.article)).toBe(raw);
+    expect(destination.classList.contains('reader-relation-drop-target')).toBe(false);
+  });
+
   it('paints public resolved node icons before listed-class fallback, stripping fragments and tolerating provider failure', async () => {
     const f = await fixture(),
       icon = document.createElement('span');

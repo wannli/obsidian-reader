@@ -1,4 +1,5 @@
 import type { App } from 'obsidian';
+import type { RelationProvider } from './node-relations';
 
 /** Reader's public-facing typed-note seam; Fileclass v1 is the sole external authority. */
 export interface NodeResult {
@@ -11,6 +12,8 @@ export interface NodeResult {
 }
 export interface NodesApi {
   readonly version: 2;
+  /** Reader-owned Fileclass v1 relation supplement; optional for isolated providers. */
+  relations?: RelationProvider;
   listTypes(): { type: string; label: string; icon?: string }[];
   searchNodes(query: string): NodeResult[];
   getNode(path: string): NodeResult | null;
