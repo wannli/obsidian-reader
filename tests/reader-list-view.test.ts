@@ -194,23 +194,30 @@ describe('bounded Reader UI', () => {
       ];
       expect(
         buttons.map((button) => button.querySelector('svg')?.getAttribute('data-icon')),
-      ).toEqual(['list-filter', 'trash-2', 'list', 'highlighter', 'file-plus-2', 'tags']);
+      ).toEqual([
+        'arrow-left',
+        'clock',
+        'archive',
+        'trash-2',
+        'highlighter',
+        'file-plus-2',
+        'tags',
+      ]);
       expect(buttons.map((button) => button.getAttribute('aria-label'))).toEqual([
-        'Change status and advance · S: choose · L: Later · A: Archive',
+        'Back to list',
+        'Save to Later and advance',
+        'Archive and advance',
         'Trash article and advance',
-        'List',
         'Highlight mode',
         'Create node',
         'Related notes',
       ]);
-      expect(setTooltip).toHaveBeenCalledWith(buttons[5], 'Related notes (T)');
-      expect(setTooltip).toHaveBeenCalledWith(
-        buttons[0],
-        'Change status and advance · S: choose · L: Later · A: Archive',
-      );
+      expect(setTooltip).toHaveBeenCalledWith(buttons[6], 'Related notes (T)');
+      expect(setTooltip).toHaveBeenCalledWith(buttons[1], 'Save to Later and advance (L)');
+      expect(setTooltip).toHaveBeenCalledWith(buttons[2], 'Archive and advance (A)');
       expect(buttons.every((button) => !button.hasAttribute('title'))).toBe(true);
-      expect(setTooltip).toHaveBeenCalledWith(buttons[3], 'Highlight mode (H)');
-      expect(setTooltip).toHaveBeenCalledWith(buttons[4], 'Create node (C)');
+      expect(setTooltip).toHaveBeenCalledWith(buttons[4], 'Highlight mode (H)');
+      expect(setTooltip).toHaveBeenCalledWith(buttons[5], 'Create node (C)');
       expect(setTooltip).toHaveBeenCalledWith(
         f.probe.surface.title,
         'J/K: next/previous article · Space: page · D/U: half-page · gg/G: top/bottom · Q: list · ?: shortcuts',
@@ -355,7 +362,7 @@ describe('Reader mobile control styling', () => {
       await f.view.openArticle(article.path, true);
       const actions =
         f.view.contentEl.querySelectorAll<HTMLButtonElement>('.reader-actions button');
-      expect(actions).toHaveLength(6);
+      expect(actions).toHaveLength(7);
       for (const button of actions) checkIcon(button, '100%');
       expect(actions[0].disabled).toBe(false);
       actions[1].focus();
@@ -383,7 +390,7 @@ describe('Reader mobile control styling', () => {
 
 describe('leaf-scoped floating Reader layout', () => {
   it.each([390, 1280].flatMap((width) => [false, true].map((paged) => ({ width, paged }))))(
-    'uses full-pane CSS with 5/6/8-action overlays (width=$width, paged=$paged)',
+    'uses full-pane CSS with 5/7/9-action overlays (width=$width, paged=$paged)',
     async ({ width, paged }) => {
       const f = hostFixture();
       const file = await f.note('Reading/Inbox/Title.md');
@@ -416,7 +423,7 @@ describe('leaf-scoped floating Reader layout', () => {
         const column = f.view.contentEl.querySelector('.reader-article')!;
         const actions = column.querySelector('.reader-bottom-controls')!;
         const expanded = paged;
-        expect(actions.querySelectorAll('button')).toHaveLength(expanded ? 8 : 6);
+        expect(actions.querySelectorAll('button')).toHaveLength(expanded ? 9 : 7);
         expect(column.classList.contains('reader-has-page-actions')).toBe(expanded);
         expect(actions.classList.contains('reader-paged-actions')).toBe(expanded);
         expect(actions.parentElement).toBe(column);
@@ -465,7 +472,7 @@ describe('leaf-scoped floating Reader layout', () => {
         ).toContain('108px');
         expect(
           rule('.reader-actions.reader-paged-actions').getPropertyValue('grid-template-columns'),
-        ).toBe('repeat(4, 44px)');
+        ).toBe('repeat(5, 44px)');
         expect(rule('.reader-viewport').getPropertyValue('padding-inline-end')).toBe('');
         expect(rule('.reader-viewport').getPropertyValue('scrollbar-gutter')).toBe('stable');
         expect(

@@ -829,7 +829,7 @@ describe('folder-authoritative queue presentation', () => {
     expect(surface.dispose).not.toHaveBeenCalled();
     expect(f.view.getState()).toEqual({ file: article.path, queue: 'Inbox' });
     expect(
-      f.view.contentEl.querySelector('[aria-label^="Change status and advance"]'),
+      f.view.contentEl.querySelector('[aria-label="Save to Later and advance"]'),
     ).not.toBeNull();
   });
 
@@ -944,7 +944,7 @@ describe('browsing context and presentation', () => {
       const move = vi.spyOn(f.store, 'move');
       f.host.ingestion.acquire.mockClear();
       expect(
-        f.view.contentEl.querySelector('[aria-label^="Change status and advance"]'),
+        f.view.contentEl.querySelector('[aria-label="Save to Later and advance"]'),
       ).not.toBeNull();
       mocks.choose.mockResolvedValueOnce('Later');
       await f.probe.move();
@@ -977,23 +977,22 @@ describe('browsing context and presentation', () => {
     },
   );
 
-  it('rejects a status choice when the displayed source has changed', async () => {
+  it('rejects a direct Later action when the displayed source has changed', async () => {
     const f = hostFixture();
     const article = await f.note('Reading/Inbox/A.md');
     await f.view.openArticle(article.path, true);
     const external = createDocument({ type: 'article' }, 'External edit');
     f.vault.bytes.set(article, external);
-    mocks.choose.mockResolvedValueOnce('Later');
     f.view.contentEl
-      .querySelector<HTMLButtonElement>('[aria-label^="Change status and advance"]')!
+      .querySelector<HTMLButtonElement>('[aria-label="Save to Later and advance"]')!
       .click();
-    await Promise.resolve(); // Let the selected choice queue the guarded write.
+    await Promise.resolve(); // Let the direct action queue the guarded write.
     await expect(f.probe.operations).rejects.toThrow();
     expect(article.path).toBe('Reading/Inbox/A.md');
     expect(await f.vault.read(article)).toBe(external);
     expect(f.view.file).toBe(article);
     expect(
-      f.view.contentEl.querySelector('[aria-label^="Change status and advance"]'),
+      f.view.contentEl.querySelector('[aria-label="Save to Later and advance"]'),
     ).not.toBeNull();
     expect(mocks.notice).not.toHaveBeenCalledWith('Saved to Later');
   });
@@ -1003,29 +1002,29 @@ describe('browsing context and presentation', () => {
     const article = await f.note('Reading/Inbox/A.md');
     await f.view.openArticle(article.path, true);
     f.vault.failMove = true;
-    mocks.choose.mockResolvedValueOnce('Later');
     f.view.contentEl
-      .querySelector<HTMLButtonElement>('[aria-label^="Change status and advance"]')!
+      .querySelector<HTMLButtonElement>('[aria-label="Save to Later and advance"]')!
       .click();
     await Promise.resolve();
     await expect(f.probe.operations).rejects.toThrow('Move failed');
     expect((await f.store.read(article.path)).properties.status).toBe('later');
     expect(article.path).toBe('Reading/Inbox/A.md');
     expect(
-      f.view.contentEl.querySelector('[aria-label^="Change status and advance"]'),
+      f.view.contentEl.querySelector('[aria-label="Save to Later and advance"]'),
     ).not.toBeNull();
     expect(mocks.notice).not.toHaveBeenCalledWith('Saved to Later');
   });
 
-  it('keeps the status picker after external folder moves and YAML changes without remounting', async () => {
+  it('keeps direct queue actions after external folder moves and YAML changes without remounting', async () => {
     const f = hostFixture();
     const article = await f.note('Reading/Inbox/A.md');
     await f.view.openArticle(article.path, true);
     const surface = f.probe.surface;
     const expectControls = () => {
       expect(
-        f.view.contentEl.querySelector('[aria-label^="Change status and advance"]'),
+        f.view.contentEl.querySelector('[aria-label="Save to Later and advance"]'),
       ).not.toBeNull();
+      expect(f.view.contentEl.querySelector('[aria-label="Archive and advance"]')).not.toBeNull();
       expect(f.probe.surface).toBe(surface);
     };
     // YAML alone cannot retain an Inbox article.
@@ -1075,9 +1074,8 @@ describe('browsing context and presentation', () => {
     expect(f.view.getDisplayText()).toBe('Reader: A');
     await f.probe.finish('next');
     expect(f.view.file).toBe(b);
-    mocks.choose.mockResolvedValueOnce('Archive');
     f.view.contentEl
-      .querySelector<HTMLButtonElement>('[aria-label^="Change status and advance"]')!
+      .querySelector<HTMLButtonElement>('[aria-label="Archive and advance"]')!
       .click();
     await Promise.resolve();
     await f.probe.operations;

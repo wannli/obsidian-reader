@@ -117,13 +117,14 @@ describe('automatic selection event ownership', () => {
     expect((await f.store.read(f.article.path)).body).toBe(f.body);
   });
 
-  it('mounts one aligned article column with six persistent actions outside the scroller', () => {
+  it('mounts one aligned article column with seven persistent actions outside the scroller', () => {
     const column = f.view.contentEl.querySelector('.reader-article')!;
     const actions = column.querySelector('.reader-actions')!;
     expect([...actions.querySelectorAll('button')].map(actionName)).toEqual([
-      'Change status',
+      'Back to list',
+      'Save to Later and advance',
+      'Archive and advance',
       'Delete',
-      'List',
       'Highlight mode',
       'Create node',
       'Related notes',
@@ -290,7 +291,7 @@ describe('automatic selection event ownership', () => {
       expectedHosted('==Alpha== phrase.\n\nBeta phrase.'),
     );
     tapAction('Done').click();
-    expect(f.view.contentEl.querySelectorAll('.reader-actions > button')).toHaveLength(6);
+    expect(f.view.contentEl.querySelectorAll('.reader-actions > button')).toHaveLength(7);
     expect(f.view.contentEl.querySelector('.reader-tap-highlight-actions')).toBeNull();
     expect(f.probe.tapMode).toBe(false);
     expect(f.surface.body.classList.contains('reader-tap-highlight-mode')).toBe(false);
@@ -1061,14 +1062,12 @@ describe('automatic selection event ownership', () => {
           .find((button) => actionName(button) === name)!
           .click();
       if (label === 'Archive') {
-        mocks.choose.mockResolvedValueOnce('Archive');
-        click('Change status');
+        click('Archive and advance');
       } else if (label === 'Next') {
         const event = new KeyboardEvent('keydown', { key: 'j', cancelable: true });
         f.view.key(event);
         expect(event.defaultPrevented).toBe(true);
       } else click(label);
-      if (label === 'Archive') await Promise.resolve(); // Picker resolves before finish queues its operation.
       await f.probe.operations;
       expect(f.view.file).toBe(next);
       expect(f.vault.trashed).toEqual([]); // Protected annotated article is retained.

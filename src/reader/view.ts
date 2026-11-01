@@ -1021,6 +1021,7 @@ export class ReaderView extends ItemView {
     this.tapHighlighter?.dispose();
     this.tapHighlighter = undefined;
     this.actions.empty();
+    this.button(this.actions, 'Back to list', () => this.readingList(), 'arrow-left', 'b');
     if (this.surface.paged) {
       for (const [label, direction] of [
         ['Previous page', -1],
@@ -1039,21 +1040,24 @@ export class ReaderView extends ItemView {
         button.disabled = this.surface.atBoundary(direction);
       }
     }
-    const statusButton = this.button(
+    this.button(
       this.actions,
-      'Change status and advance',
-      () => this.changeStatus(),
-      'list-filter',
-      's',
+      'Save to Later and advance',
+      () => this.changeStatus('Later'),
+      'clock',
+      'l',
     );
-    statusButton.setAttribute('aria-label', 'Change article status and advance');
-    const statusTooltip = 'Change status and advance · S: choose · L: Later · A: Archive';
-    setTooltip(statusButton, statusTooltip);
+    this.button(
+      this.actions,
+      'Archive and advance',
+      () => this.changeStatus('Archive'),
+      'archive',
+      'a',
+    );
     this.button(this.actions, 'Delete', () => this.finish('delete'), 'trash-2').setAttribute(
       'aria-label',
       'Trash article and advance',
     );
-    this.button(this.actions, 'List', () => this.readingList(), 'list', 'b');
     const related = this.button(this.actions, 'Related notes', () => this.topics(), 'tags', 't');
     related.classList.add('reader-related-notes');
     this.setupTapHighlighter();
@@ -1705,17 +1709,13 @@ export class ReaderView extends ItemView {
       if (next) await this.openArticleNow(next);
     }, false);
   }
-  private async changeStatus(destination?: Queue): Promise<void> {
+  private async changeStatus(destination: 'Later' | 'Archive'): Promise<void> {
     this.cancelNodeCreation();
     const snapshot = this.snapshot,
       generation = this.generation,
       signal = this.articleLifetime.signal;
-    if (!snapshot) return;
-    const target =
-      destination ??
-      (await choose(this.app, 'Change article status…', [...queues], (queue) => queue, signal));
-    if (target && !signal.aborted && this.current(snapshot, generation))
-      await this.finish('next', target);
+    if (snapshot && !signal.aborted && this.current(snapshot, generation))
+      await this.finish('next', destination);
   }
   private finish(action: 'next' | 'delete', destination?: Queue): Promise<void> {
     this.cancelNodeCreation();
@@ -3171,17 +3171,7 @@ export class ReaderView extends ItemView {
       return;
     }
     if (event.key !== 'g') this.pendingG = 0;
-    // Route visible controls through their shortcuts, except status destinations
-    // grouped under one button. Tap mode keeps its own contextual keys.
-    if (!Platform.isMobile && !event.repeat && !this.tapMode && this.snapshot) {
-      if (event.key === 'l' || event.key === 'a') {
-        event.preventDefault();
-        void this.changeStatus(event.key === 'l' ? 'Later' : 'Archive').catch((error) =>
-          this.error(error),
-        );
-        return;
-      }
-    }
+    // Route visible controls through their shortcuts. Tap mode keeps its own contextual keys.
     if (!Platform.isMobile && !event.repeat && /^[a-z1-9]$/.test(event.key)) {
       const button = Array.from(
         this.contentEl.querySelectorAll<HTMLButtonElement>('button[data-reader-key]'),

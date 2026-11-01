@@ -464,11 +464,6 @@ async function pluginFixture() {
 function actionName(button: Element): string {
   const label = button.getAttribute('aria-label') ?? button.textContent ?? '';
   if (label === 'Trash article and advance') return 'Delete';
-  if (
-    label === 'Change article status and advance' ||
-    label.startsWith('Change status and advance ·')
-  )
-    return 'Change status';
   return label.replace(/ (?:page or article|article(?: and advance)?)$/, '');
 }
 

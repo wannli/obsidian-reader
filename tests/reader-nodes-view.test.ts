@@ -94,8 +94,6 @@ describe('Nodes v2 linked creation', () => {
         if (signal) expect(signal.aborted).toBe(true);
         expect(f.view.contentEl.querySelector('[aria-label="Done"]')).toBeNull();
       }
-      if (route === 'footer' && ['Read later', 'Archive'].includes(label))
-        mocks.choose.mockResolvedValueOnce(label === 'Read later' ? 'Later' : 'Archive');
       if (route === 'command') {
         const id = { 'Move…': 'move', 'Topics…': 'topics', 'Open Markdown': 'open-markdown' }[
           label
@@ -134,7 +132,13 @@ describe('Nodes v2 linked creation', () => {
         const button = [...parent.querySelectorAll('button')].find(
           (button) =>
             actionName(button) ===
-            (['Read later', 'Archive'].includes(label) ? 'Change status' : label),
+            (label === 'Read later'
+              ? 'Save to Later and advance'
+              : label === 'Archive'
+                ? 'Archive and advance'
+                : label === 'List'
+                  ? 'Back to list'
+                  : label),
         );
         expect(button).toBeDefined();
         expect(button!.disabled).toBe(false);
@@ -528,9 +532,9 @@ describe('Nodes v2 linked creation', () => {
         expect(requestSignal.aborted).toBe(true); // No queue or microtask may precede abort.
         expect(f.probe.tapMode).toBe(false);
         expect(f.view.contentEl.querySelector('[aria-label="Done"]')).toBeNull();
-        expect(
-          passageLabels(f.view).some((label) => label.startsWith('Change status and advance')),
-        ).toBe(true);
+        expect(passageLabels(f.view).some((label) => label === 'Save to Later and advance')).toBe(
+          true,
+        );
         await creation;
         await f.probe.operations;
         await expect(late(f.node)).rejects.toThrow('request has finished');
@@ -664,13 +668,7 @@ describe('Nodes v2 linked creation', () => {
         if (label === 'Read later') {
           expect(f.article.path).toBe('Reading/Later/A.md');
           expect((await f.store.read(f.article.path)).properties.status).toBe('later');
-          expect(mocks.choose).toHaveBeenCalledWith(
-            f.app,
-            'Change article status…',
-            ['Inbox', 'Later', 'Feed', 'Archive'],
-            expect.any(Function),
-            expect.any(AbortSignal),
-          );
+          expect(mocks.choose).not.toHaveBeenCalled();
           expect(f.api.createNodeForLink).toHaveBeenCalledTimes(1);
         }
         if (label === 'List') expect(f.view.file).toBeUndefined();

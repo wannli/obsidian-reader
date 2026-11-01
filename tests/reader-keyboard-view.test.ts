@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { mocks, hostFixture, enableHighlightHost, actionName } from './helpers/reader-view-fixture';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { Platform, setTooltip } from 'obsidian';
+import { Platform } from 'obsidian';
 import { createDocument, patchProperties } from '../src/core/document';
 import { ReaderView } from '../src/reader/view';
 import * as surfaceModule from '../src/reader/surface';
@@ -135,22 +135,15 @@ describe('desktop button shortcuts', () => {
     expect(press(f.view, '1').defaultPrevented).toBe(true);
     expect(click).toHaveBeenCalledOnce();
   });
-  it('opens the status picker with S without changing status on cancellation', async () => {
+  it('does not offer a status-picker shortcut in the article bar', async () => {
     const f = hostFixture();
     const article = await f.note('Reading/Inbox/A.md');
     await f.view.openArticle(article.path, true);
-    const button = f.view.contentEl.querySelector<HTMLButtonElement>(
-      '.reader-actions button[data-reader-key="s"]',
-    )!;
-    expect(button.getAttribute('aria-keyshortcuts')).toBe('S');
-    expect(button.hasAttribute('title')).toBe(false);
-    expect(setTooltip).toHaveBeenCalledWith(
-      button,
-      'Change status and advance · S: choose · L: Later · A: Archive',
-    );
-    mocks.choose.mockResolvedValueOnce(null);
-    expect(press(f.view, 's').defaultPrevented).toBe(true);
-    expect(mocks.choose).toHaveBeenCalledOnce();
+    expect(
+      f.view.contentEl.querySelector('.reader-actions button[data-reader-key="s"]'),
+    ).toBeNull();
+    expect(press(f.view, 's').defaultPrevented).toBe(false);
+    expect(mocks.choose).not.toHaveBeenCalled();
     expect(f.view.file).toBe(article);
     expect((await f.store.read(article.path)).properties.status).toBe('inbox');
   });
@@ -288,10 +281,14 @@ describe('article keyboard boundaries', () => {
     const controls = () => [
       ...f.view.contentEl.querySelectorAll<HTMLButtonElement>('.reader-actions button'),
     ];
-    expect(controls().map(actionName).slice(0, 2)).toEqual(['Previous page', 'Next page']);
+    expect(controls().map(actionName).slice(0, 3)).toEqual([
+      'Back to list',
+      'Previous page',
+      'Next page',
+    ]);
     expect(
       controls()
-        .slice(0, 2)
+        .slice(1, 3)
         .map((button) => button.querySelector('svg')?.dataset.icon),
     ).toEqual(['chevron-up', 'chevron-down']);
     for (const [label, direction] of [
@@ -318,11 +315,12 @@ describe('article keyboard boundaries', () => {
     const actions = column.querySelector('.reader-actions')!;
     const names = () => [...actions.querySelectorAll('button')].map(actionName);
     expect(names()).toEqual([
+      'Back to list',
       'Previous page',
       'Next page',
-      'Change status',
+      'Save to Later and advance',
+      'Archive and advance',
       'Delete',
-      'List',
       'Highlight mode',
       'Create node',
       'Related notes',
@@ -333,12 +331,12 @@ describe('article keyboard boundaries', () => {
     expect(f.probe.surface.page).toHaveBeenCalledWith(1);
     expect(f.view.file).toBe(a);
     f.view.refreshArticleControls();
-    expect(names().slice(0, 2)).toEqual(['Previous page', 'Next page']);
+    expect(names().slice(0, 3)).toEqual(['Back to list', 'Previous page', 'Next page']);
     expect(column.classList.contains('reader-has-page-actions')).toBe(true);
     expect(actions.classList.contains('reader-paged-actions')).toBe(true);
     expect(f.probe.surface).toBe(surface);
     f.view.refreshArticleControls();
-    expect(names()).toHaveLength(8);
+    expect(names()).toHaveLength(9);
     expect(f.view.file).toBe(a);
     expect(f.probe.surface).toBe(surface);
   });
