@@ -781,6 +781,7 @@ dialog.reader-image-viewer,
 }
 .reader-highlight-picker-excerpt {
   display: -webkit-box;
+  flex-shrink: 0;
   width: 100%;
   box-sizing: border-box;
   -webkit-box-orient: vertical;
@@ -791,8 +792,8 @@ dialog.reader-image-viewer,
   font-size: var(--font-ui-small);
 }
 .reader-highlight-picker-selected {
+  flex-shrink: 0;
   width: 100%;
-  min-height: 0;
   box-sizing: border-box;
   border-bottom: 1px solid var(--background-modifier-border);
 }
@@ -841,7 +842,7 @@ dialog.reader-image-viewer,
   flex-shrink: 0;
 }
 .reader-highlight-picker-results {
-  flex: 1 1 auto;
+  flex: 1 1 0;
   min-height: 0;
   min-width: 0;
   margin: 0;

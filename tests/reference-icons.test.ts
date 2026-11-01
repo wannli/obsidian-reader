@@ -294,11 +294,15 @@ describe('native-sized Fileclass reference tags', () => {
     const excerpt = /\.reader-highlight-picker-excerpt \{([^}]+)\}/.exec(css)![1];
     expect(excerpt).toContain('width: 100%');
     expect(excerpt).toContain('-webkit-line-clamp: 3');
+    expect(excerpt).toContain('flex-shrink: 0');
+    const selectedSection = /\.reader-highlight-picker-selected \{([^}]+)\}/.exec(css)![1];
+    expect(selectedSection).toContain('flex-shrink: 0');
     const selected = /\.reader-highlight-picker-selected-results \{([^}]+)\}/.exec(css)![1];
     expect(selected).toContain('max-height: min(30dvh, 240px)');
     expect(selected).toContain('overflow-y: auto');
     const results = /\.reader-highlight-picker-results \{([^}]+)\}/.exec(css)![1];
     expect(results).toContain('overflow-y: auto');
+    expect(results).toContain('flex: 1 1 0');
     expect(css).not.toContain('.reader-highlight-picker-type-filter');
     expect(css).not.toContain('.reader-highlight-picker-type-badge');
     const create =
