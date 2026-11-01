@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.24.0](https://github.com/wannli/obsidian-reader/compare/0.23.0...0.24.0) (2026-11-01)
+
+
+### Added
+
+* **reader:** clarify typed highlight destinations in picker ([4d6fc04](https://github.com/wannli/obsidian-reader/commit/4d6fc044479f1ff1ec659aa4afb5ccdd5a25654f))
+* **reader:** connect typed notes through fileclass fields ([c672737](https://github.com/wannli/obsidian-reader/commit/c672737f31e2305efd26f686630d3cf45d3d4986))
+* **reader:** create passage notes with one type tap ([386189d](https://github.com/wannli/obsidian-reader/commit/386189ddf486875f809837e7853e41642323dce3))
+* **reader:** merge typed highlight picker improvements ([ee3e5c5](https://github.com/wannli/obsidian-reader/commit/ee3e5c5ad47ac99259f8f3e620420c57c48eda36))
+* **reader:** merge typed-node relations ([45d786d](https://github.com/wannli/obsidian-reader/commit/45d786d3c2f1eb58a3ae008d0b790320bd264ef0))
+* **reader:** scaffold typed-node relation workflow ([2b5739a](https://github.com/wannli/obsidian-reader/commit/2b5739a4c4e2e4cf82c6e59058334799d794e9ab))
+
+
+### Refactored
+
+* **reader:** remove unused view interface and link re-exports ([4e54ab1](https://github.com/wannli/obsidian-reader/commit/4e54ab1997947931898ec9ba9e5683fa8e6494d0))
+
 ## [0.23.0](https://github.com/wannli/obsidian-reader/compare/0.22.0...0.23.0) (2026-11-01)
 
 
