@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.25.0](https://github.com/wannli/obsidian-reader/compare/0.24.0...0.25.0) (2026-11-01)
+
+
+### Added
+
+* rank Reader note and topic suggestions by article links ([2d48180](https://github.com/wannli/obsidian-reader/commit/2d481800b008397eae876868520f675f38a25378))
+
+
+### Fixed
+
+* **reader:** isolate typed-note picker layout and show class icons ([c254eb1](https://github.com/wannli/obsidian-reader/commit/c254eb1f3a1bd30de3e5fcecb2f3289052529492))
+
 ## [0.24.0](https://github.com/wannli/obsidian-reader/compare/0.23.0...0.24.0) (2026-11-01)
 
 
