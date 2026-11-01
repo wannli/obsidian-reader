@@ -8,6 +8,8 @@ export interface RelationField {
   label: string;
   cardinality: 'one' | 'many';
   occupied: boolean;
+  /** Current single-link label for an explicit replacement prompt. */
+  currentLabel?: string;
   /** True only when the dragged note is already in this field. */
   containsSource: boolean;
 }

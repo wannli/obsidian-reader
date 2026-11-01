@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { App } from 'obsidian';
 import { ReaderNodes } from '../src/host/fileclass/reader-nodes';
 import { FileclassBridge } from '../src/host/fileclass/fileclass';
+import { connectNodes } from '../src/host/node-relations';
 import type { PublicApi } from '../src/host/fileclass/fileclass-fields';
 import { bindNodesApi, nodesApi } from '../src/host/nodes';
 
@@ -16,9 +17,19 @@ vi.mock('obsidian', () => {
   class TFolder {
     constructor(public path: string) {}
   }
+  class MarkdownView {
+    constructor(
+      public file: TFile,
+      public editor: { getValue(): string },
+    ) {}
+    getMode() {
+      return 'source';
+    }
+  }
   return {
     TFile,
     TFolder,
+    MarkdownView,
     Notice: class {},
     parseFrontMatterAliases: (frontmatter: { aliases?: string[] }) => frontmatter?.aliases ?? [],
     prepareFuzzySearch: (query: string) => (candidate: string) =>
@@ -51,9 +62,11 @@ function fixture() {
   const files = new Map<string, any>();
   const folders = new Map<string, any>();
   const frontmatter = new Map<string, Record<string, unknown>>();
+  const bytes = new Map<string, string>();
   const vaultEvents = events(),
     metadataEvents = events(),
     workspaceEvents = events();
+  const leaves: { view: unknown }[] = [];
   const api = {
     version: '1.0',
     listFileClasses: vi.fn(async () => [{ name: 'topic', icon: 'hash' }]),
@@ -66,7 +79,7 @@ function fixture() {
     getFields: vi.fn<PublicApi['getFields']>(async () => []),
     getValue: vi.fn<PublicApi['getValue']>(async () => undefined),
     allowedValues: vi.fn(async () => []),
-    fileCandidates: vi.fn(async () => []),
+    fileCandidates: vi.fn<PublicApi['fileCandidates']>(async () => []),
     explain: vi.fn(async (path: string) =>
       frontmatter.get(path)?.fileClass === 'topic'
         ? { fileClasses: ['topic'] }
@@ -80,6 +93,7 @@ function fixture() {
     vault: {
       ...vaultEvents,
       getMarkdownFiles: () => [...files.values()],
+      read: vi.fn(async (file: { path: string }) => bytes.get(file.path) ?? ''),
       getAbstractFileByPath: (path: string) => files.get(path) ?? folders.get(path) ?? null,
       createFolder: vi.fn(async (path: string) => {
         folders.set(path, new ((await import('obsidian')).TFolder as any)(path));
@@ -88,6 +102,7 @@ function fixture() {
         if (files.has(path)) throw new Error('Duplicate file');
         const file = new ((await import('obsidian')).TFile as any)(path);
         files.set(path, file);
+        bytes.set(path, raw);
         frontmatter.set(path, { fileClass: raw.match(/^fileClass: (.*)$/m)?.[1] });
         vaultEvents.fire('create', file);
         metadataEvents.fire('changed', file);
@@ -96,12 +111,16 @@ function fixture() {
     },
     metadataCache: {
       ...metadataEvents,
+      getFirstLinkpathDest: (link: string) => files.get(link + '.md') ?? null,
       getFileCache: (file: { path: string }) => ({ frontmatter: frontmatter.get(file.path) ?? {} }),
     },
-    workspace: workspaceEvents,
+    workspace: {
+      ...workspaceEvents,
+      iterateAllLeaves: (visit: (leaf: unknown) => void) => leaves.forEach(visit),
+    },
     plugins: { getPlugin },
   } as unknown as App;
-  return { app, files, frontmatter, api, plugin, getPlugin };
+  return { app, files, frontmatter, bytes, leaves, api, plugin, getPlugin };
 }
 
 const active: ReaderNodes[] = [];
@@ -230,6 +249,198 @@ describe('Reader-owned Fileclass bridge', () => {
     await bridge.setValue('Nodes/Required.md', missing[0], 'Saved');
     expect(f.api.setValue).toHaveBeenCalledOnce();
     expect(await bridge.requiredFields('Nodes/Required.md')).toEqual([]);
+  });
+
+  it('matches Fileclass candidates and saves only the chosen destination field', async () => {
+    const f = fixture();
+    const source = await f.app.vault.create('People/Ada.md', '---\nfileClass: topic\n---\n');
+    const destination = await f.app.vault.create('Books/Book.md', '---\nfileClass: topic\n---\n');
+    const definitions = ['author', 'editor'].map((name) => ({
+      name,
+      id: `${name}-id`,
+      type: 'File',
+      options: {},
+      path: '',
+    }));
+    f.api.getSchema.mockResolvedValue({
+      name: 'topic',
+      ancestors: [],
+      options: {},
+      fields: definitions,
+    });
+    f.api.getFields.mockResolvedValue(
+      definitions.map(({ name, type, path }) => ({
+        name,
+        type,
+        owner: 'topic',
+        path,
+        isRoot: true,
+      })),
+    );
+    f.api.fileCandidates.mockResolvedValue([{ display: 'Ada', link: '[[People/Ada]]' }]);
+    const values = new Map<string, unknown>();
+    f.api.getValue.mockImplementation(async (_path, name) => values.get(name));
+    f.api.setValue.mockImplementation(async (_path, name, value) => {
+      values.set(name, value);
+      return { ok: true };
+    });
+    const { service } = await reader(f.app);
+    const provider = service.api()!.relations!;
+    const request = { sourcePath: source.path, destinationPath: destination.path };
+    const outcome = await connectNodes(provider, request, {
+      chooseField: async () => 'editor',
+      confirmReplace: async () => true,
+    });
+    expect(outcome).toEqual({ kind: 'saved', changed: true, message: 'Book · editor → Ada' });
+    expect(f.api.setValue).toHaveBeenCalledExactlyOnceWith(
+      destination.path,
+      'editor',
+      '[[People/Ada]]',
+    );
+    expect(values.get('author')).toBeUndefined();
+    expect(
+      (await provider.eligibleFields(request)).find((field) => field.id === 'editor')
+        ?.containsSource,
+    ).toBe(true);
+  });
+
+  it('rejects changed bytes, stale values and candidates before calling Fileclass setValue', async () => {
+    const f = fixture();
+    const source = await f.app.vault.create('People/Ada.md', '---\nfileClass: topic\n---\n');
+    const destination = await f.app.vault.create('Books/Book.md', '---\nfileClass: topic\n---\n');
+    const definition = { name: 'author', id: 'id', type: 'File', options: {}, path: '' };
+    f.api.getSchema.mockResolvedValue({
+      name: 'topic',
+      ancestors: [],
+      options: {},
+      fields: [definition],
+    });
+    f.api.getFields.mockResolvedValue([
+      { name: 'author', type: 'File', owner: 'topic', path: '', isRoot: true },
+    ]);
+    f.api.fileCandidates.mockResolvedValue([{ display: 'Ada', link: '[[People/Ada]]' }]);
+    let current: unknown;
+    f.api.getValue.mockImplementation(async () => current);
+    const { service } = await reader(f.app);
+    const provider = service.api()!.relations!;
+    const request = { sourcePath: source.path, destinationPath: destination.path };
+    let [field] = await provider.eligibleFields(request);
+    f.bytes.set(destination.path, 'changed');
+    await expect(
+      provider.assign({
+        ...request,
+        fieldId: field.id,
+        revision: field.revision,
+        replaceOccupied: false,
+      }),
+    ).rejects.toThrow('changed');
+    f.bytes.set(destination.path, '---\nfileClass: topic\n---\n');
+    [field] = await provider.eligibleFields(request);
+    current = '[[People/Grace]]';
+    await expect(
+      provider.assign({
+        ...request,
+        fieldId: field.id,
+        revision: field.revision,
+        replaceOccupied: false,
+      }),
+    ).rejects.toThrow('changed');
+    current = undefined;
+    [field] = await provider.eligibleFields(request);
+    f.api.fileCandidates.mockResolvedValue([]);
+    await expect(
+      provider.assign({
+        ...request,
+        fieldId: field.id,
+        revision: field.revision,
+        replaceOccupied: false,
+      }),
+    ).rejects.toThrow('changed');
+    expect(f.api.setValue).not.toHaveBeenCalled();
+  });
+
+  it('refuses to change a typed note open in a Markdown editor', async () => {
+    const f = fixture();
+    const source = await f.app.vault.create('People/Ada.md', '---\nfileClass: topic\n---\n');
+    const destination = await f.app.vault.create('Books/Book.md', '---\nfileClass: topic\n---\n');
+    const definition = { name: 'author', id: 'id', type: 'File', options: {}, path: '' };
+    f.api.getSchema.mockResolvedValue({
+      name: 'topic',
+      ancestors: [],
+      options: {},
+      fields: [definition],
+    });
+    f.api.getFields.mockResolvedValue([
+      { name: 'author', type: 'File', owner: 'topic', path: '', isRoot: true },
+    ]);
+    f.api.fileCandidates.mockResolvedValue([{ display: 'Ada', link: '[[People/Ada]]' }]);
+    const { service } = await reader(f.app);
+    const provider = service.api()!.relations!;
+    const request = { sourcePath: source.path, destinationPath: destination.path };
+    const [field] = await provider.eligibleFields(request);
+    const { MarkdownView } = await import('obsidian');
+    f.leaves.push({ view: new MarkdownView({} as any) });
+    (f.leaves[0].view as any).file = destination;
+    await expect(
+      provider.assign({
+        ...request,
+        fieldId: field.id,
+        revision: field.revision,
+        replaceOccupied: false,
+      }),
+    ).rejects.toThrow('Markdown editor');
+    expect(f.api.setValue).not.toHaveBeenCalled();
+  });
+
+  it('appends a unique MultiFile link and refuses a stale provider after reload', async () => {
+    const f = fixture();
+    const source = await f.app.vault.create('People/Ada.md', '---\nfileClass: topic\n---\n');
+    const destination = await f.app.vault.create('Books/Book.md', '---\nfileClass: topic\n---\n');
+    const definition = { name: 'authors', id: 'id', type: 'MultiFile', options: {}, path: '' };
+    f.api.getSchema.mockResolvedValue({
+      name: 'topic',
+      ancestors: [],
+      options: {},
+      fields: [definition],
+    });
+    f.api.getFields.mockResolvedValue([
+      { name: 'authors', type: 'MultiFile', owner: 'topic', path: '', isRoot: true },
+    ]);
+    f.api.fileCandidates.mockResolvedValue([{ display: 'Ada', link: '[[People/Ada]]' }]);
+    let current: unknown = ['[[People/Grace]]'];
+    f.api.getValue.mockImplementation(async () => current);
+    f.api.setValue.mockImplementation(async (_path, _name, value) => {
+      current = value;
+      return { ok: true };
+    });
+    const { service } = await reader(f.app);
+    const old = service.api()!.relations!;
+    const request = { sourcePath: source.path, destinationPath: destination.path };
+    const [field] = await old.eligibleFields(request);
+    expect(field).toMatchObject({ occupied: true, containsSource: false, cardinality: 'many' });
+    expect(
+      await old.assign({
+        ...request,
+        fieldId: field.id,
+        revision: field.revision,
+        replaceOccupied: false,
+      }),
+    ).toMatchObject({ changed: true });
+    expect(current).toEqual(['[[People/Grace]]', '[[People/Ada]]']);
+    const [duplicate] = await old.eligibleFields(request);
+    expect(duplicate.containsSource).toBe(true);
+    expect(
+      await old.assign({
+        ...request,
+        fieldId: duplicate.id,
+        revision: duplicate.revision,
+        replaceOccupied: false,
+      }),
+    ).toMatchObject({ changed: false });
+    expect(f.api.setValue).toHaveBeenCalledOnce();
+    f.plugin.api = { ...f.api };
+    await service.refresh();
+    expect(() => old.eligibleFields(request)).toThrow('connection changed');
   });
 
   it('invalidates a provider on Fileclass reload; old API cannot create', async () => {
