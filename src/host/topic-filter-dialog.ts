@@ -39,11 +39,21 @@ export function chooseTopicFilter(
                   .setButtonText('Use text')
                   .onClick(() => select({ label: query, terms: [query] })),
               );
-          const matches = topics.filter((topic) =>
-            topic.terms.some((term) =>
-              term.toLocaleLowerCase().includes(query.toLocaleLowerCase()),
-            ),
-          );
+          const needle = query.toLocaleLowerCase();
+          const matches = topics
+            .filter((topic) =>
+              topic.terms.some((term) => term.toLocaleLowerCase().includes(needle)),
+            )
+            .sort((a, b) => {
+              if (!needle) return 0; // Preserve frequency ordering of empty-query suggestions.
+              const rank = (topic: TopicFilter) =>
+                topic.terms.some((term) => term.toLocaleLowerCase() === needle)
+                  ? 0
+                  : topic.terms.some((term) => term.toLocaleLowerCase().startsWith(needle))
+                    ? 1
+                    : 2;
+              return rank(a) - rank(b) || a.label.localeCompare(b.label);
+            });
           for (const topic of matches.slice(0, 100))
             new Setting(results)
               .setName(topic.label)

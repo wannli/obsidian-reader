@@ -1,3 +1,5 @@
+import { compareAssociations, type AssociationRank } from './association-rank';
+
 export interface NodeChoiceType {
   type: string;
   label: string;
@@ -59,7 +61,12 @@ export function nodeChoiceMatch(
 export function nodeChoices<T extends TypedNodeChoice>(
   nodes: readonly T[],
   types: readonly NodeChoiceType[],
-  options: { query?: string; type?: string; preferredPaths?: readonly string[] } = {},
+  options: {
+    query?: string;
+    type?: string;
+    preferredPaths?: readonly string[];
+    associations?: ReadonlyMap<string, AssociationRank>;
+  } = {},
 ): T[] {
   const preferred = new Map(options.preferredPaths?.map((path, index) => [path, index]));
   const term = normalized(options.query ?? '');
@@ -79,6 +86,9 @@ export function nodeChoices<T extends TypedNodeChoice>(
     (a, b) =>
       rank(a) - rank(b) ||
       (preferred.get(a.path) ?? Infinity) - (preferred.get(b.path) ?? Infinity) ||
+      (!term && options.associations
+        ? compareAssociations(a.path, b.path, options.associations)
+        : 0) ||
       (term ? 0 : a.title.localeCompare(b.title) || a.path.localeCompare(b.path)),
   );
 }

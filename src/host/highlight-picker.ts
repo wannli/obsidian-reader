@@ -9,6 +9,7 @@ import {
 import type { NodeResult, NodesApi } from './nodes';
 import { bindModalSubmit } from './modal-submit';
 import { choosePassageNode } from './passage-node-picker';
+import type { AssociationRank } from '../core/association-rank';
 
 export type HighlightHostChoice =
   | { kind: 'existing'; node: NodeResult }
@@ -21,6 +22,7 @@ export interface HighlightHostPickerOptions {
   query?: string;
   excerpt?: string;
   preferredPaths?: readonly string[];
+  associations?: ReadonlyMap<string, AssociationRank>;
   signal?: AbortSignal;
   allowCreate?: boolean;
   multiple?: boolean;
@@ -334,6 +336,17 @@ export function chooseHighlightHost(
             const name = displayName(node);
             names.set(name, (names.get(name) ?? 0) + 1);
           }
+          if (
+            !query() &&
+            options.associations?.size &&
+            visible.some((node) => !selected.has(node.path) && options.associations?.has(node.path))
+          )
+            append(
+              results,
+              'p',
+              'reader-highlight-picker-suggestion-label',
+              'Frequently linked notes',
+            );
           for (const node of visible) {
             const row = append(
               selected.has(node.path) && multiple ? selectedResults : results,
@@ -362,6 +375,9 @@ export function chooseHighlightHost(
               classNames(node),
               node.path,
               preferredPaths.includes(node.path) ? 'Suggested note' : '',
+              options.associations?.get(node.path)?.count
+                ? `Linked from ${options.associations.get(node.path)!.count} articles; recency uses linked articles' edit times, not when you chose this note`
+                : '',
               nodeChoiceMatch(node, query()),
             ].filter(Boolean);
             row.setAttribute('aria-label', labels.join(' — '));
@@ -466,6 +482,7 @@ export function chooseHighlightHost(
             rows = nodeChoices([...preferred, ...found].filter(allowedNode), types, {
               query: term,
               preferredPaths,
+              associations: options.associations,
             });
             exact = canCreate ? findExact(term, [...rows, ...selected.values()]) : [];
             if (!active()) return;

@@ -80,6 +80,24 @@ describe('typed note choices', () => {
     const c = node('C');
     expect(nodeChoices([a, b, c], types, { preferredPaths: [c.path, b.path] })).toEqual([c, b, a]);
   });
+
+  it('ranks explicit associations only for empty search, after article-specific preferences', () => {
+    const a = node('A'),
+      b = node('B'),
+      c = node('C');
+    const associations = new Map([
+      [a.path, { count: 1, edited: 9 }],
+      [b.path, { count: 2, edited: 1 }],
+      [c.path, { count: 1, edited: 10 }],
+    ]);
+    expect(nodeChoices([a, b, c], types, { associations })).toEqual([b, c, a]);
+    expect(nodeChoices([a, b, c], types, { associations, preferredPaths: [a.path] })).toEqual([
+      a,
+      b,
+      c,
+    ]);
+    expect(nodeChoices([a, b, c], types, { associations, query: 'a' })).toEqual([a, b, c]);
+  });
 });
 
 describe('highlight query/title suggestions', () => {

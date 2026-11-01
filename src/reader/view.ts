@@ -47,6 +47,8 @@ import { connectNodes, type RelationField } from '../host/node-relations';
 import type { Ingestion } from '../host/ingestion';
 import { nodesApi, type NodesApi, type NodeResult } from '../host/nodes';
 import { chooseHighlightHost } from '../host/highlight-picker';
+import { associationRanks } from '../host/association-rank';
+import { compareAssociations } from '../core/association-rank';
 import { hasNodeClass } from '../core/node-choices';
 import type { LibraryChange } from '../host/vault';
 import { ReadingSurface } from './surface';
@@ -767,9 +769,16 @@ export class ReaderView extends ItemView {
     this.host.signal.addEventListener('abort', abort, { once: true });
     try {
       if (this.lifetime.signal.aborted || this.host.signal.aborted) return;
+      const associations = associationRanks(this.app, this.host.store.catalog.values());
+      const topics = this.availableTopics().sort(
+        (a, b) =>
+          compareAssociations(a.path ?? '', b.path ?? '', associations) ||
+          a.label.localeCompare(b.label) ||
+          (a.path ?? '').localeCompare(b.path ?? ''),
+      );
       const selected = await chooseTopicFilter(
         this.app,
-        this.availableTopics(),
+        topics,
         this.topicFilter,
         controller.signal,
       );
@@ -2394,6 +2403,7 @@ export class ReaderView extends ItemView {
                 query: title,
                 excerpt: options.excerpt,
                 preferredPaths: preferred.map((node) => node.path),
+                associations: associationRanks(this.app, this.host.store.catalog.values()),
                 multiple: options.multiple !== false,
                 selectedPaths: [...(options.selectedPaths ?? [])],
                 minSelection: minimum,

@@ -173,6 +173,29 @@ vi.mock('../src/reader/tap-highlighter', () => ({
 }));
 
 describe('topic-filter view integration', () => {
+  it('suggests frequently linked topics without reading article bodies or changing the filter', async () => {
+    const f = fixture();
+    f.add('Topics/Alpha.md', '', { type: 'topic' });
+    f.add('Topics/Zulu.md', '', { type: 'topic' });
+    for (let i = 0; i < 2; i++) {
+      const article = f.add(`Reading/Inbox/${i}.md`, '', { topics: ['[[Topics/Zulu.md]]'] });
+      f.cache.get(article).frontmatterLinks = [
+        { link: 'Topics/Zulu.md', original: '[[Topics/Zulu.md]]', key: 'topics.0' },
+      ];
+    }
+    const older = f.add('Reading/Later/Other.md', '');
+    f.cache.get(older).links = [{ link: 'Topics/Alpha.md', original: '[[Topics/Alpha.md]]' }];
+    f.view.showList();
+    f.view.contentEl.querySelector<HTMLButtonElement>('[aria-label="Filter by topic"]')!.click();
+    await tick();
+    expect(mocks.filter.mock.calls[0][1].map((topic: { label: string }) => topic.label)).toEqual([
+      'Zulu',
+      'Alpha',
+    ]);
+    expect(f.read).not.toHaveBeenCalled();
+    expect(f.probe.topicFilter).toBeUndefined();
+  });
+
   it('matches only current queue, resolves aliases and links, and never acquires or writes', async () => {
     const f = fixture();
     f.add('Topics/Climate.md', '', { type: 'topic', aliases: ['global warming'] });

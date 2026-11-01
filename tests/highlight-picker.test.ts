@@ -108,6 +108,48 @@ const row = (path: string) => {
 const creates = () => [
   ...document.querySelectorAll<HTMLButtonElement>('.reader-highlight-picker-create-row'),
 ];
+
+describe('association-ranked suggestions', () => {
+  it('labels frequency, preserves explicit selection, and restores relevance on search', async () => {
+    const associations = new Map([
+      [fuzzy.path, { count: 3, edited: 20 }],
+      [exact.path, { count: 1, edited: 30 }],
+    ]);
+    const pending = chooseHighlightHost({} as App, source.api, {
+      multiple: true,
+      selectedPaths: [alias.path],
+      associations,
+    });
+    expect(document.querySelector('.reader-highlight-picker-suggestion-label')?.textContent).toBe(
+      'Frequently linked notes',
+    );
+    expect(
+      [
+        ...document.querySelectorAll<HTMLButtonElement>(
+          '.reader-highlight-picker-results [data-path]',
+        ),
+      ]
+        .map((item) => item.dataset.path)
+        .slice(0, 2),
+    ).toEqual([fuzzy.path, exact.path]);
+    expect(row(fuzzy.path).getAttribute('aria-label')).toContain('Linked from 3 articles');
+    expect(
+      document
+        .querySelector('.reader-highlight-picker-selected-results [data-path]')
+        ?.getAttribute('data-path'),
+    ).toBe(alias.path);
+    const search = document.querySelector<HTMLInputElement>('.reader-highlight-picker-search')!;
+    search.value = 'Memory';
+    search.dispatchEvent(new Event('input'));
+    expect(document.querySelector('.reader-highlight-picker-suggestion-label')).toBeNull();
+    expect(
+      document.querySelector<HTMLButtonElement>('.reader-highlight-picker-results [data-path]')
+        ?.dataset.path,
+    ).toBe(exact.path);
+    modalState.current?.close();
+    expect(await pending).toBeNull();
+  });
+});
 const create = (type: string) => {
   const found = creates().find((entry) => entry.dataset.createType === type);
   if (!found) throw new Error(`Missing creation class: ${type}`);
