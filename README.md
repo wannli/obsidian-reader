@@ -6,9 +6,7 @@
 [![Obsidian 1.8.0+](https://img.shields.io/badge/Obsidian-1.8.0%2B-7C3AED)](https://obsidian.md)
 [![Markdown-first](https://img.shields.io/badge/storage-Markdown-blue)](#your-reading-library-is-just-markdown)
 
-Reader brings your read-later list and RSS feeds into your Obsidian vault. Save an interesting article, settle into a clean reading view, and highlight the passages worth keeping—all without moving your reading into a separate app.
-
-Your articles are ordinary Markdown notes. Your highlights stay in the text. Your reading position travels with your notes through your existing vault sync.
+Reader brings read-later articles and RSS feeds into your Obsidian vault. Read without distractions, highlight passages, and resume where you left off. Articles, highlights, and reading positions live in ordinary Markdown notes and sync with your vault.
 
 [Get started](#get-started) · [Reading workflow](#a-place-for-every-article) · [Feeds](#follow-feeds-without-the-backlog) · [Markdown format](#your-reading-library-is-just-markdown) · [Development](#development)
 
@@ -18,7 +16,6 @@ Your articles are ordinary Markdown notes. Your highlights stay in the text. You
 - **Make room for focused reading.** A simple, titles-only list and a full-width article view keep the interface out of the way. Reader uses Obsidian’s typography and themes, with touch-friendly controls and a paged mode for e-ink reading.
 - **Pick up where you left off.** Each article remembers your place, including when you move between articles. List indicators help you spot articles you’ve opened or highlighted.
 - **Keep the good parts in context.** Highlight a passage and collect an attributed quotation in one or several typed notes—or create one for a new idea. Fileclass supplies types, icons and field validation through its public API; Reader owns the picker and creation flow.
-- **Keep your library yours.** Articles, references and collected quotations are ordinary Markdown. No separate annotation database or custom sync service. Read and edit them even without Reader.
 
 Reader targets Obsidian desktop, iPhone/iPad, and Android/e-ink. Automated tests are not device certification; physical-device and cross-device behavior requires manual checks.
 
@@ -39,7 +36,7 @@ This README describes the current source. An installed release may not include e
 2. Paste an article URL. Reader saves it to **Inbox** and extracts readable text when online.
 3. Use **Open reading list** to return to your library. Select text in an article to highlight it, or use **Change status** to choose **Later** or **Archive**.
 
-To save several articles, run **Add articles from URLs** and enter URLs in the multiline field, separated by commas, semicolons or newlines (for example, `www.google.com,www.bing.com;www.brave.com`). Links beginning with `www.` use HTTPS. Reader checks all URLs before saving, deduplicates them and reuses existing articles. Cancelling or failing partway through leaves already saved articles in place.
+To save several articles, use **Add articles from URLs**. Separate URLs with commas, semicolons, or newlines; `www.` links use HTTPS. Reader validates and deduplicates them before saving. Already saved articles remain if you cancel or a later save fails.
 
 Manual and browser-link captures go to `Reading/Inbox`; imported feed articles go to `Reading/Stream`. New native/QuickAdd notes with `type: article` and `status: inbox` are placed in Inbox when Reader observes their live creation. Configure the native capture tool to target Inbox too, especially for captures made while Reader is not running. Subscription notes default to `Reading/Feeds` (configurable). Reader can still read typed articles elsewhere, but they are not in a reading list.
 
@@ -61,15 +58,14 @@ Only notes in the Feed folder with explicit `status: feed` can expire, one calen
 ### Find your way around
 
 - **Open reading list**, **Open Archive**, and **Manage feeds** are available from the command palette.
-- Use **J/K** to browse articles on desktop and **List** to return to where you started.
 - Use native **Obsidian search** for general search, or filter a reading list by a **topic or phrase**. Topic filters include aliases, explicit topic assignments, and case-insensitive whole-word/phrase matches in article titles and saved bodies. Free text works without creating a topic note.
-- An active topic filter uses Obsidian's accent colour and displays **Reading list: topic** in the list and above articles opened from it. Click the active filter button to clear it; click it when inactive to open the picker. From an article, return to **List** first. Switching queues retains the filter; Previous/Next follows the filtered list.
+- Click the topic filter button to choose or clear a filter. Return to **List** to change it from an article. Filters persist across queues; Previous/Next follows the filtered list.
 - Use **Open Markdown** to edit an article, or the bottom-bar **Related notes** multiselect to edit remembered typed destinations. Checked notes stay visible while searching; Apply confirms before closing. Creating a note uses Reader’s typed-note flow backed by Fileclass. Filtering is read-only; assigning related notes to a Feed article retains it in Later.
-- In an article, **J/K** navigate articles; **gg/G** jump to top/bottom, **D/U** move half a page down/up, **Space** moves a full page down without advancing to the next article, and **Q** returns to the list. **T** opens related notes, **L/A** move to Later/Archive and advance, **B** returns to the list, and **H/C** enter Highlight/Create node mode. In paged mode, **Z/X** step pages. In the list, **J/K** select rows, **Enter** opens the selected row, **gg/G** select the first/last displayed row; **I/F/L** switch queues, **U** adds a URL, **T** filters topics, and **M** shows more. **?** shows the shortcuts. **Up/PageUp** and **Down/PageDown** cross article boundaries and resume the saved position. Shortcuts pause in inputs, menus, dialogs and selections; Delete remains a button, not a single-key shortcut.
+- Press **?** for all shortcuts. In lists, use **J/K** to select rows and **Enter** to open one. In articles, use **J/K** to switch articles, **Q** to return to the list, and **H/C** to enter Highlight/Create node mode. **Up/PageUp** and **Down/PageDown** cross article boundaries and resume the saved position. Shortcuts pause in inputs, menus, dialogs, and selections; Delete has no single-key shortcut.
 - On Boox/e-ink, enable **pagination (this device)** in Reader settings to use up/down touch page buttons or hardware Up/Down and PageUp/PageDown. Left/right article-navigation arrows are removed in both modes.
 - On iPhone, **Copy reading-list link** opens the library. **Copy dog-ear link** opens the last article you opened in Reader, or the first (newest) Inbox article if none is marked. Each gives you a vault-aware link for a Shortcuts **URL → Open URLs → Add to Home Screen** shortcut. You can also use **Open dog-eared article** from the command palette.
 
-Lists follow the article's folder, not its YAML `status`. The four queue folders default to `Reading/Inbox`, `Reading/Stream` (Feed), `Reading/Later`, and `Reading/Treasury` (Archive), and can be changed in Reader settings. Folders must be distinct and cannot overlap. A folder move made outside Reader changes the list without rewriting YAML; a Reader status action updates YAML and moves the file. Applying settings does not move existing notes, and no automatic migration runs. `Templates/` and `.trash/` (including nested folders with those names) are excluded from Reader entirely. Moves respect Obsidian’s internal-link update preference; disabling it can leave links broken.
+Lists follow folders, not YAML `status`. Their configurable defaults are `Reading/Inbox`, `Reading/Stream` (Feed), `Reading/Later`, and `Reading/Treasury` (Archive); folders must not overlap. Moving a file yourself changes its list without rewriting YAML. Reader status actions update YAML and move the file, but changing settings never migrates existing notes. Reader excludes `Templates/` and `.trash/` at any depth. Moves follow Obsidian’s internal-link update preference; disabling it can break links.
 
 ## Follow feeds without the backlog
 
@@ -191,4 +187,4 @@ mise exec -- npm run check                     # format, metadata, types, tests,
 mise exec -- npm run benchmark:scale           # opt-in: 10k articles / 100 feeds
 ```
 
-Targets are under 5 seconds for focused checks and under 10 seconds for the automated test suite locally. There is no general automated E2E suite; synthetic-host browser checks are not native certification. Native touch, e-ink, and real sync behavior require separate manual checks. The scale benchmark retains synthetic files and measurements in the marked dummy vault, not a personal vault.
+There is no automated E2E suite. Test native touch, e-ink, and cross-device sync manually. The scale benchmark retains synthetic files and measurements in the marked dummy vault.

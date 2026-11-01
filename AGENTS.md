@@ -5,7 +5,7 @@ Start with [README](README.md), `src/main.ts`, `src/core/model.ts`, and `src/cor
 ## Identity and compatibility
 
 - Product: Reader. Obsidian plugin ID: `obsidian-reader`; GitHub repository: `wannli/obsidian-reader`.
-- Reader alone requires Obsidian ≥1.8.0. New hosted highlights require Obsidian ≥1.12.7 and Fileclass public API v1 for typed-note discovery and creation. Reader does not depend on Fileclass Inline; no plugin-ID fallback or migration.
+- Reader requires Obsidian ≥1.8.0. New hosted highlights require ≥1.12.7 and Fileclass public API v1; Fileclass Inline is optional. Do not add a plugin-ID fallback.
 - This is a standalone plugin. Do not import or migrate settings, hotkeys, workspace views, plugin enablement, or vault data from another plugin without Wannes's explicit migration plan.
 - Preserve unknown Markdown/frontmatter and user-authored content. Before changing persisted note schemas or data structure, present the proposal and wait for approval. Do not add `created-by` properties to Markdown files.
 - Keep documentation under 200 lines unless approved otherwise.
@@ -15,29 +15,29 @@ Start with [README](README.md), `src/main.ts`, `src/core/model.ts`, and `src/cor
 - `src/main.ts` owns commands, routing and generation-bound services. Folder reconfiguration stops old views/work, drains dispatched writes and creates fresh Reader list views; it must not reopen/acquire/promote articles as a side effect.
 - `src/core/` owns Markdown snapshots, metadata indexing, capture-destination validation and guarded writes. Recheck source bytes, file identity and dirty-editor safety at mutation boundaries.
 - `src/content/` bounds and sanitizes external content. `src/host/` adapts native vault, network, dialogs/settings and optional Nodes APIs; keep uncancellable native requests in their occupied slots until settlement.
-- `src/reader/` renders the list/articles. `src/reader/styles.css` is the sole source stylesheet: leaf-owned floating controls, ≥44px targets, scrollbar/final-content clearance and aligned paged column geometry.
-- Use ordinary Fileclass-typed notes, not a separate Reader node entity. Reader owns the highlight-specific typed picker, creation and required-field UI; Fileclass public API v1 supplies class membership, schemas and writes. No untyped/All files route or creation without Fileclass. New highlights require Fileclass; existing content remains readable without it. Preserve source citations, quotation snapshots and new-note `origin`. Cancellation never authorizes deleting a created note or blocking navigation on an uncooperative provider.
+- `src/reader/` renders lists and articles. `src/reader/styles.css` is the sole source stylesheet; preserve leaf-owned controls, ≥44px targets, content clearance, and aligned paged columns.
+- Use ordinary Fileclass-typed notes, not Reader-specific node entities. Reader owns the picker and creation UI; Fileclass supplies types, schemas, validation, and writes. Do not offer untyped files or create notes without Fileclass; existing content stays readable without it. Preserve citations, quotation snapshots, and new-note `origin`. Cancellation must not delete created notes or block navigation on an uncooperative provider.
 - All article entry resumes the destination's saved position. Preserve explicit Open Markdown, dirty/uncertain editors, selection/modal/input guards and held-key protection.
 
 ## Development and release
 
 - Use `mise exec -- ...` with the pinned Node runtime from `.mise.toml`. `npm run check` runs formatting, metadata, types, both test suites, and build; `npm run format` applies the shared formatter.
-- Target <5s for focused checks and <10s for the full automated test suite locally. Use Node by default and DOM only where needed. No automated E2E suite; native/device checks are manual.
+- Use Node for tests unless DOM is needed. Keep focused checks under 5s and the test suite under 10s locally. Native/device checks are manual.
 - Never use a personal vault. Runtime tooling is restricted to the repository's marked synthetic vaults under `.sandbox`; a missing or mismatched ownership marker blocks work.
 - With multiple worktrees, verify source authority and active file ownership before editing/building. Never replace validated code with an older partial rebuild or overwrite parallel features.
 - Pin native CLI calls to the registered vault ID before the command; verify the owned path and renderer. Respect native-input holds, even for read-only evaluation.
 - In the shared Sync acceptance vault, keep Hot Reload, watchers, corpora, backups and instrumentation out of Sync. Do not change Sync or companion-plugin settings without explicit authorization.
 - Whenever requested work is complete and you are confident in its correctness after appropriate validation, commit your changes and push them to remote `main`; Wannes grants standing authorization for these commits and pushes. If validation or a safe push is blocked, report the blocker rather than forcing the push. Use Conventional Commits and describe the implemented scope and validation in the body.
-- Do not stash, discard, auto-merge, or include unrelated work. Vault installation remains a separate authorization boundary. Hot Reload is for isolated development, never the shared Sync acceptance profile.
+- Do not stash, discard, auto-merge, or include unrelated work. Vault installation requires separate authorization.
 - Release management is exclusively Wannes's responsibility. Do not perform version bumps, changelog release updates, tag creation/movement, release PR merges, publication, or other release actions. Release Please owns version and changelog updates; Wannes handles releases by merging its PR.
-- Report actual checks run. Browser simulations do not prove native iOS, e-ink hardware, or cross-device sync behavior.
+- Report actual checks; browser simulations do not prove native iOS, e-ink, or cross-device sync behavior.
 
 ## Storage principles
 
 - Markdown is authoritative. Article body and inline highlights use ordinary Markdown; operational reading state is YAML. Keep the article/feed examples in README consistent with implementation.
 - Discover articles/subscriptions by exact `type`, excluding Templates and .trash at any depth. Article queue membership comes from four configurable nonoverlapping queue folders (defaults Inbox, Stream/Feed, Later, Treasury/Archive), not YAML `status`; outside folders, typed articles remain readable but unqueued. Reader status actions write YAML then move; external folder/YAML edits do not rewrite the other representation. Only a Feed-folder article with fresh explicit `status: feed` can expire. Manual/browser captures and observed live native/QuickAdd inbox articles enter Inbox; RSS imports enter Feed. The old article capture destination is inert. No startup/settings-apply sweep or automatic migration.
 - Opened-before indicators derive from existing usable `bookmark` text anchors; highlight indicators derive from Markdown. The approved `dog_ear: true` current-article pointer is separate from position and indicators; move it on successful Reader article entry and use newest Inbox as the shortcut fallback. Legacy `reading_position` remains untouched and inert. Feed-folder annotations promote to Later before commit; Reader Delete/expiry archives topic-bearing or annotated articles rather than trashing them. Reads stay bounded/cancellable for visible rows and never persist extra flags or trigger promotion.
-- Preserve unknown properties, titles, authored sections/comments, user text, journals and backlinks. No sidecars or synchronized copies. Quotations are user-owned snapshots: source edits/Undo never prune them; only an explicit highlight-destination removal may delete a uniquely matching unedited copy. Preserve source grouping, local date links and partial-removal safety.
+- Preserve unknown properties, titles, authored text/comments, journals, and backlinks. No sidecars or synchronized copies. Quotations are user-owned snapshots: source edits/Undo never prune them. Only explicit destination removal may delete a uniquely matching unedited copy; preserve grouping, local date links, and partial-removal safety.
 - Use `src/core/model.ts` and `src/core/document.ts` for storage behavior. New notes must not persist IDs, cursor/history state, or acquisition metadata; unknown nonempty text remains protected unless ownership is proven from its current bytes.
-- Every feed refresh is limited to the latest 20 entries before deduplication/age filtering. Do not revive superseded implementations, migrations, QuickAdd assets, or old settings.
+- Limit each feed refresh to the latest 20 entries before deduplication or age filtering. Do not revive old implementations, migrations, QuickAdd assets, or settings.
 - Runtime must work on Obsidian mobile and avoid Node/Electron-only imports in plugin code.
