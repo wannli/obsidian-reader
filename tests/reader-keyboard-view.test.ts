@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { mocks, hostFixture, enableHighlightHost, actionName } from './helpers/reader-view-fixture';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { Platform } from 'obsidian';
+import { Platform, setTooltip } from 'obsidian';
 import { createDocument, patchProperties } from '../src/core/document';
 import { ReaderView } from '../src/reader/view';
 import * as surfaceModule from '../src/reader/surface';
@@ -29,6 +29,44 @@ describe('desktop button shortcuts', () => {
     const capture = vi.spyOn(f.host, 'capture');
     expect(press(f.view, 'u').defaultPrevented).toBe(true);
     expect(capture).toHaveBeenCalledOnce();
+  });
+  it('keeps article actions, tooltips and the shortcut sheet in sync', async () => {
+    const f = hostFixture();
+    const article = await f.note('Reading/Inbox/A.md');
+    await f.view.openArticle(article.path, true);
+    const actions = [
+      ['b', 'Back to list'],
+      ['l', 'Save to Later and advance'],
+      ['a', 'Archive and advance'],
+      ['t', 'Trash article and advance'],
+      ['h', 'Highlight mode'],
+      ['n', 'Create node'],
+      ['r', 'Related notes'],
+    ] as const;
+    const buttons = actions.map(([key, label]) => {
+      const button = f.view.contentEl.querySelector<HTMLButtonElement>(
+        `.reader-actions button[data-reader-key="${key}"]`,
+      )!;
+      expect(button.getAttribute('aria-label')).toBe(label);
+      expect(button.getAttribute('aria-keyshortcuts')).toBe(key.toUpperCase());
+      expect(setTooltip).toHaveBeenCalledWith(button, `${label} (${key.toUpperCase()})`);
+      return button;
+    });
+    for (const key of ['t', 'r', 'n']) {
+      const button = buttons[actions.findIndex(([shortcut]) => shortcut === key)];
+      const click = vi.spyOn(button, 'click').mockImplementation(() => {});
+      expect(press(f.view, key).defaultPrevented).toBe(true);
+      expect(click).toHaveBeenCalledOnce();
+    }
+    expect(press(f.view, '?', { shiftKey: true }).defaultPrevented).toBe(true);
+    const sheet = f.view.contentEl.querySelector('.reader-shortcut-help')!;
+    for (const [key, label] of actions) {
+      expect(
+        [...sheet.querySelectorAll('dt')].some((entry) => entry.textContent === key.toUpperCase()),
+      ).toBe(true);
+      expect(sheet.textContent).toContain(label);
+    }
+    expect(sheet.textContent).toContain('Half page down / up');
   });
   it('moves a visible list cursor, opens with Enter and restores the row with q', async () => {
     const f = hostFixture();
@@ -72,9 +110,17 @@ describe('desktop button shortcuts', () => {
     expect(press(f.view, 'g').defaultPrevented).toBe(true);
     expect(rows()[0].classList.contains('reader-list-selected')).toBe(true);
     expect(press(f.view, '?', { shiftKey: true }).defaultPrevented).toBe(true);
-    expect(f.view.contentEl.querySelector('[role="dialog"]')?.textContent).toContain(
-      'First / last visible row',
-    );
+    const listHelp = f.view.contentEl.querySelector('[role="dialog"]')!;
+    expect(listHelp.textContent).toContain('First / last visible row');
+    for (const label of [
+      'Inbox',
+      'Feed articles',
+      'Later',
+      'Add URL',
+      'Filter by topic',
+      'Show more',
+    ])
+      expect(listHelp.textContent).toContain(label);
     expect(press(f.view, 'j').defaultPrevented).toBe(true);
     expect(rows()[0].classList.contains('reader-list-selected')).toBe(true);
     expect(press(f.view, 'Escape').defaultPrevented).toBe(true);

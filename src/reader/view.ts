@@ -700,21 +700,35 @@ export class ReaderView extends ItemView {
     this.shortcutHelp = help;
     help.createEl('h2', { text: 'Keyboard shortcuts' });
     const list = help.createEl('dl');
-    for (const [keys, label] of this.snapshot
-      ? [
-          ['j / k', 'Next / previous article'],
-          ['gg / G', 'Top / bottom'],
-          ['d / u', 'Half page down / up'],
-          ['Space', 'Full page down'],
-          ['q', 'Back to list'],
-          ['?', 'Close shortcuts'],
-        ]
+    const navigation = this.snapshot
+      ? this.tapMode
+        ? this.host.paged
+          ? [['Up / Down', 'Page']]
+          : []
+        : [
+            ['j / k', 'Next / previous article'],
+            ['gg / G', 'Top / bottom'],
+            ['d / u', 'Half page down / up'],
+            ['Space', 'Full page down'],
+            ['q', 'Back to list'],
+          ]
       : [
           ['j / k', 'Next / previous row'],
           ['Enter', 'Open selected article'],
           ['gg / G', 'First / last visible row'],
-          ['?', 'Close shortcuts'],
-        ]) {
+        ];
+    const actions = Array.from(
+      this.contentEl.querySelectorAll<HTMLButtonElement>('button[data-reader-key]'),
+    )
+      .filter((button) => !button.disabled && !button.hidden && !button.closest('[hidden]'))
+      .map(
+        (button) =>
+          [
+            button.dataset.readerKey!.toUpperCase(),
+            button.getAttribute('aria-label') ?? button.textContent ?? '',
+          ] as const,
+      );
+    for (const [keys, label] of [...navigation, ...actions, ['?', 'Close shortcuts']]) {
       list.createEl('dt', { text: keys });
       list.createEl('dd', { text: label });
     }
@@ -917,7 +931,7 @@ export class ReaderView extends ItemView {
       this.articleTitle = surface.title;
       setTooltip(
         surface.title,
-        'J/K: next/previous article · Space: page · D/U: half-page · gg/G: top/bottom · Q: list · ?: shortcuts',
+        'J/K: next/previous article · Space: page · D/U: half-page · gg/G: top/bottom · B/Q: list · ?: shortcuts',
       );
       if (this.filteredOrigin && this.topicFilter) {
         const context = surface.title.ownerDocument.createElement('div');
@@ -1187,9 +1201,12 @@ export class ReaderView extends ItemView {
       'archive',
       'a',
     );
-    this.button(this.actions, 'Delete', () => this.finish('delete'), 'trash-2').setAttribute(
-      'aria-label',
+    this.button(
+      this.actions,
       'Trash article and advance',
+      () => this.finish('delete'),
+      'trash-2',
+      't',
     );
     if (
       nodesApi(this.app)?.relations &&
@@ -1204,8 +1221,9 @@ export class ReaderView extends ItemView {
         'Connect typed notes',
         () => this.connectFromArticle(),
         'git-merge',
+        'c',
       );
-    const related = this.button(this.actions, 'Related notes', () => this.topics(), 'tags', 't');
+    const related = this.button(this.actions, 'Related notes', () => this.topics(), 'tags', 'r');
     related.classList.add('reader-related-notes');
     this.setupTapHighlighter();
     this.updateStatus();
@@ -1285,7 +1303,7 @@ export class ReaderView extends ItemView {
         'Retry',
         () => this.host.ingestion.acquire(this.snapshot!.file.path, true),
         'refresh-cw',
-        'r',
+        'e',
       );
   }
   private invalidateSelection(): number {

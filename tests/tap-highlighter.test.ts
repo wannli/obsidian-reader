@@ -216,7 +216,7 @@ it('switches the same toolbar contextually and restores the exact original actio
   const trigger = button(f.toolbar, 'Highlight mode');
   for (const [action, key] of [
     [trigger, 'H'],
-    [button(f.toolbar, 'Create node'), 'C'],
+    [button(f.toolbar, 'Create node'), 'N'],
   ] as const) {
     expect(action.hasAttribute('title')).toBe(false);
     expect(action.getAttribute('aria-keyshortcuts')).toBe(key);

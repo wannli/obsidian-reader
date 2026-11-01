@@ -212,15 +212,17 @@ describe('bounded Reader UI', () => {
         'Create node',
         'Related notes',
       ]);
-      expect(setTooltip).toHaveBeenCalledWith(buttons[6], 'Related notes (T)');
+      expect(setTooltip).toHaveBeenCalledWith(buttons[0], 'Back to list (B)');
+      expect(setTooltip).toHaveBeenCalledWith(buttons[3], 'Trash article and advance (T)');
+      expect(setTooltip).toHaveBeenCalledWith(buttons[6], 'Related notes (R)');
       expect(setTooltip).toHaveBeenCalledWith(buttons[1], 'Save to Later and advance (L)');
       expect(setTooltip).toHaveBeenCalledWith(buttons[2], 'Archive and advance (A)');
       expect(buttons.every((button) => !button.hasAttribute('title'))).toBe(true);
       expect(setTooltip).toHaveBeenCalledWith(buttons[4], 'Highlight mode (H)');
-      expect(setTooltip).toHaveBeenCalledWith(buttons[5], 'Create node (C)');
+      expect(setTooltip).toHaveBeenCalledWith(buttons[5], 'Create node (N)');
       expect(setTooltip).toHaveBeenCalledWith(
         f.probe.surface.title,
-        'J/K: next/previous article · Space: page · D/U: half-page · gg/G: top/bottom · Q: list · ?: shortcuts',
+        'J/K: next/previous article · Space: page · D/U: half-page · gg/G: top/bottom · B/Q: list · ?: shortcuts',
       );
       for (const button of buttons) {
         const css = window.getComputedStyle(button);

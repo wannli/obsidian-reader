@@ -86,9 +86,9 @@ export class TapHighlighter {
     this.nodeTrigger = doc.createElement('button');
     this.nodeTrigger.type = 'button';
     this.nodeTrigger.className = 'reader-icon-button reader-tap-node-trigger';
-    setTooltip(this.nodeTrigger, 'Create node (C)');
+    setTooltip(this.nodeTrigger, 'Create node (N)');
     this.nodeTrigger.setAttribute('aria-label', 'Create node');
-    this.shortcut(this.nodeTrigger, 'c');
+    this.shortcut(this.nodeTrigger, 'n');
     setIcon(this.nodeTrigger, 'file-plus-2');
     this.nodeTrigger.querySelector('svg')?.setAttribute('aria-hidden', 'true');
     this.nodeTrigger.addEventListener('click', () => this.setActive(true, true, 'node'), events);
