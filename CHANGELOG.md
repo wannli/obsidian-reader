@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.26.0](https://github.com/wannli/obsidian-reader/compare/0.25.0...0.26.0) (2026-11-01)
+
+
+### Added
+
+* **reader:** align article shortcuts with toolbar actions ([5f331d2](https://github.com/wannli/obsidian-reader/commit/5f331d2522919af80ff7118ec254f52a4599f04d))
+* **reader:** extend article shortcuts to selected list rows ([f8f3bb3](https://github.com/wannli/obsidian-reader/commit/f8f3bb3955b5ba1c2828ac5da7c020b2618b0f6e))
+
 ## [0.25.0](https://github.com/wannli/obsidian-reader/compare/0.24.0...0.25.0) (2026-11-01)
 
 
