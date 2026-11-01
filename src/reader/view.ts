@@ -26,7 +26,6 @@ import { IndicatorReadSlots, RowIndicators } from './row-indicators';
 import { ListRows } from './list-rows';
 import { SelectionCoordinator } from './selection-coordinator';
 import { nativeLinkPath, openExistingNote } from '../host/note-links';
-export { nativeLinkPath, openExistingNote } from '../host/note-links';
 import { articleInfo, linkPath, queues, text, type Queue } from '../core/model';
 import {
   PartialCollectionError,
@@ -54,12 +53,6 @@ import { selectedPassage, selectionRange } from './render';
 import { TapHighlighter, type TapToolbarAction } from './tap-highlighter';
 
 export const READER_VIEW = 'obsidian-reader';
-export interface ReaderState {
-  file?: string;
-  queue?: Queue;
-  /** Incoming native block navigation only; intentionally omitted from getState(). */
-  subpath?: string;
-}
 type PendingSelection = {
   readonly selection: Readonly<
     Pick<NonNullable<ReturnType<ReadingSurface['selection']>>, 'quote' | 'before' | 'after'>
@@ -94,7 +87,6 @@ interface ReaderHost {
   signal: AbortSignal;
   paged: boolean;
   capture(): void;
-  feeds(): void;
   edit(view: ReaderView, file: TFile): Promise<void>;
   refreshPresentation?(view: ReaderView, valid: () => boolean): Promise<void>;
 }
