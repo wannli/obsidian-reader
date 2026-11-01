@@ -113,15 +113,9 @@ const create = (type: string) => {
   return found;
 };
 const searchInput = () => document.querySelector<HTMLInputElement>('input[type="search"]')!;
-const filterInput = () =>
-  document.querySelector<HTMLSelectElement>('.reader-highlight-picker-controls select')!;
 const search = (value: string) => {
   searchInput().value = value;
   searchInput().dispatchEvent(new Event('input'));
-};
-const filter = (value: string) => {
-  filterInput().value = value;
-  filterInput().dispatchEvent(new Event('change'));
 };
 const key = (element: HTMLElement, value: string, extra: KeyboardEventInit = {}) =>
   element.dispatchEvent(
@@ -147,7 +141,7 @@ describe('existing typed highlight notes', () => {
       expect(await choice).toBeNull();
     }
   });
-  it('omits articles and feeds from search, filters and creation without hiding other notes', async () => {
+  it('omits articles and feeds from search and creation without hiding other notes', async () => {
     const article = node('Article', ['article']);
     const feed = node('Feed', ['feed']);
     const mixed = node('Mixed', ['concept', 'article']);
@@ -159,11 +153,7 @@ describe('existing typed highlight notes', () => {
     ]);
     const { choice } = open({ multiple: true, minSelection: 0 });
     expect(rows().map((entry) => entry.dataset.path)).toEqual([exact.path, alias.path, fuzzy.path]);
-    expect([...filterInput().options].map((entry) => entry.textContent)).toEqual([
-      'All types',
-      'Concept',
-      'Topic',
-    ]);
+    expect(document.querySelector('.reader-highlight-picker-controls select')).toBeNull();
     search('New');
     expect(creates().map((entry) => entry.dataset.createType)).toEqual(['concept', 'topic']);
     search('Article');
@@ -175,7 +165,7 @@ describe('existing typed highlight notes', () => {
     button('Cancel').click();
     expect(await choice).toBeNull();
   });
-  it('shows exact and fuzzy existing candidates with classes/path, without silently choosing', async () => {
+  it('shows exact and fuzzy existing candidates with icons and accessible classes/path, without silently choosing', async () => {
     const { choice, settled } = open({ title: 'Choose highlight notes', query: 'Memory' });
     expect(document.querySelector('h2')?.textContent).toBe('Choose highlight notes');
     expect(rows().map((entry) => entry.getAttribute('aria-label'))).toEqual([
@@ -183,7 +173,8 @@ describe('existing typed highlight notes', () => {
       expect.stringContaining('Exact alias'),
       expect.stringContaining('Related match'),
     ]);
-    expect(row(fuzzy.path).textContent).toContain('Topic · Concept');
+    expect(row(fuzzy.path).textContent).not.toContain('Topic · Concept');
+    expect(row(fuzzy.path).getAttribute('aria-label')).toContain('Topic · Concept');
     expect(row(fuzzy.path).getAttribute('aria-label')).toContain(fuzzy.path);
     expect(row(fuzzy.path).textContent).not.toContain(fuzzy.path);
     expect(rows()).toHaveLength(3);
@@ -205,7 +196,7 @@ describe('existing typed highlight notes', () => {
     expect(searchInput().value.length).toBeLessThanOrEqual(80);
     expect(source.api.searchNodes).toHaveBeenLastCalledWith(searchInput().value);
     expect(searchInput().getAttribute('aria-label')).toBe('Search typed notes');
-    expect(filterInput().getAttribute('aria-label')).toBe('Fileclass filter');
+    expect(document.querySelector('select')).toBeNull();
     expect(searchInput()).toBe(document.activeElement);
     search('Independent query 🦉');
     expect(source.api.searchNodes).toHaveBeenLastCalledWith('Independent query 🦉');
@@ -213,21 +204,16 @@ describe('existing typed highlight notes', () => {
     expect(await choice).toBeNull();
   });
 
-  it('All types includes only registered Fileclasses and a filter accepts secondary classes', async () => {
+  it('searches all registered classes and retains selected notes across queries', async () => {
     const { choice } = open({ multiple: true });
-    expect(filterInput().selectedOptions[0].textContent).toBe('All types');
     expect(rows()).toHaveLength(3);
-    filter('topic');
-    expect(rows()).toHaveLength(2);
     expect(fuzzy.type).toBe('concept');
     row(fuzzy.path).click();
-    filter('concept');
+    search('Memory');
     expect(row(fuzzy.path).getAttribute('aria-checked')).toBe('true');
-    filter('topic');
     row(alias.path).click();
-    filter('concept');
+    search('unrelated');
     expect(row(alias.path).getAttribute('aria-checked')).toBe('true');
-    expect(row(exact.path).getAttribute('aria-checked')).toBe('false');
     button('Add highlight').click();
     expect(await choice).toEqual({ kind: 'existing-many', nodes: [fuzzy, alias] });
   });
@@ -273,7 +259,6 @@ describe('existing typed highlight notes', () => {
     'rejects a %s target at confirmation and leaves Cancel available',
     async (change) => {
       const { choice, settled } = open({ multiple: true });
-      filter('topic');
       row(fuzzy.path).click();
       if (change === 'deleted') source.index.delete(fuzzy.path);
       else
@@ -303,17 +288,12 @@ describe('existing typed highlight notes', () => {
     expect(await choice).toBeNull();
   });
 
-  it('does not silently broaden an unavailable class filter after discovery changes', async () => {
+  it('keeps a checked draft visible when its Fileclass becomes unavailable, then blocks Apply', async () => {
     const { choice } = open({ multiple: true });
-    filter('topic');
     row(alias.path).click();
     source.api.listTypes.mockReturnValue([{ type: 'concept', label: 'Concept' }]);
     search('different');
-    expect(filterInput().value).toBe('topic');
-    expect(button('Add highlight').disabled).toBe(true);
-    expect(error().textContent).toContain('Fileclass is unavailable');
     expect(row(alias.path).getAttribute('aria-checked')).toBe('true');
-    filter('');
     button('Add highlight').click();
     expect(error().textContent).toContain('no longer available');
     row(alias.path).click();
@@ -361,14 +341,13 @@ describe('explicit linked creation intents', () => {
     source.index.set(exact.path, fresh);
     search('  A different   title  ');
     expect(document.querySelectorAll('input')).toHaveLength(1);
-    expect(document.querySelectorAll('select')).toHaveLength(1);
+    expect(document.querySelectorAll('select')).toHaveLength(0);
     expect(document.querySelector('input[type="radio"]')).toBeNull();
     expect(document.querySelector('.reader-highlight-picker-create')).toBeNull();
     expect(creates()).toHaveLength(2);
     expect(create('topic').textContent).toContain('Create “A different title”');
-    expect(create('topic').querySelector('.reader-highlight-picker-result-meta')?.textContent).toBe(
-      'Topic',
-    );
+    expect(create('topic').textContent).not.toContain('Topic');
+    expect(create('topic').getAttribute('aria-label')).toContain('as Topic');
     expect(create('topic').getAttribute('aria-label')).toContain('and add highlight');
     expect(create('topic').getAttribute('aria-label')).toContain('2 notes');
     await Promise.resolve();
@@ -383,14 +362,13 @@ describe('explicit linked creation intents', () => {
     expect(source.api.searchNodes).toHaveBeenLastCalledWith('A different title');
   });
 
-  it('filters both existing candidates and available creation types with the same filter', async () => {
+  it('offers explicit creation in every registered class without a type switch', async () => {
     const { choice } = open({ query: 'New topic' });
-    filter('topic');
-    expect(creates().map((entry) => entry.dataset.createType)).toEqual(['topic']);
-    expect(rows()).toHaveLength(2);
-    filter('concept');
-    expect(creates().map((entry) => entry.dataset.createType)).toEqual(['concept']);
-    expect(rows()).toHaveLength(2);
+    expect(creates().map((entry) => entry.dataset.createType)).toEqual(['concept', 'topic']);
+    expect(rows()).toHaveLength(3);
+    expect(
+      create('concept').querySelector<HTMLElement>('.reader-highlight-picker-icon')?.dataset.icon,
+    ).toBe('brain');
     create('concept').click();
     expect(await choice).toEqual({ kind: 'create', title: 'New topic', type: 'concept' });
   });
@@ -652,7 +630,7 @@ describe('lean multi-selection and native list context', () => {
     expect(await choice).toEqual({ kind: 'existing-many', nodes: [fuzzy, exact] });
   });
 
-  it('preserves checked notes across independent searches and keeps only results scrollable', async () => {
+  it('keeps checked notes visible above results across independent searches', async () => {
     source.api.searchNodes.mockImplementation((term) => (term === 'Recall' ? [alias] : [exact]));
     const { choice } = open({ multiple: true, query: 'Memory' });
     row(exact.path).click();
@@ -661,7 +639,12 @@ describe('lean multi-selection and native list context', () => {
     row(alias.path).click();
     const results = document.querySelector('.reader-highlight-picker-results')!;
     expect(results.querySelector('input, select, .reader-highlight-picker-footer')).toBeNull();
-    expect(document.querySelector('.reader-highlight-picker-selected')).toBeNull();
+    expect(
+      document
+        .querySelector('.reader-highlight-picker-selected-results')
+        ?.querySelectorAll('button'),
+    ).toHaveLength(2);
+    expect(results.querySelector('[aria-checked="true"]')).toBeNull();
     button('Add highlight').click();
     expect(await choice).toEqual({ kind: 'existing-many', nodes: [exact, alias] });
   });
@@ -698,6 +681,9 @@ describe('lean multi-selection and native list context', () => {
     key(row(exact.path), 'Enter');
     expect(row(exact.path).getAttribute('aria-checked')).toBe('true');
     expect(document.activeElement).toBe(row(exact.path));
+    key(row(exact.path), 'ArrowDown');
+    expect(document.activeElement).toBe(row(alias.path));
+    row(exact.path).focus();
     key(row(exact.path), 'Enter', { repeat: true });
     expect(row(exact.path).getAttribute('aria-checked')).toBe('true');
     key(row(exact.path), ' ');
@@ -835,10 +821,12 @@ describe('lean multi-selection and native list context', () => {
     expect(
       rows().some((entry) => [rawYamlOnly.path, unknownClass.path].includes(entry.dataset.path!)),
     ).toBe(false);
-    filter('concept'); // The hidden Topic duplicate is no longer an eligible matching candidate.
-    expect(row(selected.path).querySelector('.reader-highlight-picker-result-path')).toBeNull();
+    search('unrelated');
     expect(row(selected.path).getAttribute('aria-checked')).toBe('true');
-    filter('');
+    expect(document.querySelector('.reader-highlight-picker-selected-heading')?.textContent).toBe(
+      'Already linked',
+    );
+    search('');
     expect(
       row(selected.path).querySelector('.reader-highlight-picker-result-path')?.textContent,
     ).toBe(selected.path);
@@ -979,18 +967,6 @@ describe('lean multi-selection and native list context', () => {
     expect(await choice).toBeNull();
   });
 
-  it('does not apply a stale creation row after the user narrows its class filter', async () => {
-    const { choice, settled } = open({ query: 'New title' });
-    const staleCreate = create('concept');
-    filter('topic');
-    staleCreate.click();
-    expect(error().textContent).toContain('Choose an available Fileclass');
-    await Promise.resolve();
-    expect(settled).not.toHaveBeenCalled();
-    button('Cancel').click();
-    expect(await choice).toBeNull();
-  });
-
   it('does not apply a stale creation row to a subsequently edited query', async () => {
     const { choice, settled } = open({ query: 'Old title' });
     const staleCreate = create('concept');
@@ -1005,7 +981,42 @@ describe('lean multi-selection and native list context', () => {
 });
 
 describe('native suggestion presentation', () => {
-  it('exposes a full-width search wrapper, compact class filter, and native action footer hooks', async () => {
+  it('shows the full passage safely above search while keeping many linked notes separate from results', async () => {
+    const excerpt = '<img src=x onerror=alert(1)> words '.repeat(20);
+    const linked = Array.from({ length: 60 }, (_, i) => node(`Linked ${i}`));
+    for (const entry of linked) source.index.set(entry.path, entry);
+    const { choice } = open({
+      multiple: true,
+      selectedPaths: linked.map((entry) => entry.path),
+      excerpt,
+      minSelection: 0,
+    });
+    const passage = document.querySelector<HTMLElement>('.reader-highlight-picker-excerpt')!;
+    expect(Array.from(passage.textContent ?? '').length).toBe(221);
+    expect(passage.textContent).toContain('<img src=x onerror=alert(1)>');
+    expect(passage.getAttribute('aria-label')).toBe(`Selected passage: ${passage.textContent}`);
+    expect(document.querySelector('img')).toBeNull();
+    expect(document.querySelector('.reader-highlight-picker-selected-heading')?.textContent).toBe(
+      'Already linked',
+    );
+    expect(
+      document.querySelectorAll('.reader-highlight-picker-selected-results button'),
+    ).toHaveLength(60);
+    expect(
+      document.querySelector('.reader-highlight-picker-results [data-path="Notes/Memory.md"]'),
+    ).not.toBeNull();
+    search('unmatched');
+    expect(
+      document.querySelectorAll('.reader-highlight-picker-selected-results button'),
+    ).toHaveLength(60);
+    expect(
+      document.querySelector('.reader-highlight-picker-results [data-path="Notes/Linked 0.md"]'),
+    ).toBeNull();
+    button('Cancel').click();
+    expect(await choice).toBeNull();
+  });
+
+  it('exposes full-width search and native action footer hooks without a type switch', async () => {
     const { choice } = open({ multiple: true });
     const modal = document.querySelector('.reader-highlight-picker-modal')!;
     const controls = modal.querySelector('.reader-highlight-picker-controls')!;
@@ -1015,9 +1026,7 @@ describe('native suggestion presentation', () => {
     expect(searchWrap.children).toHaveLength(1);
     expect(searchInput().parentElement).toBe(searchWrap);
     expect(searchInput().classList.contains('prompt-input')).toBe(true);
-    expect(filterInput().parentElement).toBe(controls);
-    expect(filterInput().classList.contains('reader-highlight-picker-type-filter')).toBe(true);
-    expect(filterInput().classList.contains('dropdown')).toBe(true);
+    expect(controls.querySelector('select')).toBeNull();
     expect(
       modal.querySelector('.reader-highlight-picker-results')!.classList.contains('prompt-results'),
     ).toBe(true);
@@ -1031,7 +1040,7 @@ describe('native suggestion presentation', () => {
     expect(await choice).toBeNull();
   });
 
-  it('separates the primary name, muted type badge and ambiguous path without concatenating them', async () => {
+  it('shows name and ambiguous path, leaving type in the icon and accessible label', async () => {
     const duplicate = { ...node('memory', ['topic']), path: 'Elsewhere/memory.md' };
     source.index.set(duplicate.path, duplicate);
     const { choice } = open();
@@ -1040,17 +1049,16 @@ describe('native suggestion presentation', () => {
     expect(candidate.classList.contains('mod-complex')).toBe(true);
     const content = candidate.querySelector('.reader-highlight-picker-result-content')!;
     const title = content.querySelector('.reader-highlight-picker-result-title')!;
-    const metadata = content.querySelector('.reader-highlight-picker-result-meta')!;
-    const badge = metadata.querySelector<HTMLElement>('.reader-highlight-picker-type-badge')!;
-    const path = metadata.querySelector('.reader-highlight-picker-result-path')!;
+    const path = content.querySelector('.reader-highlight-picker-result-path')!;
     expect(title.parentElement).toBe(content);
-    expect(title.nextElementSibling).toBe(metadata);
+    expect(title.nextElementSibling).toBe(path);
     expect(title.textContent).toBe('Memory');
-    expect(badge.textContent).toBe('Concept');
-    expect(badge.title).toBe('Concept');
-    expect(path.parentElement).toBe(metadata);
+    expect(
+      candidate.querySelector<HTMLElement>('.reader-highlight-picker-icon')?.dataset.icon,
+    ).toBe('brain');
+    expect(path.parentElement).toBe(content);
     expect(path.textContent).toBe(exact.path);
-    expect(content.textContent).toBe(`Memory Concept ${exact.path}`);
+    expect(content.textContent).toBe(`Memory ${exact.path}`);
     expect(candidate.getAttribute('aria-label')).toContain(`Memory — Concept — ${exact.path}`);
     button('Cancel').click();
     expect(await choice).toBeNull();
@@ -1090,9 +1098,8 @@ describe('native suggestion presentation', () => {
     expect(searchInput().value).toBe(raw);
     expect(candidate.getAttribute('aria-label')).toContain(full);
     expect(candidate.title).toBe(candidate.getAttribute('aria-label'));
-    expect(candidate.querySelector('.reader-highlight-picker-type-badge')!.textContent).toBe(
-      'Topic',
-    );
+    expect(candidate.querySelector('.reader-highlight-picker-type-badge')).toBeNull();
+    expect(candidate.getAttribute('aria-label')).toContain('as Topic');
     expect(candidate.querySelector('.reader-highlight-picker-result-title')!.textContent).toBe(
       `Create “${visible}”`,
     );
@@ -1130,7 +1137,7 @@ describe('native suggestion presentation', () => {
     });
   });
 
-  it('renders note names, type badges and query previews as literal text rather than markup', async () => {
+  it('renders note names and query previews as literal text, with class labels only in accessibility text', async () => {
     const title = '<img src=x onerror=alert(1)>';
     const label = '<b>Concept</b>';
     source.index.set(exact.path, { ...exact, title });
@@ -1139,9 +1146,8 @@ describe('native suggestion presentation', () => {
     expect(
       row(exact.path).querySelector('.reader-highlight-picker-result-title')!.textContent,
     ).toBe(title);
-    expect(row(exact.path).querySelector('.reader-highlight-picker-type-badge')!.textContent).toBe(
-      label,
-    );
+    expect(row(exact.path).textContent).not.toContain(label);
+    expect(row(exact.path).getAttribute('aria-label')).toContain(label);
     search('Create <script>literal text</script>');
     expect(
       create('concept').querySelector('.reader-highlight-picker-create-query')!.textContent,

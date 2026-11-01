@@ -291,15 +291,16 @@ describe('native-sized Fileclass reference tags', () => {
     const search = /\.reader-highlight-picker-search-wrap \{([^}]+)\}/.exec(css)![1];
     expect(search).toContain('width: 100%');
     expect(search).toContain('min-width: 0');
-    const filter =
-      /\.reader-highlight-picker \.reader-highlight-picker-type-filter \{([^}]+)\}/.exec(css)![1];
-    expect(filter).toContain('width: auto');
-    expect(filter).toContain('max-width: 100%');
-    const metadata =
-      /\.reader-highlight-picker \.reader-highlight-picker-result-meta \{([^}]+)\}/.exec(css)![1];
-    expect(metadata).toContain('display: flex');
-    expect(metadata).toContain('gap: var(--size-2-1) var(--size-4-2)');
-    expect(metadata).toContain('color: var(--text-muted)');
+    const excerpt = /\.reader-highlight-picker-excerpt \{([^}]+)\}/.exec(css)![1];
+    expect(excerpt).toContain('width: 100%');
+    expect(excerpt).toContain('-webkit-line-clamp: 3');
+    const selected = /\.reader-highlight-picker-selected-results \{([^}]+)\}/.exec(css)![1];
+    expect(selected).toContain('max-height: min(30dvh, 240px)');
+    expect(selected).toContain('overflow-y: auto');
+    const results = /\.reader-highlight-picker-results \{([^}]+)\}/.exec(css)![1];
+    expect(results).toContain('overflow-y: auto');
+    expect(css).not.toContain('.reader-highlight-picker-type-filter');
+    expect(css).not.toContain('.reader-highlight-picker-type-badge');
     const create =
       /button\.reader-highlight-picker-create-row\s+\.reader-highlight-picker-result-content\s*\{([^}]+)\}/.exec(
         css,
@@ -314,20 +315,6 @@ describe('native-sized Fileclass reference tags', () => {
     const title =
       /\.reader-highlight-picker \.reader-highlight-picker-result-title \{([^}]+)\}/.exec(css)![1];
     expect(title).toContain('min-width: 0');
-    const createMetadata =
-      /button\.reader-highlight-picker-create-row\s+\.reader-highlight-picker-result-meta\s*\{([^}]+)\}/.exec(
-        css,
-      )![1];
-    expect(createMetadata).toContain('flex: 0 0 auto');
-    expect(createMetadata).toContain('max-width: none');
-    const createType =
-      /button\.reader-highlight-picker-create-row\s+\.reader-highlight-picker-type-badge\s*\{([^}]+)\}/.exec(
-        css,
-      )![1];
-    expect(createType).toMatch(/flex:\s*(?:none|0 0 auto)\s*;/);
-    expect(createType).toContain('max-width: none');
-    expect(createType).toContain('overflow: visible');
-    expect(createType).toContain('text-overflow: clip');
     expect(css).toContain("button.reader-highlight-picker-result[aria-checked='true']");
     expect(css).toContain('button.reader-highlight-picker-result:focus-visible');
     const actions = /\.reader-highlight-picker-footer button \{([^}]+)\}/.exec(css)![1];

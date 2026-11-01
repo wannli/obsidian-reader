@@ -457,7 +457,7 @@ describe('related-note creation and staged draft', () => {
     await pending;
   });
 
-  it('keeps checked rows visible outside zero-result searches without a permanent selected panel', async () => {
+  it('keeps checked rows visible in a selected section outside zero-result searches', async () => {
     const f = await fixture();
     delete f.api.createNodeForLink;
     const before = await f.vault.read(f.article);
@@ -474,7 +474,9 @@ describe('related-note creation and staged draft', () => {
     search('Unmatched');
     expect(rows()).toHaveLength(1);
     expect(checked('Other')).toBe(true);
-    expect(document.querySelector('.reader-highlight-picker-selected')).toBeNull();
+    expect(document.querySelector('.reader-highlight-picker-selected-heading')?.textContent).toBe(
+      'Selected notes',
+    );
     expect((await f.saved()).properties.topics).toEqual(['[[Topics/Old.md]]']);
     button('Cancel').click();
     await pending;

@@ -2053,6 +2053,7 @@ export class ReaderView extends ItemView {
       title?: string;
       multiple?: boolean;
       selectedPaths?: string[];
+      excerpt?: string;
       minSelection?: number;
       actionLabel?: string;
       tone?: 'highlight' | 'node' | 'neutral';
@@ -2245,6 +2246,7 @@ export class ReaderView extends ItemView {
               chooseHighlightHost(this.app, api, {
                 title: options.title ?? 'Add highlight to notes',
                 query: title,
+                excerpt: options.excerpt,
                 preferredPaths: preferred.map((node) => node.path),
                 multiple: options.multiple !== false,
                 selectedPaths: [...(options.selectedPaths ?? [])],
@@ -2728,6 +2730,7 @@ export class ReaderView extends ItemView {
         multiple: mode !== 'mention',
         minSelection: mode === 'mention' ? 1 : 0,
         selectedPaths: previousPaths,
+        excerpt: mode === 'highlight' ? passage.text : undefined,
         actionLabel: mode === 'mention' ? 'Convert to note link' : 'Apply',
         tone: mode === 'mention' ? 'node' : 'highlight',
         epoch,
