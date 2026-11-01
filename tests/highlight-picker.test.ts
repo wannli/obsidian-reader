@@ -136,6 +136,60 @@ function open(options: HighlightHostPickerOptions = {}) {
 }
 
 // Every case also asserts no standalone creation, linked creation, shared picker, or writes.
+describe('one-tap passage note creation', () => {
+  const passage = (query = 'Clear rules build trust') =>
+    open({ tone: 'node', multiple: false, query });
+  const title = () => document.querySelector<HTMLInputElement>('.reader-passage-node-title')!;
+  const type = (label: string) => button(label);
+
+  it('shows only a suggested editable title and type actions, without search or confirmation', async () => {
+    const { choice } = passage(
+      'A long selected passage with more than forty eight characters in the title',
+    );
+    expect(document.querySelector('h2')?.textContent).toBe('New note');
+    expect(title().value.length).toBeLessThanOrEqual(48);
+    expect(document.querySelector('input[type="search"]')).toBeNull();
+    expect(document.querySelector('select')).toBeNull();
+    expect(rows()).toHaveLength(0);
+    expect(document.querySelector('button.mod-cta')).toBeNull();
+    expect(document.activeElement).not.toBe(title());
+    expect(type('Concept').getAttribute('aria-label')).toBe('Create Concept note');
+    const suggested = title().value;
+    type('Concept').click();
+    expect(await choice).toEqual({ kind: 'create', title: suggested, type: 'concept' });
+  });
+
+  it('creates in one type tap with an edited title and never writes from the picker', async () => {
+    const { choice } = passage();
+    title().value = 'New idea';
+    type('Topic').click();
+    expect(await choice).toEqual({ kind: 'create', title: 'New idea', type: 'topic' });
+  });
+
+  it('rejects empty and duplicate titles in place without silently linking an existing note', async () => {
+    const { choice, settled } = passage('Memory');
+    type('Concept').click();
+    expect(error().textContent).toContain('already exists');
+    expect(settled).not.toHaveBeenCalled();
+    title().value = '  ';
+    type('Topic').click();
+    expect(error().textContent).toContain('Enter a note title');
+    title().value = 'Fresh';
+    type('Topic').click();
+    expect(await choice).toEqual({ kind: 'create', title: 'Fresh', type: 'topic' });
+  });
+
+  it('does not emit creation after provider loss or cancellation', async () => {
+    const abort = new AbortController();
+    const { choice } = open({ tone: 'node', multiple: false, query: 'New', signal: abort.signal });
+    source.api.createNodeForLink = undefined as any;
+    type('Topic').click();
+    expect(error().textContent).toContain('no longer available');
+    abort.abort();
+    expect(await choice).toBeNull();
+  });
+});
+
 describe('existing typed highlight notes', () => {
   it('scopes faint picker accents to highlight or node intent, leaving related notes neutral', async () => {
     for (const tone of ['highlight', 'node', 'neutral'] as const) {

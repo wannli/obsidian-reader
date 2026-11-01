@@ -8,6 +8,7 @@ import {
 } from '../core/node-choices';
 import type { NodeResult, NodesApi } from './nodes';
 import { bindModalSubmit } from './modal-submit';
+import { choosePassageNode } from './passage-node-picker';
 
 export type HighlightHostChoice =
   | { kind: 'existing'; node: NodeResult }
@@ -58,6 +59,8 @@ export function chooseHighlightHost(
   options: HighlightHostPickerOptions = {},
 ): Promise<HighlightHostChoice | null> {
   if (options.signal?.aborted) return Promise.resolve(null);
+  if (options.tone === 'node' && options.multiple === false)
+    return choosePassageNode(app, api, options.query ?? '', options.signal);
   const multiple = options.multiple === true;
   const minimum = Number.isFinite(options.minSelection)
     ? Math.max(0, Math.ceil(options.minSelection!))

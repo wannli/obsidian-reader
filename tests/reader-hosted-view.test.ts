@@ -1290,7 +1290,7 @@ describe('hosted highlight UI integration', () => {
     expect(await f.vault.read(f.targets[1])).toContain('> first words');
     expect(source.properties.topics).toEqual(['[[Nodes/Concept]]', '[[Nodes/Project]]']);
   });
-  it('links a fresh tap range to an explicitly chosen typed note without saving a highlight or quotation', async () => {
+  it('refuses to reuse an existing typed note from Create node', async () => {
     const f = await fixture({ defaults: [0] });
     f.paint();
     const range = document.createRange(),
@@ -1299,15 +1299,15 @@ describe('hosted highlight UI integration', () => {
     range.setEnd(node, 18);
     const originalTarget = await f.vault.read(f.targets[1]);
     mocks.highlightPicker.mockResolvedValue({ kind: 'existing', node: f.nodes[1] });
-    await f.probe.saveTapNode(f.probe.surface.body, range);
+    await expect(f.probe.saveTapNode(f.probe.surface.body, range)).rejects.toThrow(
+      'Create node requires a new typed note',
+    );
     expect(mocks.highlightPicker).toHaveBeenCalledWith(
       f.app,
       f.api,
-      expect.objectContaining({ query: 'first words', multiple: false }),
+      expect.objectContaining({ query: 'first words', multiple: false, tone: 'node' }),
     );
-    const saved = await f.store.read(f.article.path);
-    expect(saved.body).toMatch(/Before \[\[Nodes\/Project\|first words\]\] after\. \^reader-/);
-    expect(saved.body).not.toContain('==');
+    expect((await f.store.read(f.article.path)).body).toBe('Before first words after.');
     expect(await f.vault.read(f.targets[1])).toBe(originalTarget);
     expect(f.api.createNodeForLink).not.toHaveBeenCalled();
   });
@@ -1317,7 +1317,15 @@ describe('hosted highlight UI integration', () => {
     const range = document.createRange(),
       node = f.probe.surface.body.querySelector('p')!.firstChild!;
     range.selectNodeContents(node);
-    mocks.highlightPicker.mockResolvedValue({ kind: 'existing', node: f.nodes[1] });
+    mocks.highlightPicker.mockResolvedValue({
+      kind: 'create',
+      title: 'Hello, world',
+      type: 'Project',
+    });
+    f.api.createNodeForLink.mockImplementation(async (_options, link) => {
+      await link(f.nodes[1]);
+      return f.nodes[1];
+    });
     await f.probe.saveTapNode(f.probe.surface.body, range);
     expect(mocks.highlightPicker).toHaveBeenCalledWith(
       f.app,

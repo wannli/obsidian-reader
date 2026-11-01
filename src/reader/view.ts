@@ -2259,6 +2259,8 @@ export class ReaderView extends ItemView {
           ]);
       if (!choice || request.controller.signal.aborted) return;
       check();
+      if (options.tone === 'node' && choice.kind !== 'create')
+        throw new Error('Create node requires a new typed note. Select a type to create it.');
       if (choice.kind === 'existing') await link([choice.node]);
       else if (choice.kind === 'existing-many') await link(choice.nodes);
       else if (choice.kind === 'pick-in-article') {
