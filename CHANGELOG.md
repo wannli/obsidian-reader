@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.26.2](https://github.com/wannli/obsidian-reader/compare/0.26.1...0.26.2) (2026-11-02)
+
+
+### Fixed
+
+* **reader:** keep typed-note search results visible in auto-height dialogs ([c8a1777](https://github.com/wannli/obsidian-reader/commit/c8a17770c1d12457d0cf58e993f0855e405757ff))
+* **reader:** revalidate URL matches before article creation ([953d0cb](https://github.com/wannli/obsidian-reader/commit/953d0cb84a80c026cd857ef583d6240615576a82))
+
 ## [0.26.1](https://github.com/wannli/obsidian-reader/compare/0.26.0...0.26.1) (2026-11-01)
 
 
