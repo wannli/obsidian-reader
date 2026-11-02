@@ -842,8 +842,11 @@ dialog.reader-image-viewer,
   flex-shrink: 0;
 }
 .reader-highlight-picker-results {
-  flex: 1 1 0;
-  min-height: 0;
+  /* An auto-height modal has no free space to allocate to a zero flex basis.
+     Start at the results' natural height, then shrink only this list if needed. */
+  flex: 0 1 auto;
+  min-height: 44px;
+  max-height: 50dvh;
   min-width: 0;
   margin: 0;
   padding: var(--size-4-3);
