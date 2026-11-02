@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.26.3](https://github.com/wannli/obsidian-reader/compare/0.26.2...0.26.3) (2026-11-02)
+
+
+### Fixed
+
+* **reader:** keep typed-note searches visible in all picker layouts ([5e83964](https://github.com/wannli/obsidian-reader/commit/5e83964afcf9fdbeece616a914927aa116543ef3))
+
 ## [0.26.2](https://github.com/wannli/obsidian-reader/compare/0.26.1...0.26.2) (2026-11-02)
 
 
