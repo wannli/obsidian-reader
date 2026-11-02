@@ -300,11 +300,14 @@ describe('native-sized Fileclass reference tags', () => {
     const selected = /\.reader-highlight-picker-selected-results \{([^}]+)\}/.exec(css)![1];
     expect(selected).toContain('max-height: min(30dvh, 240px)');
     expect(selected).toContain('overflow-y: auto');
+    const picker = /\.reader-highlight-picker \{([^}]+)\}/.exec(css)![1];
+    expect(picker).toContain('display: block');
+    expect(picker).toContain('overflow-y: auto');
+    expect(picker).not.toContain('overflow: hidden');
     const results = /\.reader-highlight-picker-results \{([^}]+)\}/.exec(css)![1];
     expect(results).toContain('overflow-y: auto');
-    expect(results).toContain('flex: 0 1 auto');
-    expect(results).toContain('min-height: 44px');
-    expect(results).toContain('max-height: 50dvh');
+    expect(results).toContain('max-height: min(50dvh, 400px)');
+    expect(results).not.toMatch(/flex:|min-height:/);
     expect(css).not.toContain('.reader-highlight-picker-type-filter');
     expect(css).not.toContain('.reader-highlight-picker-type-badge');
     const create =

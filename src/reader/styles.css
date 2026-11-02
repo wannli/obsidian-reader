@@ -772,12 +772,15 @@ dialog.reader-image-viewer,
   color: var(--text-normal);
 }
 .reader-highlight-picker {
-  display: flex;
-  flex-direction: column;
-  gap: var(--size-4-2);
-  min-height: 0;
-  max-height: calc(100dvh - 160px);
-  overflow: hidden;
+  /* The host modal can size its content automatically. Do not shrink a nested flex list
+     into an overflow-hidden parent: that can hide every search hit behind the footer. */
+  display: block;
+  max-height: calc(100dvh - 120px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.reader-highlight-picker > * + * {
+  margin-block-start: var(--size-4-2);
 }
 .reader-highlight-picker-excerpt {
   display: -webkit-box;
@@ -842,13 +845,9 @@ dialog.reader-image-viewer,
   flex-shrink: 0;
 }
 .reader-highlight-picker-results {
-  /* An auto-height modal has no free space to allocate to a zero flex basis.
-     Start at the results' natural height, then shrink only this list if needed. */
-  flex: 0 1 auto;
-  min-height: 44px;
-  max-height: 50dvh;
+  /* Natural height for short searches; long lists scroll independently of the modal. */
+  max-height: min(50dvh, 400px);
   min-width: 0;
-  margin: 0;
   padding: var(--size-4-3);
   overflow-y: auto;
   overscroll-behavior: contain;

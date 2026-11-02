@@ -1120,6 +1120,30 @@ describe('native suggestion presentation', () => {
     expect(await choice).toBeNull();
   });
 
+  it('keeps matching typed notes in the results panel across searches', async () => {
+    const person = node('Example Person', ['person']);
+    source.index.set(person.path, person);
+    source.api.listTypes.mockReturnValue([
+      ...availableTypes,
+      { type: 'person', label: 'Person', icon: 'user' },
+    ]);
+    const { choice } = open({ multiple: true, tone: 'highlight' });
+    for (const [query, match] of [
+      ['example', person],
+      ['memory', exact],
+      ['person', person],
+    ] as const) {
+      search(query);
+      expect(source.api.searchNodes).toHaveBeenLastCalledWith(query);
+      expect(row(match.path).closest('.reader-highlight-picker-results')).not.toBeNull();
+      expect(
+        row(match.path).querySelector('.reader-highlight-picker-result-title')?.textContent,
+      ).toBe(match.title);
+    }
+    button('Cancel').click();
+    expect(await choice).toBeNull();
+  });
+
   it('isolates modal search and results from command-prompt layout while retaining action buttons', async () => {
     const { choice } = open({ multiple: true });
     const modal = document.querySelector('.reader-highlight-picker-modal')!;
