@@ -77,8 +77,8 @@ export class Catalog {
   feed(path: string): Subscription | undefined {
     return this.subscriptions.get(path);
   }
-  findUrl(url: string): ArticleInfo | undefined {
-    const path = this.urls.get(url)?.values().next().value;
+  findUrl(url: string, exclude: ReadonlySet<string> = new Set()): ArticleInfo | undefined {
+    const path = [...(this.urls.get(url) ?? [])].find((path) => !exclude.has(path));
     return path ? this.articles.get(path) : undefined;
   }
   feeds(): readonly Subscription[] {

@@ -106,6 +106,37 @@ describe('guarded article operations', () => {
     expect(vault.files.size).toBe(1);
     expect((await store.read(files[0].path)).body).toBe('');
   });
+  it('skips stale indexed hits and reuses a second article with the same URL', async () => {
+    const { vault, store, file } = await setup('Inbox');
+    const second = await vault.create(
+      'Reading/Later/other.md',
+      '---\ntype: article\nurl: https://example.com/one\n---\n\nAuthored text.\n',
+    );
+    store.catalog.update(second.path, readDocument(await vault.read(second)).properties);
+    vault.bytes.set(
+      file,
+      (await vault.read(file)).replace('example.com/one', 'example.com/changed'),
+    );
+    expect(await store.capture({ url: 'https://example.com/one' })).toBe(second);
+    expect(vault.files.size).toBe(2);
+    expect(store.catalog.article(file.path)?.url).toBe('https://example.com/changed');
+  });
+  it('refuses to create when an article appears during the native create guard', async () => {
+    const vault = new MemoryVault(),
+      store = new ArticleStore(vault),
+      create = vault.create.bind(vault);
+    const existing = await create(
+      'Reading/Archive/existing.md',
+      '---\ntype: article\nurl: https://example.com/race\n---\n',
+    );
+    vault.create = async (path, content, guard?: () => void | Promise<void>) => {
+      store.catalog.update(existing.path, readDocument(await vault.read(existing)).properties);
+      await guard?.();
+      return create(path, content);
+    };
+    expect(await store.capture({ url: 'https://example.com/race' })).toBe(existing);
+    expect(vault.files.size).toBe(1);
+  });
   it('deduplicates after queue moves and permits reimport after deletion', async () => {
     const { store, file, snapshot } = await setup();
     const moved = await store.move(snapshot, 'Archive');

@@ -238,6 +238,26 @@ export class ArticleStore<File extends NoteFile> {
     }
     throw new Error('Too many articles share this filename.');
   }
+  /** Verify the indexed URL against current bytes; a stale first hit must not hide another match. */
+  private async existingArticle(url: string): Promise<File | undefined> {
+    const checked = new Set<string>();
+    while (true) {
+      const indexed = this.catalog.findUrl(url, checked);
+      if (!indexed) return;
+      checked.add(indexed.path);
+      const file = this.vault.file(indexed.path);
+      if (!file) {
+        this.catalog.remove(indexed.path);
+        continue;
+      }
+      const raw = await this.vault.read(file);
+      if (this.vault.file(indexed.path) !== file || file.path !== indexed.path)
+        throw new ChangedNote('An article moved during capture. Retry after the vault settles.');
+      const properties = readDocument(raw).properties;
+      this.catalog.update(indexed.path, properties);
+      if (this.catalog.article(indexed.path)?.url === url) return file;
+    }
+  }
   capture(
     input: {
       url: string;
@@ -255,14 +275,10 @@ export class ArticleStore<File extends NoteFile> {
     now = new Date(now.getTime()); // Freeze caller-owned capture time before queued work.
     return this.creates.run('articles', async () => {
       if (!this.active) throw new Error('Reader has stopped.');
-      const existing = this.catalog.findUrl(url);
+      const existing = await this.existingArticle(url);
       if (existing) {
-        const file = this.vault.file(existing.path);
-        if (file) {
-          this.captures.delete(file);
-          return file;
-        }
-        this.catalog.remove(existing.path);
+        this.captures.delete(existing);
+        return existing;
       }
       const publishedAt = timestamp(input.published);
       const published = formatPublished(input.published) ?? formatPublished(now.toISOString());
@@ -290,9 +306,24 @@ export class ArticleStore<File extends NoteFile> {
       const raw = createDocument(properties, input.body?.trim() ? `\n${input.body.trim()}\n` : '');
       // Subscription validity may change while this capture waits behind another
       // create. Revalidate at the write boundary, never persist the guard.
-      await guard();
-      if (!this.active) throw new Error('Reader has stopped.');
-      const file = await this.vault.create(path, raw, guard);
+      // Host folder creation can await other vault events. Recheck at each native
+      // create boundary, not just when this serialized request entered its lane.
+      let duplicate: File | undefined;
+      const createGuard = async () => {
+        await guard();
+        if (!this.active) throw new Error('Reader has stopped.');
+        duplicate = await this.existingArticle(url);
+        if (duplicate) throw new ChangedNote('Article already exists.');
+      };
+      let file: File;
+      try {
+        await createGuard();
+        file = await this.vault.create(path, raw, createGuard);
+      } catch (error) {
+        if (!duplicate) throw error;
+        this.captures.delete(duplicate);
+        return duplicate;
+      }
       if (
         this.active &&
         !input.title?.trim() &&
