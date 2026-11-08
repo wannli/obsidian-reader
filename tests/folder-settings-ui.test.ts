@@ -116,6 +116,8 @@ vi.mock('obsidian', () => {
 import { ReaderSettings } from '../src/host/settings';
 
 beforeEach(() => {
+  vi.restoreAllMocks();
+  vi.spyOn(console, 'error').mockImplementation(() => {});
   ui.settings = [];
   ui.notices = [];
   ui.picker = undefined;
@@ -183,7 +185,11 @@ it('rejects an unsafe path before persistence and does not update committed sett
   row('Feed subscriptions').input.change('../Unsafe');
   await row('Apply folder locations').buttons[0].click();
   expect(save).not.toHaveBeenCalled();
-  expect(ui.notices.at(-1)).toMatch(/vault-relative/);
+  expect(ui.notices).toEqual([]);
+  expect(console.error).toHaveBeenCalledWith(
+    '[Reader]',
+    expect.objectContaining({ message: expect.stringMatching(/vault-relative/) }),
+  );
   settings.display();
   expect(row('Feed subscriptions').input.value).toBe(defaultFolders.feeds);
 });
@@ -212,7 +218,11 @@ it('retains prior settings on persistence failure and disables duplicate apply w
   reject(new Error('Disk full'));
   await pending;
   expect(button.disabled).toBe(false);
-  expect(ui.notices.at(-1)).toBe('Disk full');
+  expect(ui.notices).toEqual([]);
+  expect(console.error).toHaveBeenCalledWith(
+    '[Reader]',
+    expect.objectContaining({ message: 'Disk full' }),
+  );
   settings.display();
   expect(row('Feed subscriptions').input.value).toBe(defaultFolders.feeds);
 });
@@ -285,5 +295,9 @@ it.each([
   row('later folder').input.change(path);
   await row('Apply status folders').buttons[0].click();
   expect(save).not.toHaveBeenCalled();
-  expect(ui.notices.at(-1)).toMatch(error);
+  expect(ui.notices).toEqual([]);
+  expect(console.error).toHaveBeenCalledWith(
+    '[Reader]',
+    expect.objectContaining({ message: expect.stringMatching(error) }),
+  );
 });

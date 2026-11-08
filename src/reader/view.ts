@@ -44,6 +44,7 @@ import {
   type HostedHighlight,
 } from '../core/hosted-highlights';
 import { choose, confirmWebLink } from '../host/dialogs';
+import { logReaderError } from '../host/diagnostics';
 import { connectNodes, type RelationField } from '../host/node-relations';
 import type { Ingestion } from '../host/ingestion';
 import { nodesApi, type NodesApi, type NodeResult } from '../host/nodes';
@@ -383,8 +384,7 @@ export class ReaderView extends ItemView {
     }
   }
   private error(error: unknown): void {
-    if (!this.host.signal.aborted)
-      new Notice(error instanceof Error ? error.message : String(error));
+    if (!this.host.signal.aborted) logReaderError(error);
   }
   private button(
     parent: HTMLElement,
@@ -1273,7 +1273,7 @@ export class ReaderView extends ItemView {
       signal,
     );
     if (outcome.kind === 'unavailable')
-      new Notice(`No Fileclass link field on ${destination.title} accepts ${source.title}.`);
+      logReaderError(`No Fileclass link field on ${destination.title} accepts ${source.title}.`);
     else if (outcome.kind === 'already-linked')
       new Notice(`${destination.title} · ${outcome.field.label} already links to ${source.title}.`);
     else if (outcome.kind === 'saved')

@@ -1,6 +1,7 @@
 import { Modal, Notice, PluginSettingTab, Setting, type App, type Plugin } from 'obsidian';
 import { folderKeys, folderLabels, validateFolders, type ReaderFolders } from '../core/folders';
 import { FolderPicker } from './folder-picker';
+import { logReaderError } from './diagnostics';
 import { readTriageFlags, saveTriageFlag, triageFlags } from '../reader/feed-triage';
 import type { Ingestion } from './ingestion';
 import type { ArticleStore } from '../core/store';
@@ -34,7 +35,7 @@ export function showFeeds(
           await action();
           this.render();
         } catch (error) {
-          if (!this.closed) new Notice(error instanceof Error ? error.message : String(error));
+          if (!this.closed) logReaderError(error);
         }
       };
       for (const feed of store.catalog.feeds())
@@ -147,7 +148,7 @@ export class ReaderSettings extends PluginSettingTab {
                 'Reader folders applied; Reader returned to the reading list. Existing files were not moved.',
               );
             } catch (error) {
-              new Notice(error instanceof Error ? error.message : String(error));
+              logReaderError(error);
             } finally {
               button.setDisabled(false);
             }
@@ -185,7 +186,7 @@ export class ReaderSettings extends PluginSettingTab {
           this.statusFolders = next;
           new Notice('Status folders applied. Existing files were not moved.');
         } catch (error) {
-          new Notice(error instanceof Error ? error.message : String(error));
+          logReaderError(error);
         } finally {
           button.setDisabled(false);
         }
@@ -220,7 +221,7 @@ export class ReaderSettings extends PluginSettingTab {
             this.typedNotes = { ...draft };
             new Notice('Typed-note settings applied. Existing notes were not changed.');
           } catch (error) {
-            new Notice(error instanceof Error ? error.message : String(error));
+            logReaderError(error);
           } finally {
             button.setDisabled(false);
           }
@@ -244,7 +245,7 @@ export class ReaderSettings extends PluginSettingTab {
               saveTriageFlag(flag, value);
             } catch (error) {
               control.setValue(flags[flag]);
-              new Notice(error instanceof Error ? error.message : String(error));
+              logReaderError(error);
               return;
             }
             flags[flag] = value;

@@ -1,4 +1,5 @@
-import { type App, Notice, TFile } from 'obsidian';
+import { type App, TFile } from 'obsidian';
+import { logReaderError } from '../diagnostics';
 import type { FileclassBackend } from './fileclass-contract';
 import type { RequiredModal } from './required-ui-modal';
 import { message } from './required-ui-values';
@@ -49,7 +50,7 @@ export async function completeRequiredFields(
         if (backend.token() !== token)
           throw new Error('Fileclass connection changed. Continue in Fileclass.');
       } catch (error) {
-        new Notice(`${message(error)} Note already created; saved fields are kept.`);
+        logReaderError(`${message(error)} Note already created; saved fields are kept.`);
         finish();
         return false;
       }

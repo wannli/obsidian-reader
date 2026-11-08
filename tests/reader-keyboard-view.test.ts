@@ -1163,6 +1163,7 @@ describe('article keyboard boundaries', () => {
   });
   it('keeps boundary navigation behind the existing flush/source guard', async () => {
     const f = await fixture();
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
     await enableHighlightHost(f, f.b);
     await f.view.changed({ path: f.b.path, metadataChanged: true });
     f.probe.surface.selectionValue = { quote: 'words', before: 'before ', after: ' after' };
@@ -1172,6 +1173,8 @@ describe('article keyboard boundaries', () => {
     await expect(f.probe.operations).rejects.toThrow();
     expect(f.view.file).toBe(f.b);
     expect(await f.vault.read(f.b)).toBe(raw);
-    expect(mocks.notice).toHaveBeenCalled();
+    expect(mocks.notice).not.toHaveBeenCalled();
+    expect(logged).toHaveBeenCalledWith('[Reader]', expect.any(Error));
+    logged.mockRestore();
   });
 });

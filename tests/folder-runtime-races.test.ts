@@ -119,10 +119,13 @@ it('stays paused if native Reader-tab clearing fails, allowing an explicit retry
 });
 
 it('leaves malformed fresh saved configuration paused, but allows explicit repair', async () => {
+  const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
   const f = await runtimeFixture({ captureFolders: { articles: 'Only one' } });
   expect(f.plugin.signal.aborted).toBe(true);
   expect(f.plugin.ingestion.stop).toHaveBeenCalledOnce();
-  expect(f.runtime.notices[0]).toMatch(/paused/);
+  expect(f.runtime.notices).toEqual([]);
+  expect(logged).toHaveBeenCalledWith('[Reader]', expect.stringMatching(/paused/));
+  logged.mockRestore();
   await f.plugin.applyFolders(folders);
   expect(f.plugin.signal.aborted).toBe(false);
   expect(f.plugin.store.folders).toEqual(folders);
