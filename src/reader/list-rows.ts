@@ -1,6 +1,11 @@
+import { feedAge } from './feed-triage';
+
 interface ListArticle {
   path: string;
   title: string;
+  feed?: string;
+  url?: string;
+  published?: string;
 }
 interface Row {
   path: string;
@@ -25,6 +30,7 @@ export class ListRows {
   constructor(
     private list: HTMLElement,
     private actions: ListActions,
+    private previews = false,
   ) {}
   get rows(): ReadonlyMap<HTMLElement, string> {
     return new Map([...this.entries.values()].map((row) => [row.button, row.path]));
@@ -61,12 +67,41 @@ export class ListRows {
         entry.button.classList.add('reader-list-item');
         entry.title = this.list.ownerDocument.createElement('span');
         entry.title.className = 'reader-list-title';
-        entry.button.append(entry.title);
+        if (this.previews) {
+          const copy = this.list.ownerDocument.createElement('span');
+          copy.className = 'reader-row-copy';
+          copy.append(entry.title);
+          for (const name of ['reader-row-meta', 'reader-row-excerpt']) {
+            const detail = this.list.ownerDocument.createElement('span');
+            detail.className = name;
+            copy.append(detail);
+          }
+          entry.button.append(copy);
+        } else entry.button.append(entry.title);
         this.entries.set(article.path, entry);
         row = entry;
       }
       row.button.dataset.readerPath = article.path;
       if (row.title.textContent !== article.title) row.title.textContent = article.title;
+      const meta = row.button.querySelector('.reader-row-meta');
+      if (meta) {
+        let source =
+          article.feed
+            ?.replace(/^\[\[|\]\]$/g, '')
+            .split('|')
+            .pop()
+            ?.split('/')
+            .pop()
+            ?.replace(/\.md$/, '') ?? '';
+        if (!source && article.url) {
+          try {
+            source = new URL(article.url).hostname;
+          } catch {
+            /* Optional metadata. */
+          }
+        }
+        meta.textContent = [source, feedAge(article.published)].filter(Boolean).join(' · ');
+      }
       ordered.push(row);
     }
     // Insert only out-of-order/new rows, retaining native scroll and existing evidence nodes.

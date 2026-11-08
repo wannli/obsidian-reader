@@ -24,6 +24,7 @@ import { TopicScanner } from './topic-scan';
 import { readDocument, readingMarker, replaceBody } from '../core/document';
 import { IndicatorReadSlots, RowIndicators } from './row-indicators';
 import { ListRows } from './list-rows';
+import { readTriageFlags } from './feed-triage';
 import { SelectionCoordinator } from './selection-coordinator';
 import { nativeLinkPath, openExistingNote } from '../host/note-links';
 import { articleInfo, linkPath, queues, text, type Queue } from '../core/model';
@@ -306,10 +307,12 @@ export class ReaderView extends ItemView {
         if (this.stopping || this.host.signal.aborted || (scoped && generation !== this.generation))
           return;
         this.operating = true;
+        this.updateTriageActions();
         try {
           await action();
         } finally {
           this.operating = false;
+          this.updateTriageActions();
           if (this.refreshPending && !this.stopping) {
             this.refreshPending = false;
             if (this.snapshot)
@@ -496,7 +499,11 @@ export class ReaderView extends ItemView {
     this.snapshot = undefined;
     this.queue = queue;
     this.syncPresentation();
+    const flags = readTriageFlags();
+    const touchTriage = queue === 'Feed' && flags.feedTouchActions;
+    const previews = queue === 'Feed' && flags.feedPreviews;
     const list = this.contentEl.createDiv({ cls: 'reader-list' });
+    if (touchTriage) list.classList.add('reader-triage-list');
     if (this.topicFilter) {
       const heading = list.createEl('h2', { cls: 'reader-list-heading' });
       heading.textContent = this.listLabel();
@@ -536,19 +543,56 @@ export class ReaderView extends ItemView {
     );
     filterButton.classList.toggle('reader-filter-active', !!this.topicFilter);
     filterButton.setAttribute('aria-pressed', String(!!this.topicFilter));
+    if (touchTriage) {
+      const bar = tabs.createDiv({
+        cls: 'reader-triage-actions',
+        attr: { role: 'group', 'aria-label': 'Selected Feed article' },
+      });
+      for (const [label, action] of [
+        [
+          'Open',
+          () => {
+            if (this.listSelectedPath) return this.openArticle(this.listSelectedPath, true);
+          },
+        ],
+        ['Later', () => this.actOnListArticle('l')],
+        [
+          'Next',
+          () => {
+            const rows = this.listRows();
+            if (rows.at(-1)?.dataset.readerPath === this.listSelectedPath)
+              list.querySelector<HTMLButtonElement>('[aria-label="Show more"]')?.click();
+            this.moveListCursor('j');
+          },
+        ],
+        ['Delete', () => this.actOnListArticle('t')],
+      ] as const) {
+        const button = this.button(bar, label, action);
+        button.dataset.triageAction = label;
+      }
+    }
     let restoreListFocus = !!focusedRow;
     const wiredRows = new WeakSet<HTMLElement>();
-    const mountedRows = new ListRows(list, {
-      button: (label, action, icon, shortcut) => this.button(list, label, action, icon, shortcut),
-      open: (path) => {
-        this.listSelectedPath = path;
-        return this.openArticle(path, true);
+    const mountedRows = new ListRows(
+      list,
+      {
+        button: (label, action, icon, shortcut) => this.button(list, label, action, icon, shortcut),
+        open: (path) => {
+          this.listSelectedPath = path;
+          if (touchTriage) {
+            const row = this.listRows().find((row) => row.dataset.readerPath === path);
+            if (row) this.selectListRow(row, false);
+            return;
+          }
+          return this.openArticle(path, true);
+        },
+        more: () => {
+          this.listLimit += 50;
+          render();
+        },
       },
-      more: () => {
-        this.listLimit += 50;
-        render();
-      },
-    });
+      previews,
+    );
     this.mountedListRows = mountedRows;
     this.observeRowIndicators(list, new Map());
     let scanMessage: HTMLElement | undefined;
@@ -589,6 +633,7 @@ export class ReaderView extends ItemView {
         this.focusSelectedListRow = false;
       }
       this.rowIndicators?.update(visibleRows);
+      this.updateTriageActions();
     };
     this.filteredPaths = [];
     const refresh = () => {
@@ -671,6 +716,27 @@ export class ReaderView extends ItemView {
       else row.removeAttribute('aria-current');
     }
     if (focus) button.focus();
+    this.updateTriageActions();
+  }
+  private updateTriageActions(): void {
+    const bar = this.contentEl.querySelector('.reader-triage-actions');
+    if (!bar) return;
+    const rows = this.listRows();
+    const row = rows.find((row) => row.dataset.readerPath === this.listSelectedPath);
+    bar?.setAttribute(
+      'aria-label',
+      row
+        ? `Actions for ${row.querySelector('.reader-list-title')?.textContent ?? 'selected article'}`
+        : 'No Feed article selected',
+    );
+    for (const button of bar?.querySelectorAll<HTMLButtonElement>('button') ?? []) {
+      button.disabled =
+        !row ||
+        this.operating ||
+        (button.dataset.triageAction === 'Next' &&
+          row === rows.at(-1) &&
+          !this.contentEl.querySelector('[aria-label="Show more"]'));
+    }
   }
   private listRows(): HTMLButtonElement[] {
     return Array.from(this.contentEl.querySelectorAll<HTMLButtonElement>('.reader-list-item'));
@@ -3363,7 +3429,11 @@ export class ReaderView extends ItemView {
           );
           if (row) {
             event.preventDefault();
-            row.click();
+            if (this.contentEl.querySelector('.reader-triage-actions'))
+              void this.openArticle(row.dataset.readerPath!, true).catch((error) =>
+                this.error(error),
+              );
+            else row.click();
           }
         } else {
           event.preventDefault();

@@ -1,6 +1,7 @@
 import { setIcon, setTooltip } from 'obsidian';
 import { readDocument, readingMarker } from '../core/document';
 import { renderedHighlight } from '../core/markdown';
+import { feedExcerpt } from './feed-triage';
 
 interface EvidenceFile {
   path: string;
@@ -85,6 +86,8 @@ export class RowIndicators<File extends EvidenceFile> {
   private invalidateRow(row: HTMLElement): void {
     this.revisions.set(row, ++this.nextRevision);
     this.dirty.add(row);
+    const excerpt = row.querySelector('.reader-row-excerpt');
+    if (excerpt) excerpt.textContent = '';
     row.querySelectorAll('.reader-row-indicator').forEach((indicator) => indicator.remove());
     this.enqueue(row);
   }
@@ -129,6 +132,8 @@ export class RowIndicators<File extends EvidenceFile> {
           return;
         const document = readDocument(raw);
         if (document.properties.type !== 'article') return;
+        const excerpt = row.querySelector('.reader-row-excerpt');
+        if (excerpt) excerpt.textContent = feedExcerpt(document.body);
         let highlighted = false;
         try {
           highlighted = renderedHighlight(document.body);

@@ -84,6 +84,31 @@ function fixture(slots = new IndicatorReadSlots()) {
     observer: Observer.instances.at(-1)!,
   };
 }
+it('fills inert previews only for visible current rows and clears stale excerpts on invalidation', async () => {
+  const f = fixture();
+  const excerpt = document.createElement('span');
+  excerpt.className = 'reader-row-excerpt';
+  f.rows[0].append(excerpt);
+  f.bodies.set('0.md', raw().replace('Words', '**Saved** [text](https://example.com)'));
+  expect(excerpt.textContent).toBe('');
+  expect(f.read).not.toHaveBeenCalled();
+  f.observer.emit(f.rows[0]);
+  await flush();
+  expect(excerpt.textContent).toBe('Saved text');
+  expect(excerpt.querySelector('a')).toBeNull();
+  const held = gate();
+  releases.push(held.resolve);
+  f.read.mockImplementationOnce(async () => {
+    await held.promise;
+    return raw();
+  });
+  f.indicators.invalidate('0.md');
+  expect(excerpt.textContent).toBe('');
+  f.controller.abort();
+  held.resolve();
+  await flush();
+  expect(excerpt.textContent).toBe('');
+});
 it('reads only visible rows and refreshes added and removed evidence without new metadata', async () => {
   const f = fixture();
   expect(f.read).not.toHaveBeenCalled();

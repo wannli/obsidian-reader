@@ -1,6 +1,7 @@
 import { Modal, Notice, PluginSettingTab, Setting, type App, type Plugin } from 'obsidian';
 import { folderKeys, folderLabels, validateFolders, type ReaderFolders } from '../core/folders';
 import { FolderPicker } from './folder-picker';
+import { readTriageFlags, saveTriageFlag, triageFlags } from '../reader/feed-triage';
 import type { Ingestion } from './ingestion';
 import type { ArticleStore } from '../core/store';
 import type { TFile } from 'obsidian';
@@ -225,6 +226,30 @@ export class ReaderSettings extends PluginSettingTab {
           }
         }),
       );
+    }
+    this.containerEl.createEl('h3', { text: 'Experimental Feed triage (this device)' });
+    const flags = readTriageFlags();
+    for (const flag of triageFlags) {
+      new Setting(this.containerEl)
+        .setName(flag === 'feedPreviews' ? 'Feed previews' : 'Feed touch actions')
+        .setDesc(
+          (flag === 'feedPreviews'
+            ? 'Show source, publication age and a short saved-text excerpt. No background fetching.'
+            : 'Tap a Feed row to select it, then use Open, Later, Next or Delete.') +
+            ' Reopen the Feed list after changing this. Off restores the original behavior.',
+        )
+        .addToggle((control) =>
+          control.setValue(flags[flag]).onChange((value) => {
+            try {
+              saveTriageFlag(flag, value);
+            } catch (error) {
+              control.setValue(flags[flag]);
+              new Notice(error instanceof Error ? error.message : String(error));
+              return;
+            }
+            flags[flag] = value;
+          }),
+        );
     }
     new Setting(this.containerEl)
       .setName('Boox / e-ink pagination (this device)')

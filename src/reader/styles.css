@@ -373,6 +373,41 @@ body.is-mobile.reader-mobile-active .mobile-navbar {
   white-space: normal;
   overflow-wrap: anywhere;
 }
+.reader-row-copy {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.reader-row-copy .reader-list-title,
+.reader-row-meta {
+  display: block;
+}
+.reader-row-meta,
+.reader-row-excerpt {
+  font-size: var(--font-ui-small);
+  color: var(--text-muted);
+}
+.reader-row-excerpt {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+}
+.reader-triage-actions {
+  grid-column: 1 / -1;
+  grid-row: 1;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 4px;
+}
+.reader-triage-actions button {
+  min-height: 44px;
+  height: auto;
+  padding: 4px;
+  white-space: normal;
+}
+.reader-list.reader-triage-list {
+  --reader-controls-clearance: calc(108px + var(--reader-controls-bottom));
+}
 .reader-row-indicator {
   display: inline-flex;
   flex: 0 0 auto;
