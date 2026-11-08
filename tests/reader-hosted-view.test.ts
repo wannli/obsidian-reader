@@ -859,6 +859,7 @@ describe('hosted highlight UI integration', () => {
     async (change) => {
       const f = await fixture({ defaults: [0] }),
         before = await f.store.read(f.article.path);
+      const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
       mocks.highlightPicker.mockResolvedValueOnce({ kind: 'existing-many', nodes: [] });
       const process = f.vault.process.bind(f.vault);
       let changed = false;
@@ -880,13 +881,18 @@ describe('hosted highlight UI integration', () => {
       });
       await f.probe.topics();
       expect(changed).toBe(true);
-      expect(mocks.notice).toHaveBeenCalledWith(
-        expect.stringMatching(
-          change === 'replacement file'
-            ? /note changed.*Nothing was overwritten/
-            : /typed destination changed/,
-        ),
+      expect(mocks.notice).not.toHaveBeenCalled();
+      expect(logged).toHaveBeenCalledWith(
+        '[Reader]',
+        expect.objectContaining({
+          message: expect.stringMatching(
+            change === 'replacement file'
+              ? /note changed.*Nothing was overwritten/
+              : /typed destination changed/,
+          ),
+        }),
       );
+      logged.mockRestore();
       expect((await f.store.read(f.article.path)).raw).toBe(before.raw);
       expect(mocks.highlightPicker).toHaveBeenCalledTimes(2);
       expect(f.api.createNodeForLink).not.toHaveBeenCalled();
@@ -1507,6 +1513,7 @@ describe('hosted highlight UI integration', () => {
   it('rechecks assigned Fileclass membership inside the final source transform', async () => {
     const f = await fixture(),
       original = await f.store.read(f.article.path);
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
     mocks.highlightPicker.mockResolvedValueOnce({ kind: 'existing-many', nodes: [f.nodes[0]] });
     const process = f.vault.process.bind(f.vault);
     vi.spyOn(f.vault, 'process').mockImplementation(async (file, transform) => {
@@ -1514,7 +1521,12 @@ describe('hosted highlight UI integration', () => {
       return process(file, transform);
     });
     await f.probe.topics();
-    expect(mocks.notice).toHaveBeenCalledWith(expect.stringMatching(/typed destination changed/));
+    expect(mocks.notice).not.toHaveBeenCalled();
+    expect(logged).toHaveBeenCalledWith(
+      '[Reader]',
+      expect.objectContaining({ message: expect.stringMatching(/typed destination changed/) }),
+    );
+    logged.mockRestore();
     expect(mocks.highlightPicker).toHaveBeenLastCalledWith(
       f.app,
       f.api,

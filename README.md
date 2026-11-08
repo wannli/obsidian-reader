@@ -113,7 +113,7 @@ Reader leaves extra text, annotations, and native Full Text captures intact. Nat
 
 Reader sanitizes imported content, but is not a sandbox for third-party Markdown processors. Detected default Dataview/Templater expressions can block capture; custom processor configurations are outside that protection.
 
-If extraction fails, the URL and available text remain, and you can retry. **Run Defuddle again (replace article content)** is a separate, confirmed action: it replaces the body, **including highlights and inline links**. A failed download leaves the current body intact. Ordinary Retry does not overwrite authored text.
+Reader logs errors and failed feed refreshes to Obsidian’s developer console instead of showing popup notices. Feed and article errors also remain visible in their respective views or note properties. If extraction fails, the URL and available text remain, and you can retry. **Run Defuddle again (replace article content)** is a separate, confirmed action: it replaces the body, **including highlights and inline links**. A failed download leaves the current body intact. Ordinary Retry does not overwrite authored text.
 
 ## Your reading library is just Markdown
 

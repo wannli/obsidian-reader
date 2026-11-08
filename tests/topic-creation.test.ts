@@ -55,9 +55,14 @@ vi.mock('obsidian', () => ({
   setTooltip() {},
 }));
 const cleanup = new Set<() => void>();
+const diagnostics: string[] = [];
 beforeEach(() => {
   document.body.replaceChildren();
   notices.length = 0;
+  diagnostics.length = 0;
+  vi.spyOn(console, 'error').mockImplementation((_prefix, error) => {
+    diagnostics.push(error instanceof Error ? error.message : String(error));
+  });
   const proto = HTMLElement.prototype as any;
   proto.empty = function () {
     this.replaceChildren();
@@ -80,6 +85,7 @@ beforeEach(() => {
 afterEach(() => {
   for (const cancel of cleanup) cancel();
   cleanup.clear();
+  vi.mocked(console.error).mockRestore();
 });
 const tick = async () => {
   for (let i = 0; i < 150; i++) await Promise.resolve();
@@ -117,8 +123,9 @@ const startCreate = (title = 'New', type = 'topic') => {
   search(title);
   create(type).click();
 };
+// Check both inline feedback and quiet console diagnostics; failures must not toast.
 const visibleErrors = () => [
-  ...notices,
+  ...diagnostics,
   ...[...document.querySelectorAll<HTMLElement>('[role="alert"]')]
     .filter((el) => !el.hidden)
     .map((el) => el.textContent ?? ''),

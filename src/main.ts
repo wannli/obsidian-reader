@@ -22,6 +22,7 @@ import {
   type ResolvedStatusFolders,
 } from './core/status-folders';
 import { Network } from './host/network';
+import { logReaderError } from './host/diagnostics';
 import { readDocument } from './core/document';
 import { ArticleStore } from './core/store';
 import { confirmArticleReplacement, input } from './host/dialogs';
@@ -122,8 +123,9 @@ export default class ReaderPlugin extends Plugin {
       .map((leaf) => leaf.view)
       .filter((view): view is ReaderView => view instanceof ReaderView);
   }
+  // Existing error callbacks route here; only explicit success confirmations use Notice.
   private notice(error: unknown): void {
-    if (!this.signal.aborted) new Notice(error instanceof Error ? error.message : String(error));
+    if (!this.signal.aborted) logReaderError(error);
   }
   async onload(): Promise<void> {
     const data = await this.loadData();
@@ -913,7 +915,7 @@ export default class ReaderPlugin extends Plugin {
       }
       const link = `obsidian://${READER_VIEW}?vault=${encodeURIComponent(this.app.vault.getName())}&view=${view}`;
       await clipboard.writeText(link);
-      this.notice(`${view === 'list' ? 'Reading-list' : 'Dog-ear'} link copied.`);
+      new Notice(`${view === 'list' ? 'Reading-list' : 'Dog-ear'} link copied.`);
     } catch (error) {
       this.notice(
         `Could not copy the ${label} link: ${error instanceof Error ? error.message : String(error)}`,

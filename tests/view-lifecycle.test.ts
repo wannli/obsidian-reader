@@ -409,6 +409,7 @@ describe('public reading-list command and URI', () => {
     'keeps a failed source save mounted and reports it through the public %s route',
     async (route) => {
       const f = await pluginFixture();
+      const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
       const article = await f.note('Reading/Inbox/Article.md');
       await enableHighlightHost(f, article);
       await f.view.openArticle(article.path);
@@ -421,7 +422,9 @@ describe('public reading-list command and URI', () => {
       await Promise.resolve();
       expect(f.view.file).toBe(article);
       expect(await f.vault.read(article)).toBe(raw);
-      expect(mocks.notice).toHaveBeenCalled();
+      expect(mocks.notice).not.toHaveBeenCalled();
+      expect(logged).toHaveBeenCalledWith('[Reader]', expect.any(Error));
+      logged.mockRestore();
       expect(f.app.workspace.getLeaf).not.toHaveBeenCalled();
     },
   );
@@ -513,11 +516,7 @@ describe('public reading-list command and URI', () => {
       });
       const f = await pluginFixture();
       await mocks.commands.get('copy-reading-list-link')!.callback!();
-      expect(mocks.notice).toHaveBeenCalledWith(
-        mode === 'unsupported'
-          ? 'Clipboard is unavailable on this device. Reading-list link was not copied.'
-          : 'Could not copy the reading-list link: Permission denied',
-      );
+      expect(mocks.notice).not.toHaveBeenCalled();
       expect(f.app.workspace.getLeaf).not.toHaveBeenCalled();
     },
   );

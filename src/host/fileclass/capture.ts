@@ -1,4 +1,5 @@
-import { App, Notice, parseFrontMatterAliases, TFile } from 'obsidian';
+import { App, parseFrontMatterAliases, TFile } from 'obsidian';
+import { logReaderError } from '../diagnostics';
 import type { ClassInfo, FileclassBackend } from './fileclass-contract';
 import { assertSession, createTypedNote, titleError, waitForBinding } from './creation';
 import { completeRequiredFields } from './required-ui';
@@ -180,19 +181,19 @@ export class CaptureController {
       return signal.aborted ? null : record;
     } catch (error) {
       if (error instanceof LinkFailure) {
-        if (created) new Notice(`Created ${created.path}; linking failed. The note was kept.`);
+        if (created) logReaderError(`Created ${created.path}; linking failed. The note was kept.`);
         throw error.original;
       }
       if (created) {
         if (this.active) {
           const retained = this.app.vault.getAbstractFileByPath(created.path) === created;
-          new Notice(
+          logReaderError(
             `${retained ? `Kept ${created.path}${linked ? ' and its link' : ''}` : 'The created note was moved, replaced or deleted'}. ${String(error)}`,
           );
         }
         return signal.aborted ? null : (record ?? null);
       }
-      if (!signal.aborted && this.active) new Notice(`Reader typed notes: ${String(error)}`);
+      if (!signal.aborted && this.active) logReaderError(`Reader typed notes: ${String(error)}`);
       return null;
     }
   }

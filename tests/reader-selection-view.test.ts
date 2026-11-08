@@ -1090,6 +1090,7 @@ describe('automatic selection event ownership', () => {
   );
 
   it('keeps the new Delete action behind the existing source guard', async () => {
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
     const external = createDocument({ type: 'article' }, 'Externally edited words.');
     f.vault.bytes.set(f.article, external);
     [...f.view.contentEl.querySelectorAll<HTMLButtonElement>('.reader-actions button')]
@@ -1099,7 +1100,9 @@ describe('automatic selection event ownership', () => {
     expect(f.view.file).toBe(f.article);
     expect(f.vault.trashed).toEqual([]);
     expect(await f.vault.read(f.article)).toBe(external);
-    expect(mocks.notice).toHaveBeenCalled();
+    expect(mocks.notice).not.toHaveBeenCalled();
+    expect(logged).toHaveBeenCalledWith('[Reader]', expect.any(Error));
+    logged.mockRestore();
   });
 
   it('retains acquisition errors and Retry when an automatic highlight succeeds', async () => {
@@ -1118,13 +1121,19 @@ describe('automatic selection event ownership', () => {
     expect(f.host.ingestion.acquire).toHaveBeenLastCalledWith(f.article.path, true);
   });
 
-  it('does not silence genuine passive write failures', async () => {
+  it('logs genuine passive write failures without a popup', async () => {
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
     vi.spyOn(f.vault, 'process').mockRejectedValueOnce(new Error('Disk write failed'));
     f.select(0);
     vi.advanceTimersByTime(900);
     await expect(f.probe.operations).rejects.toThrow('Disk write failed');
     expect((await f.store.read(f.article.path)).body).toBe(f.body);
-    expect(mocks.notice).toHaveBeenCalledWith('Disk write failed');
+    expect(mocks.notice).not.toHaveBeenCalled();
+    expect(logged).toHaveBeenCalledWith(
+      '[Reader]',
+      expect.objectContaining({ message: 'Disk write failed' }),
+    );
+    logged.mockRestore();
     expect(f.view.contentEl.querySelector('.reader-status')?.textContent).not.toBe(
       'Highlight saved',
     );
@@ -1671,6 +1680,7 @@ describe('commit-time annotation targets', () => {
   });
 
   it('rechecks topic identity and type at commit time and keeps the rejected draft for Cancel', async () => {
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
     const f = hostFixture(),
       article = await f.note('Reading/Inbox/A.md'),
       target = await f.note('Topics/One.md', '', 'topic');
@@ -1695,7 +1705,12 @@ describe('commit-time annotation targets', () => {
     });
     const pending = f.probe.topics();
     for (let i = 0; i < 100 && !cancel; i++) await Promise.resolve();
-    expect(mocks.notice).toHaveBeenCalledWith(expect.stringContaining('typed destination changed'));
+    expect(mocks.notice).not.toHaveBeenCalled();
+    expect(logged).toHaveBeenCalledWith(
+      '[Reader]',
+      expect.objectContaining({ message: expect.stringContaining('typed destination changed') }),
+    );
+    logged.mockRestore();
     expect(draft).toEqual([target.path]);
     expect(mocks.highlightPicker).toHaveBeenCalledTimes(2);
     expect(await f.vault.read(article)).toBe(before);
