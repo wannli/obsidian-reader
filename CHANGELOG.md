@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.27.0](https://github.com/wannli/obsidian-reader/compare/0.26.3...0.27.0) (2026-11-08)
+
+
+### Added
+
+* **reader:** add flagged feed previews and touch triage ([f3dbfe7](https://github.com/wannli/obsidian-reader/commit/f3dbfe77d41aa3993ef712baa43c1c89746909fb))
+
+
+### Fixed
+
+* **reader:** log errors instead of showing notices ([50a205f](https://github.com/wannli/obsidian-reader/commit/50a205f44d3f197127fb3b50ec43e2e04d5c799a))
+
 ## [0.26.3](https://github.com/wannli/obsidian-reader/compare/0.26.2...0.26.3) (2026-11-02)
 
 
