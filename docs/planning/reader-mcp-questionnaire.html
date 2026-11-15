@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="referrer" content="no-referrer" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'none'; img-src 'none'"
+    />
+    <title>Reader MCP · Your choices</title>
+    <!-- prettier-ignore -->
+    <style>
+:root{color-scheme:light dark;--bg:#f7f6f2;--card:#fff;--ink:#262923;--muted:#62675e;--line:#d8dcd1;--accent:#355c43;--soft:#edf3eb}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.5 system-ui,sans-serif}main{max-width:900px;margin:auto;padding:28px 20px 80px}h1{font-size:28px;margin:0 0 8px}h2{font-size:19px;margin:0 0 12px}h3{font-size:22px;margin:32px 0 12px}p{margin:8px 0 14px}.muted,small{color:var(--muted)}header{margin-bottom:24px}.toolbar{display:flex;flex-wrap:wrap;gap:8px;align-items:center}button,.file{font:inherit;min-height:44px;border:1px solid var(--line);border-radius:8px;padding:8px 12px;background:var(--card);color:var(--ink);cursor:pointer}button.primary{background:var(--accent);color:white;border-color:var(--accent)}button:hover,.file:hover{filter:brightness(.95)}button:focus-visible,input:focus-visible,textarea:focus-visible,.file:focus-within{outline:3px solid #ae7226;outline-offset:3px}.question{padding:20px;margin:12px 0;background:var(--card);border:1px solid var(--line);border-radius:12px}.recommendation{padding:12px;border-radius:8px;background:var(--soft)}.choices{display:grid;gap:6px;margin:14px 0}.choice{display:flex;gap:10px;align-items:flex-start;min-height:44px;padding:10px;border:1px solid var(--line);border-radius:8px;cursor:pointer}.choice:has(input:checked){border-color:var(--accent);background:var(--soft)}input[type=radio],input[type=checkbox]{margin-top:5px;accent-color:var(--accent);flex-shrink:0}textarea{display:block;width:100%;min-height:76px;resize:vertical;font:inherit;color:var(--ink);background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:10px;margin-top:6px}.notes-label{display:block;margin-top:12px}.status{position:sticky;top:0;z-index:1;background:var(--bg);padding:12px 0;border-bottom:1px solid var(--line)}progress{width:130px;accent-color:var(--accent)}#message{min-height:24px;margin-top:8px}footer{margin-top:32px;border-top:1px solid var(--line);padding-top:20px}#output{min-height:260px}a{color:var(--accent)}.file input{position:absolute;width:1px;height:1px;opacity:0}details{margin-top:16px}summary{cursor:pointer;min-height:44px;padding:10px 0}@media(prefers-color-scheme:dark){:root{--bg:#1e211e;--card:#282d28;--ink:#edf0e9;--muted:#bac3b6;--line:#495147;--accent:#8dc6a0;--soft:#303e32}button.primary{color:#142319}}@media(max-width:540px){main{padding:16px 12px 60px}.question{padding:16px}h1{font-size:24px}.status .toolbar{gap:6px}}
+</style>
+  </head>
+  <body>
+    <main>
+      <header>
+        <p class="muted">Reader / MCP wayfinder</p>
+        <h1>Your choices, all in one place</h1>
+        <p>
+          Answer in any order. Accept the suggested direction or choose a different one; add detail
+          wherever useful. These are planning answers—not permission to access a vault, disclose
+          content or deploy a service.
+        </p>
+        <p class="muted">
+          Local file · No network requests · No automatic storage. Download a draft before closing,
+          then load it to resume. Exported files contain your answers; share them deliberately.
+        </p>
+        <details>
+          <summary>Background from W</summary>
+          <p>
+            <a
+              href="https://github.com/wannli/W/issues/66#issuecomment-6836843205"
+              target="_blank"
+              rel="noreferrer"
+              >Agreed privacy boundaries</a
+            >
+            ·
+            <a
+              href="https://github.com/wannli/W/issues/72#issuecomment-6878459386"
+              target="_blank"
+              rel="noreferrer"
+              >Chosen host allocation</a
+            >. Opening these links visits GitHub. W's decisions inform this questionnaire; they do
+            not automatically select Reader's architecture.
+          </p>
+        </details>
+      </header>
+      <div class="status">
+        <div class="toolbar">
+          <strong id="count">0 / 15 answered</strong
+          ><progress id="progress" max="15" value="0" aria-label="Questions answered"></progress
+          ><button id="recommend">Use recommendations for unanswered</button
+          ><button id="save">Save draft</button
+          ><label class="file"
+            >Load draft<input id="load" type="file" accept="application/json,.json"
+          /></label>
+        </div>
+        <div id="message" role="status" aria-live="polite"></div>
+      </div>
+      <form id="questions"></form>
+      <footer>
+        <h2>Send your answers back</h2>
+        <p>
+          Copy the answers into our conversation, or download the Markdown file and give me its
+          path. Unanswered questions remain explicitly undecided.
+        </p>
+        <div class="toolbar">
+          <button class="primary" id="copy">Copy answers</button
+          ><button id="download">Download answers (.md)</button
+          ><button id="reset">Clear answers</button>
+        </div>
+        <details>
+          <summary>Preview exported answers</summary>
+          <textarea id="output" readonly aria-label="Exported answers"></textarea>
+        </details>
+      </footer>
+    </main>
+    <!-- prettier-ignore -->
+    <script>
+'use strict';
+const questions = [
+{section:'Purpose and scope',title:'What should finishing the wayfinder produce?',rec:'An agreed first-use scope, privacy boundary, architecture and acceptance criteria, ready for an implementation spec. No production implementation or deployment during wayfinding.',alts:['Only explore feasibility before deciding whether to build.','Include implementation or deployment in the destination.']},
+{title:'What should the MCP help you do first?',rec:'Find and discuss saved public sources with citations, plus explicitly requested URL capture. Decide organisation, annotation writes and research execution separately.',multi:true,options:['Find saved articles and retrieve permitted public source text','Discuss and compare saved sources with citations back to Reader','Save explicitly requested URLs to Reader','Organise queues, related notes or feeds','Work with highlights and quotations','Trigger research and inspect findings'],defaults:[0,1,2]},
+{title:'Which clients matter?',rec:'ChatGPT first; keep the protocol usable by other MCP clients. Local coding agents are secondary clients, without broader permissions.',alts:['Local agents first; ChatGPT later.','ChatGPT and local agents are equally important from the start.']},
+{title:'How closely should this relate to W?',rec:'Reader-owned MCP work, inheriting relevant W privacy decisions and coordinating overlapping research. No Reader replacement, W data model, migration or dependency on W shipping.',alts:['Design one shared MCP effort across Reader and W.','Keep Reader fully independent; use W only as background.']},
+{section:'Privacy and authority',title:'Should W’s settled privacy boundaries apply unchanged?',rec:'Yes: enabled public-source assistance; private writing, questions, connections and activity history excluded by default; uncertainty fails closed; private-derived output protected. Folders, queues, topics and note types are not disclosure permission. Processing permission does not authorise publication or external actions.',alts:['Adapt the boundaries for Reader; describe the changes below.']},
+{title:'Should private-excerpt sharing be in the first version?',rec:'No. Keep it blocked until strict request-only use is genuinely satisfied. A persistent ChatGPT transcript can retain an excerpt after an MCP stops returning it. Initial proofs use synthetic public material and private canaries.',alts:['Investigate private-excerpt support as a first-version requirement, without assuming the transcript problem is solved.','Exclude private-excerpt support from this effort entirely.']},
+{title:'How should public-source assistance be enabled?',rec:'Explicit enablement, a short explanation and optional inspection of what is sent; no repeated confirmation for routine permitted reads. Decide selected-source versus collection-wide scope separately.',alts:['Approve selected sources individually.','Require inspection and approval before each disclosure.']},
+{title:'What authority should callers have to change Reader?',rec:'Narrow domain actions only. Explicit URL capture is the first write candidate. No generic file writes, shell, SQL, arbitrary CLI execution or caller-controlled permission changes. Destructive actions and authored-content edits stay outside the initial scope. Client prompts are not the security boundary.',alts:['Read-only in the first version, including no URL capture.','Include additional narrow write actions; specify which below.']},
+{section:'Operation and experience',title:'Should Reader follow W’s trusted-host, headless direction?',rec:'Investigate a trusted host with Headless Sync and direct files as the leading candidate, comparing an in-app adapter where existing guarded operations matter. Do not pre-approve the implementation. Reading and capture stay independent of MCP availability.',alts:['Investigate an in-app adapter first.','Compare host options without a preferred candidate.']},
+{title:'Where does autonomous research belong?',rec:'W’s research-loop effort owns scheduling and research execution. Reader owns access to its material and explicitly authorised Reader actions. Any bridge needs a scoped contract.',alts:['Include autonomous research in Reader’s wayfinder.','Keep research and any bridge entirely out of scope.']},
+{title:'How should a conversation return you to Reader?',rec:'Publisher citations plus vault-aware links to saved articles. Investigate precise passage return. Retrieval must not silently change bookmarks, the dog-ear pointer or reading state.',alts:['Article-level return is enough; defer precise passages.','Precise passage return is a first-version requirement.']},
+{section:'Planning and validation',title:'What evidence makes the design ready to build?',rec:'A synthetic proof of permitted reads and selected writes; leak tests across snippets, titles, links, errors and logs; malicious-source, stale-permission and host/Sync failure cases. Verify account eligibility and ChatGPT connectivity. Native-device claims need real-device checks.',alts:['Produce the design first; defer executable proofs to implementation.','Require additional evidence; specify below.']},
+{title:'What may proceed independently after charting?',rec:'Factual research and synthetic-only, decision-enabling investigations. Product choices stay human-led. No personal vault access, real-content disclosure, host configuration, Sync changes, credential provisioning or service deployment without separate approval.',alts:['Research only; ask before any executable investigation.','Require approval before each research or investigation task.']},
+{title:'Where does the map live, and how should sessions work it?',rec:'A GitHub map in wannli/obsidian-reader, with named child decision issues, native blockers and links to W’s decisions. Research can proceed independently. Resolve at most one non-research decision ticket per session. Charting does not implement the product.',alts:['Keep a local planning document before creating GitHub issues.','Use a different tracker or session policy; describe below.']},
+{title:'Any additional requirements or hard exclusions?',rec:'Prefer a small useful surface over a general Obsidian MCP. Markdown remains authoritative; preserve unknown and authored content. Get approval before persisted schemas or permission metadata. No additional requirements specified.',alts:['Add or change requirements below.']}
+];
+const form=document.querySelector('#questions');
+const state=questions.map(()=>({answer:'',notes:'',selected:[]}));
+const el=(tag,text)=>{const n=document.createElement(tag);if(text!==undefined)n.textContent=text;return n;};
+questions.forEach((q,i)=>{
+ if(q.section)form.append(el('h3',q.section));
+ const card=el('section');card.className='question';card.setAttribute('aria-labelledby','q'+i);
+ const heading=el('h2',`${i+1}. ${q.title}`);heading.id='q'+i;card.append(heading);
+ const rec=el('p');rec.className='recommendation';rec.append(el('strong','Suggested direction: '),document.createTextNode(q.rec));card.append(rec);
+ const choices=el('div');choices.className='choices';choices.setAttribute('role','radiogroup');choices.setAttribute('aria-labelledby','q'+i);
+ const options=['Use suggested direction',...(q.alts||['Choose a different first-use scope below']),'Different answer / decide later'];
+ options.forEach((text,k)=>{const label=el('label');label.className='choice';const input=el('input');input.type='radio';input.name='answer'+i;input.value=String(k);input.addEventListener('change',()=>{state[i].answer=k===0?'recommended':k===options.length-1?'custom':text;if(q.multi&&k===0)state[i].selected=[...q.defaults];sync();});label.append(input,el('span',text));choices.append(label);});card.append(choices);
+ if(q.multi){card.append(el('p','Select your first-use scope; use notes to rank priorities. Selecting these options replaces the suggested bundle.'));q.options.forEach((text,k)=>{const label=el('label');label.className='choice';const input=el('input');input.type='checkbox';input.dataset.scope=String(k);input.addEventListener('change',()=>{state[i].answer='custom';state[i].selected=[...card.querySelectorAll('[data-scope]:checked')].map(n=>Number(n.dataset.scope));sync();});label.append(input,el('span',text));card.append(label);});}
+ const label=el('label','Your changes, priorities or notes (optional)');label.className='notes-label';const notes=el('textarea');notes.id='notes'+i;notes.placeholder='Add detail, or say what needs deciding later…';notes.addEventListener('input',()=>{state[i].notes=notes.value;update();});label.htmlFor=notes.id;card.append(label,notes);form.append(card);
+});
+function markdown(){return '# Reader MCP — wayfinder answers\n\nPlanning input only; not operational permission.\n\n'+questions.map((q,i)=>{const s=state[i];let answer=s.answer==='recommended'?q.rec:s.answer==='custom'?'Different answer / decide later — see selections and notes.':s.answer||'UNANSWERED — no decision taken.';if(q.multi&&s.selected.length)answer+='\n\nSelected first-use scope:\n'+s.selected.map(k=>'- '+q.options[k]).join('\n');return `## ${i+1}. ${q.title}\n\n${answer}${s.notes.trim()?'\n\nNotes: '+s.notes.trim():''}`;}).join('\n\n')+'\n';}
+function update(){const n=state.filter(s=>s.answer).length;document.querySelector('#count').textContent=`${n} / ${questions.length} answered`;document.querySelector('#progress').value=n;document.querySelector('#output').value=markdown();}
+function sync(){questions.forEach((q,i)=>{const s=state[i],inputs=[...form.querySelectorAll(`[name="answer${i}"]`)];inputs.forEach((input,k)=>{input.checked=s.answer==='recommended'?k===0:s.answer==='custom'?k===inputs.length-1:s.answer===input.parentElement.textContent;});document.querySelector('#notes'+i).value=s.notes;if(q.multi)form.querySelectorAll('[data-scope]').forEach(n=>n.checked=s.selected.includes(Number(n.dataset.scope)));});update();}
+function message(text){document.querySelector('#message').textContent=text;}
+function download(name,type,text){const url=URL.createObjectURL(new Blob([text],{type}));const a=el('a');a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}
+document.querySelector('#recommend').onclick=()=>{state.forEach((s,i)=>{if(!s.answer&&!s.notes.trim()){s.answer='recommended';if(questions[i].multi)s.selected=[...questions[i].defaults];}});sync();message('Recommendations applied to untouched questions. Existing answers and notes preserved. Review before sharing.');};
+document.querySelector('#save').onclick=()=>{download('reader-mcp-draft.json','application/json',JSON.stringify({version:1,answers:state},null,2));message('Draft downloaded. Load it here to resume.');};
+document.querySelector('#load').onchange=async event=>{const file=event.target.files[0];if(!file)return;try{const draft=JSON.parse(await file.text());if(draft.version!==1||!Array.isArray(draft.answers)||draft.answers.length!==questions.length)throw Error();draft.answers.forEach((s,i)=>{const q=questions[i];if(!s||typeof s.answer!=='string'||typeof s.notes!=='string'||!Array.isArray(s.selected)||!['','recommended','custom',...(q.alts||[])].includes(s.answer)||s.selected.some(k=>!Number.isInteger(k)||!q.multi||k<0||k>=q.options.length))throw Error();});if(state.some(s=>s.answer||s.notes.trim())&&!confirm('Replace your current answers with this draft?'))return;draft.answers.forEach((s,i)=>state[i]={answer:s.answer,notes:s.notes,selected:[...s.selected]});sync();message('Draft loaded. Nothing was sent.');}catch{message('Could not load this draft. Your current answers are unchanged.');}finally{event.target.value='';}};
+document.querySelector('#copy').onclick=async()=>{try{await navigator.clipboard.writeText(markdown());message('Answers copied. Paste them into our conversation.');}catch{const out=document.querySelector('#output');out.closest('details').open=true;out.focus();out.select();message('Clipboard unavailable for this local file. Answers selected: press Ctrl+C / Cmd+C.');}};
+document.querySelector('#download').onclick=()=>{download('reader-mcp-answers.md','text/markdown',markdown());message('Answers downloaded. Send the file or its path back in the conversation.');};
+document.querySelector('#reset').onclick=()=>{if(confirm('Clear all answers? Save a draft first if you want to keep them.')){state.forEach(s=>{s.answer='';s.notes='';s.selected=[];});sync();message('Answers cleared.');}};
+update();
+</script>
+  </body>
+</html>
