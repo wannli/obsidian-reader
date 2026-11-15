@@ -33,6 +33,8 @@ export interface ThinkingBrowserHost<File extends NoteFile> {
   canConnectStructuredNote?(target: ThinkingTarget): boolean;
 }
 
+// Explicit verified choices only: generation-local, bounded, and never persisted as activity.
+const recentExplorationChoices = new WeakMap<object, string[]>();
 const same = (a: ThinkingTarget, b: ThinkingTarget) =>
   a.path.replace(/\.md$/iu, '') === b.path.replace(/\.md$/iu, '') &&
   (a.blockId ?? '') === (b.blockId ?? '');
@@ -62,12 +64,16 @@ export function addThinkingToExploration<File extends NoteFile>(
 ): { close(): void } {
   const browser = new ThinkingBrowser(app, host);
   browser.inclusion = target;
+  browser.standaloneInclusion = true;
   if (!host.signal.aborted && host.guard()) browser.open();
   return browser;
 }
 
 class ThinkingBrowser<File extends NoteFile> extends Modal {
   inclusion?: ThinkingTarget;
+  standaloneInclusion = false;
+  private inclusionQuery = '';
+  private inclusionSearchVisible = false;
   private lifetime = new AbortController();
   private readController?: AbortController;
   private readLane: Promise<void> = Promise.resolve();
@@ -222,30 +228,43 @@ class ThinkingBrowser<File extends NoteFile> extends Modal {
     ] as const) {
       const button = this.button(this.toolbar, name, () => {
         this.selected = undefined;
+        this.inclusion = undefined;
+        this.standaloneInclusion = false;
         this.overview = overview;
         this.controls();
         return this.load();
       });
-      button.setAttribute('aria-pressed', String(this.overview === overview));
+      button.setAttribute('aria-pressed', String(!this.inclusion && this.overview === overview));
     }
     this.button(this.toolbar, 'Search', () => {
-      this.searchVisible = !this.searchVisible;
-      if (!this.searchVisible) this.query = '';
+      if (this.inclusion) {
+        this.inclusionSearchVisible = !this.inclusionSearchVisible;
+        if (!this.inclusionSearchVisible) this.inclusionQuery = '';
+      } else {
+        this.searchVisible = !this.searchVisible;
+        if (!this.searchVisible) this.query = '';
+      }
       this.controls();
-      if (this.searchVisible) this.toolbar.querySelector('input')?.focus();
+      if (this.inclusion ? this.inclusionSearchVisible : this.searchVisible)
+        this.toolbar.querySelector('input')?.focus();
       else void this.load();
     });
-    if (this.searchVisible) {
+    if (this.inclusion ? this.inclusionSearchVisible : this.searchVisible) {
       const field = this.element('input', this.toolbar);
       field.type = 'search';
-      field.setAttribute('aria-label', 'Search saved material');
-      field.value = this.query;
+      field.setAttribute(
+        'aria-label',
+        this.inclusion ? 'Search explorations' : 'Search saved material',
+      );
+      field.placeholder = this.inclusion ? 'Exploration name' : '';
+      field.value = this.inclusion ? this.inclusionQuery : this.query;
       field.addEventListener('input', () => {
-        this.query = field.value;
+        if (this.inclusion) this.inclusionQuery = field.value;
+        else this.query = field.value;
         void this.load();
       });
     }
-    if (this.overview) {
+    if (this.overview && !this.inclusion) {
       const label = this.element('label', this.toolbar, 'Exploration lens');
       const select = this.element('select', label);
       for (const [value, name] of [
@@ -291,8 +310,19 @@ class ThinkingBrowser<File extends NoteFile> extends Modal {
     const documents: ThinkingDocument<File>[] = [],
       failures: string[] = [];
     // Serial reads keep occupancy bounded; no startup/background notebook scans.
-    const paths = [...new Set([...this.host.notebookPaths(), ...this.explorationPaths()])];
-    if (this.selected)
+    const paths = this.inclusion
+      ? this.explorationPaths().filter((path) =>
+          path.toLocaleLowerCase().includes(this.inclusionQuery.trim().toLocaleLowerCase()),
+        )
+      : [...new Set([...this.host.notebookPaths(), ...this.explorationPaths()])];
+    if (this.inclusion) {
+      const recent = recentExplorationChoices.get(this.host.store) ?? [];
+      paths.sort((a, b) => {
+        const ai = recent.indexOf(a),
+          bi = recent.indexOf(b);
+        return (ai < 0 ? recent.length : ai) - (bi < 0 ? recent.length : bi);
+      });
+    } else if (this.selected)
       paths.sort((a, b) => Number(b === this.selected!.path) - Number(a === this.selected!.path));
     this.limitedDocuments = paths.length > this.documentLimit;
     for (const path of paths.slice(0, this.documentLimit)) {
@@ -831,22 +861,61 @@ class ThinkingBrowser<File extends NoteFile> extends Modal {
     const document = await this.host.store.read(created.target.path);
     if (!this.active() || screen !== this.screen) return;
     this.createdExplorations.add(document.path);
+    this.rememberExploration(document.path);
     this.documents = [...this.documents.filter((doc) => doc.path !== document.path), document];
     if (target) await this.include(document, target);
     else this.showExploration(document.path);
   }
+  private rememberExploration(path: string): void {
+    const recent = recentExplorationChoices.get(this.host.store) ?? [];
+    recentExplorationChoices.set(
+      this.host.store,
+      [path, ...recent.filter((candidate) => candidate !== path)].slice(0, 8),
+    );
+  }
   private showInclusion(target: ThinkingTarget): void {
+    if (!this.inclusion) {
+      this.inclusion = target;
+      this.inclusionQuery = '';
+      this.inclusionSearchVisible = false;
+      this.controls();
+    }
     this.clearBody();
     this.element('h3', this.body, 'Add to exploration');
     this.element('p', this.body, title(target), 'reader-thinking-evidence');
-    const explorations = this.documents.filter((doc) => this.explorationPaths().includes(doc.path));
+    const recent = recentExplorationChoices.get(this.host.store) ?? [];
+    const explorations = this.documents.filter(
+      (doc) =>
+        this.explorationPaths().includes(doc.path) &&
+        doc.path.toLocaleLowerCase().includes(this.inclusionQuery.trim().toLocaleLowerCase()),
+    );
+    explorations.sort((a, b) => {
+      const ai = recent.indexOf(a.path),
+        bi = recent.indexOf(b.path);
+      return (ai < 0 ? recent.length : ai) - (bi < 0 ? recent.length : bi);
+    });
+    const hasRecent = explorations.some((doc) => recent.includes(doc.path));
+    if (hasRecent) this.element('h4', this.body, 'Recent explicit choices (this session only)');
+    let otherHeading = false;
+    this.element(
+      'p',
+      this.body,
+      'Search filters exploration names. Only Add changes membership; recent choices stay in this Reader session, not file dates or activity history.',
+      'reader-thinking-evidence',
+    );
     if (!explorations.length)
       this.element(
         'p',
         this.body,
-        'No exploration available. Create a typed exploration through Fileclass, or configure an existing one.',
+        this.inclusionQuery.trim()
+          ? 'No matching exploration. Clear Search or explicitly create an exploration.'
+          : 'No exploration available. Create a typed exploration through Fileclass, or configure an existing one.',
       );
     for (const document of explorations) {
+      if (hasRecent && !recent.includes(document.path) && !otherHeading) {
+        this.element('h4', this.body, 'Other explorations');
+        otherHeading = true;
+      }
       const included = document.memberships.some((member) =>
         this.referencesTarget(member.target, document.path, target),
       );
@@ -865,7 +934,25 @@ class ThinkingBrowser<File extends NoteFile> extends Modal {
         this.body,
         'Creation requires Fileclass. Existing exploration body editing remains available.',
       );
-    this.button(this.body, 'Cancel', () => (this.inclusion ? this.close() : this.showItem(target)));
+    if (this.limitedDocuments) {
+      this.element(
+        'p',
+        this.body,
+        'Exploration coverage is limited to the loaded matches.',
+        'reader-thinking-evidence',
+      );
+      this.button(this.body, 'Load more notebooks and explorations', () => {
+        this.documentLimit += 100;
+        return this.load();
+      });
+    }
+    this.button(this.body, 'Cancel', () => {
+      if (this.standaloneInclusion) return this.close();
+      this.inclusion = undefined;
+      this.selected = target;
+      this.controls();
+      return this.load();
+    });
   }
   private async include(document: ThinkingDocument<File>, target: ThinkingTarget): Promise<void> {
     this.inspectionTarget = { path: document.path };
@@ -886,7 +973,10 @@ class ThinkingBrowser<File extends NoteFile> extends Modal {
           guard: this.guard,
         });
       },
-      () => this.showInclusion(target),
+      () => {
+        this.rememberExploration(document.path);
+        this.showInclusion(target);
+      },
     );
   }
   private showExploration(path: string): void {

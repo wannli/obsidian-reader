@@ -700,6 +700,166 @@ describe('saved material browser public UI', () => {
     expect(host.openNative).toHaveBeenCalledWith({ path: 'Notebook.md' });
     expect(host.openSource).not.toHaveBeenCalled();
   });
+  it('the quiet exploration picker search filters actual choices and only explicit Add writes membership, never an entry edge', async () => {
+    const { host, vault } = await populated();
+    for (const path of ['Alpha.md', 'Beta.md'])
+      await vault.create(path, '---\nfileClass: Exploration\n---\nAuthored exploration prose.\n');
+    host.explorationPaths = () => ['Alpha.md', 'Beta.md'];
+    addThinkingToExploration({} as App, host, { path: 'Notebook.md', blockId: 'comment-one' });
+    await settle();
+    expect(document.querySelector('input')).toBeNull();
+    button('Search').click();
+    const field = document.querySelector('input')!;
+    expect(field.getAttribute('aria-label')).toBe('Search explorations');
+    field.value = 'Beta';
+    field.dispatchEvent(new Event('input'));
+    await settle();
+    expect(button('Add: Beta.md')).toBeDefined();
+    expect(
+      [...document.querySelectorAll('button')].some(
+        (button) => button.textContent === 'Add: Alpha.md',
+      ),
+    ).toBe(false);
+    expect((await host.store.read('Beta.md')).memberships).toEqual([]);
+    expect((await host.store.read('Notebook.md')).records[0].connections).toEqual([]);
+    button('Add: Beta.md').click();
+    await settle();
+    expect(button('Included: Beta.md').disabled).toBe(true);
+    expect(document.querySelector('input')?.value).toBe('Beta');
+    expect((await host.store.read('Beta.md')).memberships[0].target).toEqual({
+      path: 'Notebook.md',
+      blockId: 'comment-one',
+    });
+    expect((await host.store.read('Notebook.md')).records[0].connections).toEqual([]);
+  });
+  it('recent exploration choices are explicit, bounded-session ordering for the same store, not persistent activity', async () => {
+    const { host, vault } = await populated();
+    for (const path of ['Alpha.md', 'Zulu.md'])
+      await vault.create(path, '---\nfileClass: Exploration\n---\nOriginal prose.\n');
+    host.explorationPaths = () => ['Alpha.md', 'Zulu.md'];
+    addThinkingToExploration({} as App, host, { path: 'Notebook.md', blockId: 'comment-one' });
+    await settle();
+    button('Add: Zulu.md').click();
+    await settle();
+    button('Cancel').click();
+    const second = addThinkingToExploration({} as App, host, {
+      path: 'Notebook.md',
+      blockId: 'comment-two',
+    });
+    await settle();
+    expect(document.body.textContent).toContain('Recent explicit choices (this session only)');
+    expect(
+      [...document.querySelectorAll('button')]
+        .filter((button) => button.textContent?.startsWith('Add:'))
+        .map((button) => button.textContent),
+    ).toEqual(['Add: Zulu.md', 'Add: Alpha.md']);
+    second.close();
+    host.store = new ThinkingStore(vault);
+    addThinkingToExploration({} as App, host, { path: 'Notebook.md', blockId: 'comment-two' });
+    await settle();
+    expect(document.body.textContent).not.toContain('Recent explicit choices (this session only)');
+    expect(
+      [...document.querySelectorAll('button')]
+        .filter((button) => button.textContent?.startsWith('Add:'))
+        .map((button) => button.textContent),
+    ).toEqual(['Add: Alpha.md', 'Add: Zulu.md']);
+    expect((await host.store.read('Alpha.md')).raw).toBe(
+      '---\nfileClass: Exploration\n---\nOriginal prose.\n',
+    );
+    expect((await host.store.read('Zulu.md')).memberships).toHaveLength(1);
+  });
+  it('picker search stays separate from saved-material search and Cancel restores the same item/list query', async () => {
+    const { host, vault } = await populated();
+    for (const path of ['Alpha.md', 'Beta.md'])
+      await vault.create(path, '---\nfileClass: Exploration\n---\n');
+    host.explorationPaths = () => ['Alpha.md', 'Beta.md'];
+    openThinkingBrowser({} as App, host);
+    await settle();
+    button('Search').click();
+    let field = document.querySelector('input')!;
+    field.value = 'quiet';
+    field.dispatchEvent(new Event('input'));
+    await settle();
+    resultButton('Comment — A quiet thought').click();
+    button('Add to exploration').click();
+    expect(document.querySelector('input')).toBeNull();
+    button('Search').click();
+    field = document.querySelector('input')!;
+    expect(field.getAttribute('aria-label')).toBe('Search explorations');
+    field.value = 'Beta';
+    field.dispatchEvent(new Event('input'));
+    await settle();
+    expect(button('Add: Beta.md')).toBeDefined();
+    button('Cancel').click();
+    await settle();
+    expect(button('Edit comment')).toBeDefined();
+    button('Back').click();
+    await settle();
+    expect(document.querySelector('input')?.value).toBe('quiet');
+    expect(resultButton('Comment — A quiet thought')).toBeDefined();
+    expect((await host.store.read('Beta.md')).memberships).toEqual([]);
+  });
+  it('only the eight most recent explicit exploration choices are labelled recent', async () => {
+    const { host, vault } = await populated();
+    const paths = Array.from({ length: 10 }, (_, index) => `Explore-${index}.md`);
+    for (const path of paths) await vault.create(path, '---\nfileClass: Exploration\n---\n');
+    host.explorationPaths = () => paths;
+    const first = addThinkingToExploration({} as App, host, {
+      path: 'Notebook.md',
+      blockId: 'comment-one',
+    });
+    await settle();
+    for (const path of paths) {
+      button(`Add: ${path}`).click();
+      await settle();
+    }
+    first.close();
+    addThinkingToExploration({} as App, host, { path: 'Notebook.md', blockId: 'comment-two' });
+    await settle();
+    expect(
+      [...document.querySelectorAll('button')]
+        .filter((button) => button.textContent?.startsWith('Add:'))
+        .map((button) => button.textContent),
+    ).toEqual([
+      'Add: Explore-9.md',
+      'Add: Explore-8.md',
+      'Add: Explore-7.md',
+      'Add: Explore-6.md',
+      'Add: Explore-5.md',
+      'Add: Explore-4.md',
+      'Add: Explore-3.md',
+      'Add: Explore-2.md',
+      'Add: Explore-0.md',
+      'Add: Explore-1.md',
+    ]);
+    expect(document.body.textContent).toContain('Other explorations');
+  });
+  it('picker search shortlists beyond the read budget and verified recent choices stay visible on reopen', async () => {
+    const { host, vault } = await populated();
+    const paths = Array.from({ length: 101 }, (_, index) => `Exploration-${index}.md`);
+    for (const path of paths) await vault.create(path, '---\nfileClass: Exploration\n---\n');
+    host.explorationPaths = () => paths;
+    const first = addThinkingToExploration({} as App, host, {
+      path: 'Notebook.md',
+      blockId: 'comment-one',
+    });
+    await settle();
+    button('Search').click();
+    const field = document.querySelector('input')!;
+    field.value = 'Exploration-100';
+    field.dispatchEvent(new Event('input'));
+    await settle();
+    button('Add: Exploration-100.md').click();
+    await settle();
+    first.close();
+    addThinkingToExploration({} as App, host, { path: 'Notebook.md', blockId: 'comment-two' });
+    await settle();
+    await vi.waitFor(() =>
+      expect(document.body.textContent).not.toContain('Loading saved material'),
+    );
+    expect(button('Add: Exploration-100.md')).toBeDefined();
+    expect(document.body.textContent).toContain('Recent explicit choices (this session only)');
+  });
   it('a superseded search cannot paint old literal evidence after the new query settles', async () => {
     const { host, vault } = fixture();
     await vault.create('Source.md', '---\ntype: article\n---\nOnly capybara appears.\n');
