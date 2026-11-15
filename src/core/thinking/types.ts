@@ -51,6 +51,10 @@ export interface ThinkingResult<File extends NoteFile> {
   phase: ThinkingPhase;
   records: ThinkingRecord[];
   originalRecords: ThinkingRecord[];
+  /** Entries created/changed by this operation, distinct from the whole current file. */
+  affectedRecords?: ThinkingRecord[];
+  /** Proposed native anchors only, not proof of saving, on Possibly saved. */
+  attemptedRecords?: ThinkingRecord[];
   document?: ThinkingDocument<File>;
   retainedSource?: Snapshot<File>;
   message?: string;

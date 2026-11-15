@@ -2,7 +2,7 @@ import { ChangedNote, readDocument, requireArticle } from './document';
 import { bounded } from '../content/bounds';
 import { excludedReaderPath } from './model';
 import type { NoteFile, Snapshot, VaultPort } from './store';
-import { SerialWrites } from './work';
+import { SerialWrites, WorkQueue } from './work';
 import { localCollectionDate } from './quotation';
 import {
   anchorCounts,
@@ -29,6 +29,11 @@ import type {
 export * from './thinking/types';
 export { sourceProjection } from './thinking/source';
 export {
+  projectThinking,
+  type ThinkingReadProjection,
+  type ThinkingProjectedEntry,
+} from './thinking/projection';
+export {
   ThinkingProtection,
   type ThinkingProtectionAuthority,
   type ThinkingReferenceObservation,
@@ -38,6 +43,8 @@ export {
 export class ThinkingStore<File extends NoteFile> {
   private active = true;
   private writes = new SerialWrites<File>();
+  private reads = new WorkQueue(3);
+  private readSequence = 0;
   private actions = new SerialWrites<string>();
   private pending = new Set<Promise<unknown>>();
   private inFlight = new Map<string, Promise<ThinkingResult<File>>>();
@@ -47,6 +54,7 @@ export class ThinkingStore<File extends NoteFile> {
   ) {}
   dispose(): void {
     this.active = false;
+    this.reads.stop();
   }
   async drain(): Promise<void> {
     while (this.pending.size) await Promise.allSettled([...this.pending]);
@@ -66,14 +74,25 @@ export class ThinkingStore<File extends NoteFile> {
     void promise.then(done, done);
     return promise;
   }
-  async read(path: string): Promise<ThinkingDocument<File>> {
-    this.guard();
+  async read(path: string, guard?: () => void): Promise<ThinkingDocument<File>> {
+    this.guard(guard);
     const file = this.vault.file(path);
     if (!file) throw new Error('The notebook no longer exists. Configure an existing notebook.');
     this.identity(file, path);
-    const raw = await this.vault.read(file);
+    let raw = '';
+    await this.track(
+      this.reads.enqueue(
+        String(++this.readSequence),
+        async () => {
+          this.guard(guard);
+          this.identity(file, path);
+          raw = await this.vault.read(file);
+        },
+        true,
+      ),
+    );
     bounded(raw);
-    this.guard();
+    this.guard(guard);
     this.identity(file, path);
     return parseThinking(file, raw);
   }
@@ -119,6 +138,7 @@ export class ThinkingStore<File extends NoteFile> {
   ): Promise<ThinkingResult<File>> {
     return this.writes.run(document.file, async () => {
       let dispatched = false;
+      let affected: ThinkingRecord[] = [];
       try {
         this.guard(extra);
         this.identity(document.file, document.path);
@@ -144,7 +164,14 @@ export class ThinkingStore<File extends NoteFile> {
           document.path,
           current,
         );
+        bounded(next);
         const proposed = parseThinking(document.file, next);
+        affected = proposed.records.filter(
+          (record) =>
+            !document.records.some(
+              (previous) => previous.blockId === record.blockId && previous.raw === record.raw,
+            ),
+        );
         if (proposed.issues.length > document.issues.length)
           throw new Error('The proposed Markdown is not an unambiguous native Thinking record.');
         await this.vault.process(document.file, (raw) => {
@@ -174,6 +201,7 @@ export class ThinkingStore<File extends NoteFile> {
           phase,
           records: verified.records,
           originalRecords: originals,
+          affectedRecords: affected,
           document: verified,
           retainedSource: source,
         };
@@ -183,6 +211,7 @@ export class ThinkingStore<File extends NoteFile> {
           phase,
           records: [],
           originalRecords: originals,
+          attemptedRecords: dispatched ? affected : undefined,
           retainedSource: source,
           message: dispatched
             ? 'Possibly saved — open the native note to check. Do not blindly retry.'
@@ -287,12 +316,15 @@ export class ThinkingStore<File extends NoteFile> {
             (record) =>
               record.kind === 'passage' &&
               !record.readOnly &&
-              record.body === selected.body &&
               record.before === selected.before &&
               record.after === selected.after &&
               record.source &&
               this.sameTarget(record.source, { path: request.source.path }, document.path, true),
           );
+          if (same.some((record) => record.body !== selected.body))
+            throw new Error(
+              'An existing candidate snapshot was edited. Open the notebook before retrying capture.',
+            );
           if (same.length > 1)
             throw new Error(
               'Several saved passages match. Open the notebook to inspect existing candidates.',
@@ -304,6 +336,7 @@ export class ThinkingStore<File extends NoteFile> {
               phase: 'notebook',
               records: same,
               originalRecords: same,
+              affectedRecords: same,
               document,
             };
           retained = await this.retain(request.source, request.guard);
@@ -420,23 +453,22 @@ export class ThinkingStore<File extends NoteFile> {
     sourcePath: string,
     fileOnly = false,
   ): boolean {
-    const resolve = (target: ThinkingTarget) =>
-      this.vault.resolveLink?.(target.path, sourcePath) ??
-      this.vault.file(target.path) ??
-      this.vault.file(target.path + '.md');
-    const af = resolve(a),
-      bf = resolve(b);
+    const af = this.resolveTarget(a, sourcePath),
+      bf = this.resolveTarget(b, sourcePath);
+    if (this.vault.resolveLink && (!af || !bf)) return false;
     return (
       (af && bf ? af === bf : a.path.replace(/\.md$/i, '') === b.path.replace(/\.md$/i, '')) &&
       (fileOnly || a.blockId === b.blockId)
     );
   }
+  private resolveTarget(target: ThinkingTarget, sourcePath: string): File | undefined {
+    return this.vault.resolveLink
+      ? this.vault.resolveLink(target.path, sourcePath)
+      : (this.vault.file(target.path) ?? this.vault.file(target.path + '.md'));
+  }
   private async validateTarget(target: ThinkingTarget, sourcePath: string): Promise<void> {
     targetLink(target);
-    const file =
-      this.vault.resolveLink?.(target.path, sourcePath) ??
-      this.vault.file(target.path) ??
-      this.vault.file(target.path + '.md');
+    const file = this.resolveTarget(target, sourcePath);
     if (!file) throw new Error('The native target is unresolved. Open Markdown to inspect it.');
     if (target.blockId) {
       const doc = await this.read(file.path);
@@ -636,10 +668,7 @@ export class ThinkingStore<File extends NoteFile> {
                 throw new Error('The retained source does not match the inclusion.');
               retained = await this.retain(request.source, request.guard);
             } else if (!request.target.blockId) {
-              const file =
-                this.vault.resolveLink?.(request.target.path, document.path) ??
-                this.vault.file(request.target.path) ??
-                this.vault.file(request.target.path + '.md');
+              const file = this.resolveTarget(request.target, document.path);
               if (file) {
                 const raw = await this.vault.read(file),
                   doc = readDocument(raw);
@@ -729,7 +758,8 @@ export class ThinkingStore<File extends NoteFile> {
     const unique = [...new Set(paths)].filter((path) => !excludedReaderPath(path));
     const needle = query.trim().toLocaleLowerCase();
     let inspected = 0,
-      cancelled = false;
+      cancelled = false,
+      coverage = true;
     const current = () => {
       try {
         this.guard(options.guard);
@@ -746,12 +776,14 @@ export class ThinkingStore<File extends NoteFile> {
       if (inspected >= maxReads || hits.length >= limit) break;
       inspected++;
       try {
-        const document = await this.read(path);
+        const document = await this.read(path, () => {
+          if (!current()) throw new Error('Search cancelled.');
+        });
         if (!current()) {
           cancelled = true;
           break;
         }
-        if (document.raw.length > 2_000_000) continue;
+        if (document.issues.length) coverage = false;
         const doc = readDocument(document.raw);
         if (doc.properties.type === 'article') {
           if (
@@ -761,6 +793,13 @@ export class ThinkingStore<File extends NoteFile> {
           )
             hits.push({ path, evidence: 'literal', text: doc.body.slice(0, 500) });
         } else {
+          if (
+            !document.records.length &&
+            (!needle ||
+              doc.body.toLocaleLowerCase().includes(needle) ||
+              path.toLocaleLowerCase().includes(needle))
+          )
+            hits.push({ path, evidence: 'literal', text: doc.body.slice(0, 500) });
           for (const record of document.records) {
             if (hits.length >= limit) break;
             if (!needle || record.body.toLocaleLowerCase().includes(needle))
@@ -773,10 +812,19 @@ export class ThinkingStore<File extends NoteFile> {
           }
         }
       } catch {
-        /* Missing/unsupported notes do not authorize writes. */
+        coverage = false;
+        if (!current()) {
+          cancelled = true;
+          break;
+        }
       }
     }
-    return { hits, inspected, complete: !cancelled && inspected === unique.length, cancelled };
+    return {
+      hits,
+      inspected,
+      complete: coverage && !cancelled && inspected === unique.length,
+      cancelled,
+    };
   }
   context(record: ThinkingRecord, source: Snapshot<File>) {
     if (!record.source || !this.sameTarget(record.source, { path: source.path }, record.path, true))
