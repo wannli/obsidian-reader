@@ -96,16 +96,19 @@ export class ThinkingStore<File extends NoteFile> {
     this.identity(file, path);
     return parseThinking(file, raw);
   }
-  private async validateSource(source: Snapshot<File>, extra?: () => void): Promise<void> {
+  private async validateSource(source: Snapshot<File>, extra?: () => void): Promise<() => void> {
+    const witness = this.options.observeSource?.(source) ?? (() => {});
     this.guard(extra);
     this.identity(source.file, source.path);
     this.vault.assertWritable(source.file, source.raw);
     const raw = await this.vault.read(source.file);
+    witness();
     this.guard(extra);
     this.identity(source.file, source.path);
     this.vault.assertWritable(source.file, raw);
     if (raw !== source.raw || requireArticle(raw).body !== source.body)
       throw new ChangedNote('Source text changed. Reopen the article before saving.');
+    return witness;
   }
   private async retain(source: Snapshot<File>, extra?: () => void): Promise<Snapshot<File>> {
     await this.validateSource(source, extra);
@@ -143,8 +146,9 @@ export class ThinkingStore<File extends NoteFile> {
         this.guard(extra);
         this.identity(document.file, document.path);
         this.vault.assertWritable(document.file, document.raw);
-        if (source) await this.validateSource(source, extra);
+        const sourceWitness = source ? await this.validateSource(source, extra) : () => {};
         const current = await this.vault.read(document.file);
+        sourceWitness();
         this.guard(extra);
         this.identity(document.file, document.path);
         this.vault.assertWritable(document.file, current);
@@ -175,6 +179,7 @@ export class ThinkingStore<File extends NoteFile> {
         if (proposed.issues.length > document.issues.length)
           throw new Error('The proposed Markdown is not an unambiguous native Thinking record.');
         await this.vault.process(document.file, (raw) => {
+          sourceWitness();
           this.guard(extra);
           this.identity(document.file, document.path);
           this.vault.assertWritable(document.file, raw);

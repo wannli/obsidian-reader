@@ -64,6 +64,9 @@ export interface ThinkingOptions<File extends NoteFile> {
   retainSource?: (source: Snapshot<File>, guard: () => void) => Promise<Snapshot<File>>;
   now?: () => Date;
   guard?: () => void;
+  /** Capture synchronous native source-revision authority before a source read.
+   * Returned witness must throw on observed native edits/moves/identity changes. */
+  observeSource?: (source: Snapshot<File>) => () => void;
   /** Host proves configured Fileclass binding from fresh ordinary note bytes. */
   validateContainer?: (kind: 'notebook' | 'exploration', path: string, raw: string) => void;
 }
