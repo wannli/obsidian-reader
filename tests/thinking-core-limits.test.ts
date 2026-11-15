@@ -29,6 +29,7 @@ it('allocates around native anchors in newly authored content, not only preexist
     body: 'Authored block.\n\n^comment-1',
   });
   expect(result.status, result.message).toBe('saved');
-  expect(result.affectedRecords?.[0].blockId).toBe('comment-2');
+  expect(result.affectedRecords?.[0].blockId).toMatch(/^comment-[a-f0-9]{32}$/);
+  expect(result.affectedRecords?.[0].blockId).not.toBe('comment-1');
   expect(result.affectedRecords?.[0].body).toBe('Authored block.\n\n^comment-1');
 });

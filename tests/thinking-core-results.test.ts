@@ -26,9 +26,8 @@ it('distinguishes affected entries from the whole current notebook and exposes a
   const uncertain = await store.comment({ notebookPath: 'Book.md', body: 'Maybe saved.' });
   expect(uncertain.status).toBe('possibly-saved');
   expect(uncertain.records).toEqual([]);
-  expect(uncertain.attemptedRecords?.map((record) => [record.blockId, record.body])).toEqual([
-    ['comment-3', 'Maybe saved.'],
-  ]);
+  expect(uncertain.attemptedRecords?.map((record) => record.body)).toEqual(['Maybe saved.']);
+  expect(uncertain.attemptedRecords?.[0].blockId).toMatch(/^comment-[a-f0-9]{32}$/);
 });
 it('preserves manually edited snapshots rather than silently deduplicating or appending another candidate on retry', async () => {
   const vault = new MemoryVault();

@@ -224,10 +224,16 @@ export class ThinkingStore<File extends NoteFile> {
   }
   private allocate(raw: string, kind: string): string {
     const occupied = anchorCounts(raw);
-    for (let index = 1; ; index++) {
-      const id = `${kind}-${index}`;
+    // Native references can outlive deletion/editing of their target anchor. Never
+    // deliberately recycle the smallest free name: fresh mobile Web Crypto entropy
+    // avoids retargeting stale links without a persisted history or sidecar identity.
+    for (let attempt = 0; attempt < 100; attempt++) {
+      const bytes = globalThis.crypto.getRandomValues(new Uint8Array(16));
+      const token = Array.from(bytes, (value) => value.toString(16).padStart(2, '0')).join('');
+      const id = `${kind}-${token}`;
       if (!occupied.has(id)) return id;
     }
+    throw new Error('Could not allocate a collision-free native anchor. Nothing was overwritten.');
   }
   private append(
     document: ThinkingDocument<File>,

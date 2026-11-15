@@ -16,6 +16,11 @@ async function setup() {
   const store = new ThinkingStore(vault, { now: () => new Date(2026, 10, 15) });
   await store.comment({ notebookPath: 'Book.md', body: 'An unclassified galaxy thought.' });
   await store.comment({ notebookPath: 'Book.md', body: 'Another unassigned entry.' });
+  const generated = await store.read('Book.md');
+  let native = generated.raw;
+  for (const [index, record] of generated.records.entries())
+    native = native.replace(`^${record.blockId}`, `^comment-${index + 1}`);
+  vault.bytes.set(generated.file, native);
   return { vault, store };
 }
 it('searches unread sources, unclassified comments and exploration writing without storing state or inferring edges', async () => {

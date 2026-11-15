@@ -61,7 +61,7 @@ it('includes an original in an exploration without copying it and duplicate incl
     target,
   });
   expect(included.status).toBe('saved');
-  expect(included.document?.raw).toContain(`- [[Notebook.md#^comment-1]]`);
+  expect(included.document?.raw).toContain(`- [[Notebook.md#^${target.blockId}]]`);
   expect(included.document?.raw).not.toContain('An independent thought.');
   const again = await thinking.editExploration({
     document: await thinking.read('Explore.md'),

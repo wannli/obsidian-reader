@@ -7,6 +7,12 @@ async function free(body: string) {
   await vault.create('Book.md', '---\nfileClass: Notebook\n---\nOutside before.\n');
   const store = new ThinkingStore(vault, { now: () => new Date(2026, 10, 15) });
   const result = await store.comment({ notebookPath: 'Book.md', body });
+  const generated = await store.read('Book.md');
+  // A deliberately native-authored fixture anchor, not allocator output authority.
+  vault.bytes.set(
+    generated.file,
+    generated.raw.replace(`^${generated.records[0].blockId}`, '^comment-1'),
+  );
   return { vault, store, result, document: await store.read('Book.md') };
 }
 it('preserves nested callouts, fenced Connections headings, metadata-like quotation text and multiline lists as body', async () => {
@@ -34,10 +40,10 @@ it('allocates anchors against the whole fresh file, including unknown/fenced nat
   vault.bytes.set(document.file, document.raw + '\n```\n^comment-2\n```\n');
   const result = await store.comment({ notebookPath: 'Book.md', body: 'Second.' });
   expect(result.status).toBe('saved');
-  expect((await store.read('Book.md')).records.map((record) => record.blockId)).toEqual([
-    'comment-1',
-    'comment-3',
-  ]);
+  const records = (await store.read('Book.md')).records;
+  expect(records[0].blockId).toBe('comment-1');
+  expect(records[1].blockId).toMatch(/^comment-[a-f0-9]{32}$/);
+  expect(records[1].blockId).not.toBe('comment-2');
 });
 it.each([
   ['missing anchor', (raw: string) => raw.replace('^comment-1', '')],

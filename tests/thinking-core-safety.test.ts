@@ -103,7 +103,7 @@ it.each(['read rejection', 'native edit', 'rename'] as const)(
     const result = await keep();
     expect(result.status).toBe('possibly-saved');
     expect(result.phase).toBe('notebook');
-    expect([...vault.bytes.values()].join('\n')).toContain('^passage-1');
+    expect([...vault.bytes.values()].join('\n')).toMatch(/\^passage-[a-f0-9]{32}/);
     settled = false;
     expect((await store.read(mode === 'rename' ? 'Renamed.md' : 'Book.md')).records).toHaveLength(
       1,

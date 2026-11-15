@@ -12,6 +12,13 @@ async function setup() {
     notebookPath: 'Book.md',
     body: 'Second thought with an incidental [[Book#^comment-1]] mention.',
   });
+  // Explicit native fixture anchors keep authored-link specimens deterministic;
+  // production-generated anchors are intentionally opaque and non-recycling.
+  const generated = await store.read('Book.md');
+  let native = generated.raw;
+  for (const [index, record] of generated.records.entries())
+    native = native.replace(`^${record.blockId}`, `^comment-${index + 1}`);
+  vault.bytes.set(generated.file, native);
   return { vault, store, document: await store.read('Book.md') };
 }
 it('persists one explicit directed connection, escapes its label and deduplicates the exact endpoint and label', async () => {
