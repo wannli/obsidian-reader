@@ -110,12 +110,19 @@ export class ThinkingStore<File extends NoteFile> {
       throw new ChangedNote('Source text changed. Reopen the article before saving.');
     return witness;
   }
-  private async retain(source: Snapshot<File>, extra?: () => void): Promise<Snapshot<File>> {
+  private async retain(
+    source: Snapshot<File>,
+    extra: (() => void) | undefined,
+    onRetained: (saved: Snapshot<File>) => void,
+  ): Promise<Snapshot<File>> {
     await this.validateSource(source, extra);
     if (!this.options.retainSource)
       throw new Error('Source retention is unavailable. Reopen Reader before saving.');
     // No target file lane is held while ArticleStore owns the source lane.
     const retained = await this.options.retainSource(source, () => this.guard(extra));
+    // Retention is a completed native phase. Record its exact returned evidence
+    // before any fallible revalidation, without claiming a notebook append.
+    onRetained(retained);
     if (retained.file !== source.file || retained.body !== source.body)
       throw new ChangedNote('The retained source changed.');
     await this.validateSource(retained, extra);
@@ -350,7 +357,9 @@ export class ThinkingStore<File extends NoteFile> {
               affectedRecords: same,
               document,
             };
-          retained = await this.retain(request.source, request.guard);
+          retained = await this.retain(request.source, request.guard, (saved) => {
+            retained = saved;
+          });
           const source: ThinkingTarget = {
             path: retained.path,
             ...(existingSourceAnchor(retained.body, request.from, request.to)
@@ -437,12 +446,17 @@ export class ThinkingStore<File extends NoteFile> {
             if (request.gap === undefined)
               throw new Error('Choose an explicit source paragraph gap.');
             context = sourceGap(request.source.body, request.gap);
-            retained = await this.retain(request.source, request.guard);
+            retained = await this.retain(request.source, request.guard, (saved) => {
+              retained = saved;
+            });
           } else if (request.gap !== undefined) throw new Error('A gap requires a source article.');
           if (request.about) {
             await this.validateTarget(request.about, document.path);
             const attached = await this.attachedSource(request.about, document.path);
-            if (attached) retained = await this.retain(attached, request.guard);
+            if (attached)
+              retained = await this.retain(attached, request.guard, (saved) => {
+                retained = saved;
+              });
           }
           const next = this.append(document, [
             {
@@ -720,7 +734,9 @@ export class ThinkingStore<File extends NoteFile> {
                 !this.sameTarget(request.target, { path: request.source.path }, document.path, true)
               )
                 throw new Error('The retained source does not match the inclusion.');
-              retained = await this.retain(request.source, request.guard);
+              retained = await this.retain(request.source, request.guard, (saved) => {
+                retained = saved;
+              });
             } else if (!request.target.blockId) {
               const file = this.resolveTarget(request.target, document.path);
               if (file) {
@@ -730,6 +746,9 @@ export class ThinkingStore<File extends NoteFile> {
                   retained = await this.retain(
                     { file, path: file.path, raw, body: doc.body, properties: doc.properties },
                     request.guard,
+                    (saved) => {
+                      retained = saved;
+                    },
                   );
               }
             }
