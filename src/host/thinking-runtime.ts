@@ -16,6 +16,18 @@ import { nodesApi } from './nodes';
 import type { ThinkingSettings } from './thinking-setup';
 import { recordReaderDebug } from './diagnostics';
 
+export interface SourceThinkingMaterial {
+  readonly revision: number;
+  readonly records: readonly ThinkingRecord[];
+  readonly complete: boolean;
+  readonly cancelled: boolean;
+  readonly documentsRead: number;
+  /** Native bytes reserved before dispatch, including failed/uncertain reads. */
+  readonly bytesBudgeted: number;
+}
+const SOURCE_NOTEBOOK_LIMIT = 12;
+const SOURCE_BYTE_LIMIT = 200000;
+
 /** Generation-owned native port: no shadow store or startup body scan. */
 export class ThinkingRuntime {
   readonly vault: ObsidianVault;
@@ -26,6 +38,13 @@ export class ThinkingRuntime {
   private pendingMetadata = new Set<TFile>();
   private notebookFile?: TFile;
   private sourceRevisions = new WeakMap<TFile, number>();
+  private materialRevision = 0;
+  private material?: SourceThinkingMaterial;
+  private materialWork?: {
+    revision: number;
+    subscribers: Set<() => boolean>;
+    promise: Promise<SourceThinkingMaterial>;
+  };
   constructor(
     readonly app: App,
     readonly articles: ArticleStore<TFile>,
@@ -118,6 +137,8 @@ export class ThinkingRuntime {
   }
   /** Native observations revoke negatives synchronously, including type loss and renames. */
   invalidate(file?: TFile, sourceChanged = true): void {
+    this.materialRevision++;
+    this.material = undefined;
     this.protection.invalidate();
     if (file && !excludedReaderPath(file.path)) {
       this.pendingMetadata.add(file);
@@ -125,6 +146,8 @@ export class ThinkingRuntime {
     }
   }
   metadataSettled(file?: TFile): void {
+    this.materialRevision++;
+    this.material = undefined;
     this.protection.invalidate();
     if (file) this.pendingMetadata.delete(file);
     else this.pendingMetadata.clear();
@@ -167,6 +190,7 @@ export class ThinkingRuntime {
     try {
       const result = await work();
       const durationMs = Math.max(0, Date.now() - started);
+      if (result.status === 'saved' || result.status === 'possibly-saved') this.invalidate();
       if (result.status === 'saved' || result.status === 'unchanged')
         recordReaderDebug({
           event: 'operation.completed',
@@ -199,6 +223,113 @@ export class ThinkingRuntime {
       else recordReaderDebug({ event: 'operation.cancelled', operation: 'capture', durationMs });
       throw error;
     }
+  }
+  get sourceMaterialRevision(): number {
+    return this.materialRevision;
+  }
+  /** Automatic article decoration has a total I/O/parse budget, independent of library size.
+   * Reuse read-only same-revision observations, including truthful partial coverage. */
+  readSourceMaterial(current: () => boolean): Promise<SourceThinkingMaterial> {
+    const revision = this.materialRevision;
+    if (this.material?.revision === revision) return Promise.resolve(this.material);
+    let work = this.materialWork;
+    if (!work || work.revision !== revision) {
+      const subscribers = new Set<() => boolean>([current]);
+      const active = () =>
+        this.guard() &&
+        revision === this.materialRevision &&
+        [...subscribers].some((valid) => valid());
+      const promise = this.scanSourceMaterial(revision, active).then((material) => {
+        if (!material.cancelled && this.guard() && revision === this.materialRevision)
+          this.material = material;
+        return material;
+      });
+      work = { revision, subscribers, promise };
+      this.materialWork = work;
+      const settled = () => {
+        if (this.materialWork?.promise === promise) this.materialWork = undefined;
+      };
+      void promise.then(settled, settled);
+    } else work.subscribers.add(current);
+    const subscribed = work;
+    return work.promise.finally(() => subscribed.subscribers.delete(current));
+  }
+  private async scanSourceMaterial(
+    revision: number,
+    active: () => boolean,
+  ): Promise<SourceThinkingMaterial> {
+    const records: ThinkingRecord[] = [];
+    if (!active())
+      return {
+        revision,
+        records,
+        complete: false,
+        cancelled: true,
+        documentsRead: 0,
+        bytesBudgeted: 0,
+      };
+    let complete = true,
+      documentsRead = 0,
+      bytesBudgeted = 0;
+    const paths = this.paths('notebook');
+    const preferred = this.notebookFile?.path;
+    if (preferred && this.vault.file(preferred) === this.notebookFile) {
+      const at = paths.indexOf(preferred);
+      if (at >= 0) paths.splice(at, 1);
+      paths.unshift(preferred);
+    }
+    if (paths.length > SOURCE_NOTEBOOK_LIMIT) complete = false;
+    for (const path of paths.slice(0, SOURCE_NOTEBOOK_LIMIT)) {
+      if (!active()) break;
+      const file = this.vault.file(path),
+        size = file?.stat?.size;
+      const remaining = SOURCE_BYTE_LIMIT - bytesBudgeted;
+      if (
+        !file ||
+        typeof size !== 'number' ||
+        !Number.isSafeInteger(size) ||
+        size < 0 ||
+        size > remaining
+      ) {
+        complete = false;
+        continue;
+      }
+      const guard = () => {
+        if (
+          !active() ||
+          this.vault.file(path) !== file ||
+          file.path !== path ||
+          file.stat.size !== size
+        )
+          throw new Error('Source-material observation changed.');
+      };
+      try {
+        // Core retains its occupied native slot through settlement. Both preflight
+        // and the post-read guard run before its parser sees this document.
+        documentsRead++;
+        bytesBudgeted += size;
+        const document = await this.store.read(path, guard);
+        const bytes = new TextEncoder().encode(document.raw).byteLength;
+        if (bytes !== size) {
+          bytesBudgeted += Math.max(0, bytes - size);
+          complete = false;
+          if (bytesBudgeted >= SOURCE_BYTE_LIMIT) break;
+          continue;
+        }
+        records.push(...document.records);
+        if (document.issues.length) complete = false;
+      } catch {
+        complete = false;
+      }
+    }
+    return {
+      revision,
+      records,
+      complete: complete && active(),
+      cancelled: !active(),
+      documentsRead,
+      bytesBudgeted,
+    };
   }
   resolveSource(record: ThinkingRecord): TFile | undefined {
     return record.source ? this.vault.resolveLink(record.source.path, record.path) : undefined;
@@ -318,6 +449,8 @@ export class ThinkingRuntime {
   }
   dispose(): void {
     this.stopped = true;
+    this.materialRevision++;
+    this.material = undefined;
     this.protection.invalidate();
     this.store.dispose();
   }

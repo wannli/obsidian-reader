@@ -1,4 +1,27 @@
 import { Modal, Notice, type App } from 'obsidian';
+import type { ThinkingRecord, ThinkingTarget } from '../core/thinking';
+
+export interface ThinkingEditorResult {
+  status: string;
+  message?: string;
+  actions?: readonly { label: string; run(): void | Promise<void> }[];
+}
+/** Native evidence offers choices; it does not make this new draft saved. */
+export function thinkingEditorResult(
+  result: { status: string; existingCandidates?: readonly ThinkingRecord[] },
+  message: string,
+  open: (target: ThinkingTarget) => void | Promise<void>,
+): ThinkingEditorResult {
+  const candidates = result.existingCandidates ?? [];
+  return {
+    status: result.status,
+    message: candidates.length ? `This draft was not saved again. ${message}` : message,
+    actions: candidates.map((record) => ({
+      label: `Open existing saved writing — ${record.path} (^${record.blockId})`,
+      run: () => open({ path: record.path, blockId: record.blockId }),
+    })),
+  };
+}
 
 /** Explicit Markdown draft: cancellation never waits for provider/native settlement. */
 export function editThinkingMarkdown(
@@ -8,7 +31,7 @@ export function editThinkingMarkdown(
     preview?: string;
     body?: string;
     signal: AbortSignal;
-    save(body: string, signal: AbortSignal): Promise<{ status: string; message?: string }>;
+    save(body: string, signal: AbortSignal): Promise<ThinkingEditorResult>;
   },
 ): void {
   const lifetime = new AbortController();
@@ -52,6 +75,21 @@ export function editThinkingMarkdown(
                 ? 'Possibly saved — open notebook to check. Do not repeat this save blindly.'
                 : 'Not saved. Open the notebook and check before retrying.');
             cancel.textContent = 'Close';
+            for (const action of result.actions ?? []) {
+              const choice = actions.createEl('button', { text: action.label });
+              choice.addEventListener('click', () => {
+                if (lifetime.signal.aborted) return;
+                // Close/cancel synchronously, independently of any navigation work.
+                this.close();
+                try {
+                  void Promise.resolve(action.run()).catch(
+                    (error) => new Notice(error instanceof Error ? error.message : String(error)),
+                  );
+                } catch (error) {
+                  new Notice(error instanceof Error ? error.message : String(error));
+                }
+              });
+            }
             // An uncertain dispatch is never exposed as an automatic re-append.
           }
         } catch (error) {

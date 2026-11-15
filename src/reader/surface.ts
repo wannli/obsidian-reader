@@ -41,6 +41,7 @@ export class ReadingSurface {
   private restoring = false;
   private layoutPending = false;
   private restorePending = false;
+  private layoutChanges: (() => void)[] = [];
   private restoreFrame?: number;
   private saveTimer?: ReturnType<typeof setTimeout>;
   private boundaryRevision = 0;
@@ -184,10 +185,32 @@ export class ReadingSurface {
     }
   }
 
+  /** Apply leaf-owned decorations as layout, never as source text or reading progress. */
+  layoutChange(change: () => void): void {
+    if (this.dead) return;
+    this.layoutChanges.push(change);
+    this.refresh();
+  }
+
   private refreshNow(): void {
     // Don't restore an older anchor if an update overtakes the scroll debounce.
     if (this.next && this.saveTimer !== undefined && !this.restorePending) this.flush();
     if (this.dead || this.nativeSelection()) return;
+    if (
+      this.layoutChanges.length &&
+      this.saveTimer !== undefined &&
+      !this.restorePending &&
+      !this.restoring &&
+      this.index
+    ) {
+      // Remember an intervening user scroll before changing geometry, without
+      // publishing a bookmark merely because saved thinking arrived.
+      const marker = textBookmark(this.body, this.viewport, this.index);
+      if (marker) {
+        this.marker = marker;
+        this.fallback = undefined;
+      } else this.fallback = this.viewportPosition();
+    }
     if (this.nextTopics) {
       const { key, node } = this.nextTopics;
       this.nextTopics = undefined;
@@ -214,6 +237,15 @@ export class ReadingSurface {
       this.index = new VisibleText(this.body);
       this.content = next.body;
       this.url = next.url;
+      this.layoutPending = this.restorePending = true;
+    }
+    if (this.layoutChanges.length) {
+      const changes = this.layoutChanges.splice(0);
+      for (const change of changes) change();
+      if (this.dead) return;
+      this.index = new VisibleText(this.body);
+      this.invalidateEnd();
+      this.feedback.dismiss();
       this.layoutPending = this.restorePending = true;
     }
     // Keep every authored heading/text node in the body and its source index.
@@ -695,6 +727,7 @@ export class ReadingSurface {
     this.events.abort();
     this.resize.disconnect();
     this.next = undefined;
+    this.layoutChanges = [];
     this.index = undefined;
     this.fallback = undefined;
     this.readingPosition = undefined;

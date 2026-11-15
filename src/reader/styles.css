@@ -1071,6 +1071,11 @@ dialog.reader-image-viewer,
   flex-wrap: wrap;
   gap: var(--size-4-2);
 }
+.reader-thinking-editor .reader-thinking-actions > button {
+  max-width: 100%;
+  height: auto;
+  overflow-wrap: anywhere;
+}
 .reader-thinking-list {
   display: grid;
   gap: var(--size-4-2);
@@ -1107,6 +1112,7 @@ dialog.reader-image-viewer,
 .reader-thinking-browser :is(button, input, select),
 .reader-thinking-editor :is(button, input, select),
 .reader-thinking-inline button,
+.reader-thinking-coverage button,
 .reader-thinking-paragraph-controls button {
   min-width: 44px;
   min-height: 44px;
@@ -1128,6 +1134,11 @@ dialog.reader-image-viewer,
 .reader-thinking-unplaced {
   break-before: column;
 }
+.reader-thinking-coverage {
+  margin-block: var(--size-4-2);
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
 .reader-thinking-paragraph-controls {
   display: inline-flex;
   vertical-align: middle;
@@ -1137,7 +1148,8 @@ dialog.reader-image-viewer,
 }
 .reader-thinking-browser :focus-visible,
 .reader-thinking-editor :focus-visible,
-.reader-thinking-inline :focus-visible {
+.reader-thinking-inline :focus-visible,
+.reader-thinking-coverage :focus-visible {
   outline: 2px solid var(--interactive-accent);
   outline-offset: 2px;
 }

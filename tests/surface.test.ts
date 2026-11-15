@@ -123,6 +123,68 @@ it('reports scroll boundaries only with measured content and no pending restorat
   expect(surface.atBoundary(1)).toBe(false);
 });
 
+it.each([false, true])(
+  'reflows source decorations onto the saved paged anchor without publishing a bookmark (initial restore settled: %s)',
+  (settled) => {
+    fixture(true);
+    surface.setBody(markdown, '');
+    surface.restore(secondMarker);
+    if (settled) frame();
+    expect(surface.viewport.scrollLeft).toBe(332);
+    surface.layoutChange(() => {
+      const aside = document.createElement('aside');
+      aside.dataset.readerDecoration = 'thinking';
+      aside.innerHTML = '<p>Your long saved comment</p><p>More writing</p>';
+      surface.body.querySelectorAll('p')[0].after(aside);
+      columns = 5;
+    });
+    expect(surface.viewport.scrollLeft).toBe(996);
+    frame();
+    expect(position).not.toHaveBeenCalled();
+  },
+);
+
+it('defers decoration layout changes throughout a pointer or native selection hold', () => {
+  fixture(true);
+  surface.setBody(markdown, '');
+  surface.restore(secondMarker);
+  frame();
+  const mutate = vi.fn();
+  pointer('pointerdown');
+  surface.layoutChange(mutate);
+  expect(mutate).not.toHaveBeenCalled();
+  select();
+  pointer('pointerup', document);
+  expect(mutate).not.toHaveBeenCalled();
+  deselect();
+  expect(mutate).toHaveBeenCalledOnce();
+  expect(surface.viewport.scrollLeft).toBe(332);
+  expect(position).not.toHaveBeenCalled();
+});
+
+it('preserves transient inspection and its original reading anchor through decoration reflow', () => {
+  fixture(true);
+  surface.setBody(markdown, '');
+  surface.restore(secondMarker);
+  frame();
+  surface.inspectContext(first);
+  frame();
+  surface.layoutChange(() => {
+    const aside = document.createElement('aside');
+    aside.dataset.readerDecoration = 'thinking';
+    aside.innerHTML = '<p>Your saved comment</p>';
+    surface.body.prepend(aside);
+    columns = 4;
+  });
+  expect(surface.isInspectingContext).toBe(true);
+  expect(surface.viewport.scrollLeft).toBe(332);
+  frame();
+  surface.continueReading();
+  expect(surface.viewport.scrollLeft).toBe(664);
+  frame();
+  expect(position).not.toHaveBeenCalled();
+});
+
 function frame(): void {
   const pending = [...frames.values()];
   frames.clear();

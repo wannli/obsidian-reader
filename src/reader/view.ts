@@ -60,7 +60,7 @@ import { TapHighlighter, type TapToolbarAction } from './tap-highlighter';
 import { blockSpans } from '../core/markdown';
 import type { ThinkingRecord, ThinkingTarget } from '../core/thinking';
 import { ThinkingRuntime, thinkingSaveMessage } from '../host/thinking-runtime';
-import { editThinkingMarkdown } from '../host/thinking-editor';
+import { editThinkingMarkdown, thinkingEditorResult } from '../host/thinking-editor';
 import { previewThinkingSelection } from '../host/thinking-capture';
 import { thinkingContextMarker, thinkingSelectionOffsets } from './thinking-selection';
 
@@ -115,6 +115,7 @@ export class ReaderView extends ItemView {
   private surface?: ReadingSurface;
   private thinkingObserver?: MutationObserver;
   private thinkingPaint = 0;
+  private thinkingProjectionPending = false;
   private thinkingMenuSurfaces = new WeakSet<ReadingSurface>();
   private thinkingParagraphMenu?: {
     surface: ReadingSurface;
@@ -446,6 +447,7 @@ export class ReaderView extends ItemView {
     return button;
   }
   private clear(): void {
+    this.thinkingProjectionPending = false;
     this.thinkingObserver?.disconnect();
     this.thinkingObserver = undefined;
     this.rowIndicators?.dispose();
@@ -1103,6 +1105,8 @@ export class ReaderView extends ItemView {
       surface.setBody(snapshot.body, article.url);
       this.installRelationTargets(surface);
       if (this.surface !== surface) return; // The synchronous error callback installed the escape hatch.
+      if (this.host.thinking)
+        surface.layoutChange(() => this.installThinkingParagraphMenu(surface));
       surface.restore(readingMarker(snapshot.properties.bookmark) ?? '');
       if (this.surface !== surface) return;
       if (subpath) this.revealSubpath(surface, subpath);
@@ -1116,7 +1120,6 @@ export class ReaderView extends ItemView {
       });
       this.controls();
       if (this.host.thinking) {
-        this.installThinkingParagraphMenu(surface);
         this.thinkingObserver = new MutationObserver((changes) => {
           const sourceChanged = changes.some((change) =>
             [...change.addedNodes, ...change.removedNodes].some(
@@ -1132,7 +1135,10 @@ export class ReaderView extends ItemView {
             !this.current(current, token!)
           )
             return;
-          this.installThinkingParagraphMenu(surface);
+          surface.layoutChange(() => {
+            if (this.current(current, token!) && surface.displayedBody === current.body)
+              this.installThinkingParagraphMenu(surface);
+          });
           void this.paintThinking(current, token!);
         });
         this.thinkingObserver.observe(surface.body, { childList: true });
@@ -1623,7 +1629,9 @@ export class ReaderView extends ItemView {
               );
           }
         }
-        return { status: result.status, message: thinkingSaveMessage(result) };
+        return thinkingEditorResult(result, thinkingSaveMessage(result), (target) =>
+          this.host.openSavedMaterial?.(target),
+        );
       } finally {
         if (this.writing === promise) this.writing = undefined;
       }
@@ -1692,7 +1700,9 @@ export class ReaderView extends ItemView {
                   this.thinkingFeedback(thinkingSaveMessage(result), runtime.notebookPath());
                   void this.paintThinking(this.snapshot!, generation);
                 }
-                return { status: result.status, message: thinkingSaveMessage(result) };
+                return thinkingEditorResult(result, thinkingSaveMessage(result), (target) =>
+                  this.host.openSavedMaterial?.(target),
+                );
               },
             });
           } catch (error) {
@@ -1740,123 +1750,129 @@ export class ReaderView extends ItemView {
       surface = this.surface;
     if (!runtime || !surface) return;
     const paint = ++this.thinkingPaint;
-    const current = () =>
-      paint === this.thinkingPaint &&
+    const sourceCurrent = () =>
       this.current(source, generation) &&
       this.surface === surface &&
       this.snapshot?.body === source.body;
-    const records: ThinkingRecord[] = [];
-    let incomplete = false;
-    for (const path of runtime.paths('notebook')) {
-      if (!current()) return;
-      try {
-        records.push(
-          ...(
-            await runtime.store.read(path, () => {
-              if (!current()) throw new Error('Thinking projection superseded.');
-            })
-          ).records,
-        );
-      } catch {
-        incomplete = true;
-      }
+    const current = () => paint === this.thinkingPaint && sourceCurrent();
+    const material = await runtime.readSourceMaterial(current);
+    const records = material.records;
+    const paintingCurrent = () =>
+      current() && !material.cancelled && material.revision === runtime.sourceMaterialRevision;
+    if (!paintingCurrent()) return;
+    if (selectionRange(surface.body) || surface.pointerActive) {
+      this.thinkingProjectionPending = true;
+      return;
     }
-    if (!current() || selectionRange(surface.body) || surface.pointerActive) return;
-    for (const element of surface.body.querySelectorAll('[data-reader-decoration="thinking"]'))
-      element.remove();
-    const paragraphs = [...surface.body.querySelectorAll<HTMLElement>('p')].filter(
-      (p) => !p.closest('[data-reader-decoration]'),
-    );
-    const spans = paragraphs.map((paragraph) => {
-      try {
-        const range = paragraph.ownerDocument.createRange();
-        range.selectNodeContents(paragraph);
-        const selection = selectedPassage(surface.body, range);
-        return selection
-          ? { paragraph, ...thinkingSelectionOffsets(source.body, selection) }
-          : undefined;
-      } catch {
-        return undefined;
+    surface.layoutChange(() => {
+      if (!paintingCurrent()) return;
+      for (const element of surface.body.querySelectorAll('[data-reader-decoration="thinking"]'))
+        element.remove();
+      const paragraphs = [...surface.body.querySelectorAll<HTMLElement>('p')].filter(
+        (p) => !p.closest('[data-reader-decoration]'),
+      );
+      const sourceParagraphs = blockSpans(source.body).paragraphs;
+      const spans = paragraphs.map((paragraph) => {
+        try {
+          const range = paragraph.ownerDocument.createRange();
+          range.selectNodeContents(paragraph);
+          const selection = selectedPassage(surface.body, range);
+          if (!selection) return;
+          const offsets = thinkingSelectionOffsets(source.body, selection);
+          const proven = sourceParagraphs.filter(
+            (span) => span.from <= offsets.from && span.to >= offsets.to,
+          );
+          return proven.length === 1 ? { paragraph, ...offsets, gap: proven[0].to } : undefined;
+        } catch {
+          return undefined;
+        }
+      });
+      let unplaced: HTMLElement | undefined;
+      const append = (record: ThinkingRecord, reference = record) => {
+        const context = runtime.store.context(reference, source);
+        const match =
+          context.status === 'exact' && context.from !== undefined
+            ? spans.find(
+                (span) =>
+                  span &&
+                  (reference.kind === 'comment'
+                    ? span.gap === context.from
+                    : span.from <= context.from! && span.to >= context.from!),
+              )
+            : undefined;
+        const note = document.createElement('aside');
+        note.className = 'reader-thinking-inline';
+        note.dataset.readerDecoration = 'thinking';
+        note.createEl('strong', {
+          text: record.kind === 'comment' ? 'Your comment' : 'Kept passage — saved attention',
+        });
+        note.createDiv({ text: record.body, cls: 'reader-thinking-body' });
+        this.button(note, 'Open saved entry', () =>
+          this.host.openSavedMaterial?.(runtime.target(record)),
+        );
+        if (record.kind === 'comment' && !record.readOnly)
+          this.button(note, 'Edit comment', () =>
+            editThinkingMarkdown(this.app, {
+              title: 'Edit comment',
+              body: record.body,
+              signal: this.articleLifetime.signal,
+              save: async (body, signal) => {
+                const result = await runtime.store.editComment({
+                  record,
+                  body,
+                  guard: () => {
+                    if (signal.aborted || !sourceCurrent())
+                      throw new Error('The article changed. Reopen the comment.');
+                  },
+                });
+                if (result.status === 'saved' || result.status === 'possibly-saved')
+                  runtime.invalidate();
+                if (sourceCurrent()) {
+                  this.thinkingFeedback(thinkingSaveMessage(result), record.path);
+                  void this.paintThinking(source, generation);
+                }
+                return { status: result.status, message: thinkingSaveMessage(result) };
+              },
+            }),
+          );
+        if (match) match.paragraph.after(note);
+        else {
+          if (!unplaced) {
+            unplaced = surface.body.createEl('section', {
+              cls: 'reader-thinking-unplaced',
+              attr: { 'data-reader-decoration': 'thinking' },
+            });
+            unplaced.createEl('h2', { text: 'Unplaced saved thinking' });
+            unplaced.createEl('p', {
+              text: 'Source context could not be placed uniquely. Your saved words have not changed.',
+            });
+          }
+          unplaced.append(note);
+        }
+      };
+      for (const record of records) {
+        if (record.source && runtime.resolveSource(record) === source.file) append(record);
+        else if (record.kind === 'comment' && record.about) {
+          const target = runtime.vault.resolveLink(record.about.path, record.path);
+          const about = records.find(
+            (candidate) =>
+              candidate.blockId === record.about?.blockId &&
+              runtime.vault.file(candidate.path) === target,
+          );
+          if (about && runtime.resolveSource(about) === source.file) append(record, about);
+        }
+      }
+      if (!material.complete) {
+        const coverage = surface.body.createEl('aside', {
+          cls: 'reader-thinking-coverage',
+          attr: { 'data-reader-decoration': 'thinking' },
+        });
+        coverage.createEl('p', {
+          text: 'Some saved thinking is not shown. Article decorations check at most 12 notebooks and 200,000 bytes; unreadable or uncertain material is also omitted.',
+        });
+        this.button(coverage, 'Open saved material', () => this.host.openSavedMaterial?.());
       }
     });
-    let unplaced: HTMLElement | undefined;
-    const append = (record: ThinkingRecord, reference = record) => {
-      const context = runtime.store.context(reference, source);
-      const match =
-        context.status === 'exact' && context.from !== undefined
-          ? spans.find(
-              (span) =>
-                span &&
-                (reference.kind === 'comment'
-                  ? span.to <= context.from! && !source.body.slice(span.to, context.from).trim()
-                  : span.from <= context.from! && span.to >= context.from!),
-            )
-          : undefined;
-      const note = document.createElement('aside');
-      note.className = 'reader-thinking-inline';
-      note.dataset.readerDecoration = 'thinking';
-      note.createEl('strong', {
-        text: record.kind === 'comment' ? 'Your comment' : 'Kept passage — saved attention',
-      });
-      note.createDiv({ text: record.body, cls: 'reader-thinking-body' });
-      this.button(note, 'Open saved entry', () =>
-        this.host.openSavedMaterial?.(runtime.target(record)),
-      );
-      if (record.kind === 'comment' && !record.readOnly)
-        this.button(note, 'Edit comment', () =>
-          editThinkingMarkdown(this.app, {
-            title: 'Edit comment',
-            body: record.body,
-            signal: this.articleLifetime.signal,
-            save: async (body, signal) => {
-              const result = await runtime.store.editComment({
-                record,
-                body,
-                guard: () => {
-                  if (signal.aborted || !current())
-                    throw new Error('The article changed. Reopen the comment.');
-                },
-              });
-              if (current()) {
-                this.thinkingFeedback(thinkingSaveMessage(result), record.path);
-                void this.paintThinking(source, generation);
-              }
-              return { status: result.status, message: thinkingSaveMessage(result) };
-            },
-          }),
-        );
-      if (match) match.paragraph.after(note);
-      else {
-        if (!unplaced) {
-          unplaced = surface.body.createEl('section', {
-            cls: 'reader-thinking-unplaced',
-            attr: { 'data-reader-decoration': 'thinking' },
-          });
-          unplaced.createEl('h2', { text: 'Unplaced saved thinking' });
-          unplaced.createEl('p', {
-            text: 'Source context could not be placed uniquely. Your saved words have not changed.',
-          });
-        }
-        unplaced.append(note);
-      }
-    };
-    for (const record of records) {
-      if (record.source && runtime.resolveSource(record) === source.file) append(record);
-      else if (record.kind === 'comment' && record.about) {
-        const target = runtime.vault.resolveLink(record.about.path, record.path);
-        const about = records.find(
-          (candidate) =>
-            candidate.blockId === record.about?.blockId &&
-            runtime.vault.file(candidate.path) === target,
-        );
-        if (about && runtime.resolveSource(about) === source.file) append(record, about);
-      }
-    }
-    if (incomplete)
-      this.thinkingFeedback(
-        'Some saved thinking could not be read. Open saved material or the notebook to inspect it.',
-      );
-    surface.refresh();
   }
   private updateStatus(): void {
     if (!this.snapshot || !this.status) return;
@@ -1887,10 +1903,17 @@ export class ReaderView extends ItemView {
     if (this.stopping || this.host.signal.aborted || this.dialog) return;
     if (this.host.thinking) {
       this.invalidateSelection();
-      if (this.surface && this.snapshot && !selectionRange(this.surface.body)) {
-        this.surface.refresh();
-        void this.paintThinking(this.snapshot, this.generation);
+      if (!this.surface || !this.snapshot) return;
+      if (selectionRange(this.surface.body) || this.surface.pointerActive || this.selecting) {
+        this.thinkingProjectionPending = true;
+        return;
       }
+      // A document-wide selection clear outside this leaf is not a request to
+      // rescan every notebook. A real Reader release reuses revision-bound data.
+      if (!this.thinkingProjectionPending) return;
+      this.thinkingProjectionPending = false;
+      this.surface.refresh();
+      void this.paintThinking(this.snapshot, this.generation);
       return;
     }
     const revision = this.invalidateSelection();

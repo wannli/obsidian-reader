@@ -36,7 +36,7 @@ import {
   providerResult,
   type ThinkingSettings,
 } from './host/thinking-setup';
-import { editThinkingMarkdown } from './host/thinking-editor';
+import { editThinkingMarkdown, thinkingEditorResult } from './host/thinking-editor';
 import { openThinkingAudit } from './host/thinking-audit';
 import {
   openThinkingBrowser,
@@ -552,7 +552,9 @@ export default class ReaderPlugin extends Plugin {
           if (signal.aborted || runtime.notebookPath() !== notebook)
             throw new Error('Comment cancelled or capture notebook changed.');
         });
-        return { status: result.status, message: thinkingSaveMessage(result) };
+        return thinkingEditorResult(result, thinkingSaveMessage(result), (target) =>
+          this.openSavedMaterial(target),
+        );
       },
     });
   }

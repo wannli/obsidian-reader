@@ -248,6 +248,10 @@ vi.mock('../../src/reader/surface', () => ({
         this.setBody(this.deferred);
     });
     restore = vi.fn();
+    layoutChange = vi.fn((change: () => void) => {
+      change();
+      this.refresh();
+    });
     page = vi.fn();
     moveByPage = vi.fn();
     jumpTo = vi.fn();

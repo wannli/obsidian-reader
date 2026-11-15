@@ -11,6 +11,10 @@ async function configured() {
     patchProperties(raw, { fileClass: 'Notebook' }),
   );
   f.cache.get(notebook).frontmatter = readDocument(raw).properties;
+  Object.defineProperty(notebook, 'stat', {
+    configurable: true,
+    get: () => ({ size: new TextEncoder().encode(f.vault.bytes.get(notebook) ?? '').byteLength }),
+  });
   const runtime = new ThinkingRuntime(f.app, f.store, f.signal.signal, {
     notebook: '[[Notes/Thinking.md]]',
     notebookType: 'Notebook',
@@ -38,6 +42,169 @@ function selectWords(root: HTMLElement, words: string) {
 }
 
 describe('Reader real thinking actions', () => {
+  it('ignores irrelevant global selection clears and reuses bounded material on a real Reader release', async () => {
+    const f = await configured();
+    mocks.renderRealArticles = true;
+    const source = await f.note(
+      'Reading/Inbox/Quiet.md',
+      'First selected words.\n\nSecond paragraph.',
+    );
+    await f.view.onOpen();
+    await f.view.openArticle(source.path);
+    await f.runtime.readSourceMaterial(() => true);
+    const project = vi.spyOn(f.runtime, 'readSourceMaterial');
+    f.runtime.invalidate(undefined, false);
+    for (let index = 0; index < 5; index++) document.dispatchEvent(new Event('selectionchange'));
+    await Promise.resolve();
+    expect(project).not.toHaveBeenCalled();
+    selectWords(f.view.contentEl.querySelector('article')!, 'selected words');
+    document.dispatchEvent(new Event('selectionchange'));
+    expect(project).not.toHaveBeenCalled();
+    document.getSelection()!.removeAllRanges();
+    document.dispatchEvent(new Event('selectionchange'));
+    await vi.waitFor(() => expect(project).toHaveBeenCalledOnce());
+  });
+  it('shows honest partial automatic source coverage with an explicit saved-material action', async () => {
+    const f = await configured();
+    mocks.renderRealArticles = true;
+    const unknown = await f.note('Notes/Unknown size.md', 'Authored text.', 'notebook');
+    const raw = await f.vault.process(unknown, (raw) =>
+      patchProperties(raw, { fileClass: 'Notebook' }),
+    );
+    f.cache.get(unknown).frontmatter = readDocument(raw).properties;
+    const open = vi.fn();
+    f.host.openSavedMaterial = open;
+    const source = await f.note('Reading/Inbox/Partial.md', 'Article text.');
+    await f.view.openArticle(source.path);
+    await vi.waitFor(() =>
+      expect(f.view.contentEl.querySelector('.reader-thinking-coverage')?.textContent).toContain(
+        'Some saved thinking is not shown',
+      ),
+    );
+    const coverage = f.view.contentEl.querySelector('.reader-thinking-coverage')!;
+    expect(coverage.textContent).toContain('12 notebooks and 200,000 bytes');
+    coverage.querySelector('button')!.click();
+    expect(open).toHaveBeenCalledOnce();
+    expect(readDocument(await f.vault.read(source)).body).toBe('Article text.');
+  });
+  it.each(['selection', 'gap'])(
+    'offers an explicit existing-writing choice when a reopened %s comment matches native saved evidence',
+    async (kind) => {
+      const f = await configured();
+      mocks.renderRealArticles = true;
+      const open = vi.fn();
+      f.host.openSavedMaterial = open;
+      const source = await f.note(
+        'Reading/Inbox/Retry.md',
+        'First selected words.\n\nSecond paragraph.',
+      );
+      const edit = async () => {
+        await f.view.openArticle(source.path);
+        if (kind === 'selection') {
+          selectWords(f.view.contentEl.querySelector('article')!, 'selected words');
+          f.view.contentEl
+            .querySelector<HTMLButtonElement>('[aria-label="Comment on selection"]')!
+            .click();
+        } else {
+          f.view.contentEl
+            .querySelector('article p')!
+            .dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true }));
+          mocks.menus.at(-1)!.get('Add comment here')!();
+        }
+        const field = document.querySelector<HTMLTextAreaElement>(
+          '[aria-label="Comment Markdown"]',
+        )!;
+        expect(field).not.toBeNull();
+        field.value = 'My existing writing.';
+        [...field.parentElement!.querySelectorAll('button')]
+          .find((button) => button.textContent === 'Save')!
+          .click();
+      };
+      await edit();
+      await vi.waitFor(() => expect(document.querySelector('.reader-thinking-editor')).toBeNull());
+      const before = await f.vault.read(f.notebook);
+      const comment = (await f.runtime.store.read(f.notebook.path)).records.find(
+        (record) => record.kind === 'comment',
+      )!;
+      mocks.notice.mockClear();
+      await edit();
+      await vi.waitFor(() =>
+        expect(document.querySelector('.reader-thinking-editor')?.textContent).toContain(
+          'Open existing saved writing',
+        ),
+      );
+      const modal = document.querySelector('.reader-thinking-editor')!;
+      expect(modal.textContent).toContain('This draft was not saved again');
+      expect(await f.vault.read(f.notebook)).toBe(before);
+      expect(open).not.toHaveBeenCalled();
+      expect(mocks.notice).not.toHaveBeenCalled();
+      [...modal.querySelectorAll('button')]
+        .find((button) => button.textContent?.startsWith('Open existing saved writing'))!
+        .click();
+      expect(open).toHaveBeenCalledWith(f.runtime.target(comment));
+      expect(document.querySelector('.reader-thinking-editor')).toBeNull();
+    },
+  );
+  it('offers and opens native existing free writing from the command palette with no active Reader', async () => {
+    const f = await pluginFixture();
+    const notebook = await f.note('Notes/Free writing.md', 'Authored introduction.', 'notebook');
+    const raw = await f.vault.process(notebook, (raw) =>
+      patchProperties(raw, { fileClass: 'Notebook' }),
+    );
+    f.cache.get(notebook).frontmatter = readDocument(raw).properties;
+    const runtime = new ThinkingRuntime(f.app, f.store, f.signal.signal, {
+      notebook: '[[Notes/Free writing.md]]',
+      notebookType: 'Notebook',
+      explorationType: 'Exploration',
+      bindingProperty: 'fileClass',
+    });
+    f.plugin.thinking = runtime;
+    expect(f.app.workspace.getActiveViewOfType(ReaderView)).toBeUndefined();
+    const edit = () => {
+      mocks.commands.get('free-comment')!.callback!();
+      const field = document.querySelector<HTMLTextAreaElement>('[aria-label="Comment Markdown"]')!;
+      field.value = 'My free existing writing.';
+      [...field.parentElement!.querySelectorAll('button')]
+        .find((button) => button.textContent === 'Save')!
+        .click();
+    };
+    edit();
+    await vi.waitFor(() => expect(document.querySelector('.reader-thinking-editor')).toBeNull());
+    const existing = (await runtime.store.read(notebook.path)).records[0];
+    await f.vault.process(
+      notebook,
+      (raw) =>
+        raw + '\n\n' + existing.raw.replace(`^${existing.blockId}`, '^manual-second-copy') + '\n',
+    );
+    runtime.invalidate(notebook);
+    const before = await f.vault.read(notebook);
+    const open = vi.spyOn(f.plugin, 'openSavedMaterial');
+    mocks.notice.mockClear();
+    edit();
+    await vi.waitFor(() =>
+      expect(document.querySelector('.reader-thinking-editor')?.textContent).toContain(
+        'Open existing saved writing',
+      ),
+    );
+    const modal = document.querySelector('.reader-thinking-editor')!;
+    expect(modal.textContent).toContain('This draft was not saved again');
+    expect(await f.vault.read(notebook)).toBe(before);
+    expect(mocks.notice).not.toHaveBeenCalled();
+    expect(open).not.toHaveBeenCalled();
+    const choices = [...modal.querySelectorAll('button')].filter((button) =>
+      button.textContent?.startsWith('Open existing saved writing'),
+    );
+    expect(choices).toHaveLength(2);
+    choices.find((button) => button.textContent?.includes('(^manual-second-copy)'))!.click();
+    expect(open).toHaveBeenCalledWith({ path: notebook.path, blockId: 'manual-second-copy' });
+    expect(document.querySelector('.reader-thinking-editor')).toBeNull();
+    await vi.waitFor(() =>
+      expect(document.querySelector('.reader-thinking-browser')?.textContent).toContain(
+        'My free existing writing.',
+      ),
+    );
+    f.plugin.onunload();
+  });
   it('keeps from the visible action through real core without source markup or a destination picker', async () => {
     const f = await configured();
     const source = await f.note('Reading/Inbox/Example.md', 'before selected words after');
@@ -211,6 +378,74 @@ describe('Reader real thinking actions', () => {
     expect((await f.runtime.store.read(f.notebook.path)).records[0].body).toBe(
       'Writing between these paragraphs.',
     );
+  });
+  it.each(['First paragraph. ^existing-anchor', 'First **paragraph.**'])(
+    'reopens an exact parser-proven gap inline after %s without changing the source',
+    async (paragraph) => {
+      const f = await configured();
+      mocks.renderRealArticles = true;
+      const body = `${paragraph}\n\nSecond paragraph.\n`;
+      const source = await f.note('Reading/Inbox/Anchored gap.md', body);
+      await f.view.openArticle(source.path);
+      f.view.contentEl
+        .querySelector('article p')!
+        .dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true }));
+      mocks.menus.at(-1)!.get('Add comment here')!();
+      const field = document.querySelector<HTMLTextAreaElement>('[aria-label="Comment Markdown"]')!;
+      field.value = 'Writing after the anchored paragraph.';
+      [...field.parentElement!.querySelectorAll('button')]
+        .find((button) => button.textContent === 'Save')!
+        .click();
+      await vi.waitFor(() =>
+        expect(f.view.contentEl.textContent).toContain('Writing after the anchored paragraph.'),
+      );
+      await f.view.openArticle(source.path);
+      await vi.waitFor(() =>
+        expect(f.view.contentEl.querySelector('.reader-thinking-inline')?.textContent).toContain(
+          'Writing after the anchored paragraph.',
+        ),
+      );
+      expect(f.view.contentEl.querySelector('.reader-thinking-unplaced')).toBeNull();
+      expect(readDocument(await f.vault.read(source)).body).toBe(body);
+    },
+  );
+  it('keeps an inline comment editor bound to the source rather than a superseded decoration paint', async () => {
+    const f = await configured();
+    mocks.renderRealArticles = true;
+    await f.view.onOpen();
+    const body = 'First paragraph.\n\nSecond paragraph.';
+    const source = await f.note('Reading/Inbox/Edit.md', body);
+    const snapshot = await f.store.read(source.path);
+    expect(
+      (await f.runtime.comment('Original writing.', snapshot, body.indexOf('\n\n'))).status,
+    ).toBe('saved');
+    await f.view.openArticle(source.path);
+    await vi.waitFor(() =>
+      expect(f.view.contentEl.querySelector('.reader-thinking-inline')?.textContent).toContain(
+        'Original writing.',
+      ),
+    );
+    selectWords(f.view.contentEl.querySelector('article')!, 'First paragraph.');
+    document.dispatchEvent(new Event('selectionchange'));
+    [...f.view.contentEl.querySelectorAll<HTMLButtonElement>('.reader-thinking-inline button')]
+      .find((button) => button.textContent === 'Edit comment')!
+      .click();
+    const field = document.querySelector<HTMLTextAreaElement>('[aria-label="Comment Markdown"]')!;
+    const project = vi.spyOn(f.runtime, 'readSourceMaterial');
+    document.getSelection()!.removeAllRanges();
+    document.dispatchEvent(new Event('selectionchange'));
+    await vi.waitFor(() => expect(project).toHaveBeenCalledOnce());
+    field.value = 'Revised private writing.';
+    [...field.parentElement!.querySelectorAll('button')]
+      .find((button) => button.textContent === 'Save')!
+      .click();
+    await vi.waitFor(() => expect(document.querySelector('.reader-thinking-editor')).toBeNull());
+    await vi.waitFor(() =>
+      expect(f.view.contentEl.querySelector('.reader-thinking-inline')?.textContent).toContain(
+        'Revised private writing.',
+      ),
+    );
+    expect(readDocument(await f.vault.read(source)).body).toBe(body);
   });
   it('exposes Continue reading and explicit adoption only for exact source inspection through the shared surface', async () => {
     const f = await configured();
