@@ -28,6 +28,11 @@ export class ReadingSurface {
   private index?: VisibleText;
   private next?: { body: string; url: string };
   private marker = '';
+  // The normal reading anchor is frozen while marker/fallback track inspection.
+  private readingPosition?: {
+    marker: string;
+    fallback?: { page: number; left: number; top: number };
+  };
   // Device-local position for image-only viewports; never sent to position().
   private fallback?: { page: number; left: number; top: number };
   private explicitRestore = false;
@@ -311,7 +316,7 @@ export class ReadingSurface {
     this.fallback = marker ? undefined : this.viewportPosition();
     if (!marker) return;
     this.marker = marker;
-    this.position(marker);
+    if (!this.readingPosition) this.position(marker);
   }
 
   flush(): void {
@@ -568,6 +573,52 @@ export class ReadingSurface {
     this.capture();
   }
 
+  get isInspectingContext(): boolean {
+    return !this.dead && this.readingPosition !== undefined;
+  }
+
+  /** Enter after normal saved-position entry; the caller supplies an exact resolved marker. */
+  inspectContext(marker: string): void {
+    if (this.dead || !this.index) return;
+    const wanted = marker.replace(/\s+/gu, ' ').trim();
+    if (
+      !wanted ||
+      this.index.text.indexOf(wanted) !== this.index.text.lastIndexOf(wanted) ||
+      !bookmarkRange(this.body, wanted, this.index)
+    )
+      return;
+    if (!this.readingPosition)
+      this.readingPosition = {
+        marker: this.marker,
+        fallback: this.fallback
+          ? { ...this.fallback }
+          : !this.marker
+            ? this.viewportPosition()
+            : undefined,
+      };
+    this.restore(marker);
+  }
+
+  /** Leave inspection without publishing its position, including device-local blank pages. */
+  continueReading(): void {
+    if (this.dead || !this.readingPosition) return;
+    const reading = this.readingPosition;
+    this.readingPosition = undefined;
+    this.invalidateEnd();
+    this.marker = reading.marker;
+    this.fallback = reading.fallback;
+    this.explicitRestore = this.restorePending = true;
+    this.refresh();
+  }
+
+  /** Explicitly adopt the shown text anchor; selection/pointer holds must release first. */
+  readFromHere(): void {
+    if (this.dead || !this.readingPosition || this.restorePending || this.nativeSelection()) return;
+    this.stopRestoring();
+    this.readingPosition = undefined;
+    this.flush();
+  }
+
   restore(marker: string): void {
     if (this.dead) return;
     this.invalidateEnd();
@@ -646,6 +697,7 @@ export class ReadingSurface {
     this.next = undefined;
     this.index = undefined;
     this.fallback = undefined;
+    this.readingPosition = undefined;
     this.pointers.clear();
     const dispose = this.disposeBody;
     this.disposeBody = undefined;

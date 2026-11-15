@@ -523,6 +523,156 @@ it.each([true, false])(
   },
 );
 
+it.each([true, false])(
+  'keeps paged=%s context inspection transient for its entire lifetime',
+  (paged) => {
+    fixture(paged).setBody(`${markdown}\n\nThird context paragraph has enough words.`, '');
+    Object.defineProperties(surface.viewport, {
+      scrollWidth: { get: () => 996 },
+      scrollHeight: { get: () => 1000 },
+    });
+    surface.restore(secondMarker);
+    frame();
+    surface.flush();
+    expect(position).toHaveBeenLastCalledWith(secondMarker);
+    const saved = [...position.mock.calls];
+    surface.inspectContext(first);
+    expect(surface.isInspectingContext).toBe(true);
+    expect(paged ? surface.viewport.scrollLeft : surface.viewport.scrollTop).toBe(paged ? 0 : 20);
+    frame();
+    surface.flush();
+    surface.moveByPage(1, 0.5);
+    surface.moveByPage(1, 1);
+    surface.jumpTo(1);
+    surface.jumpTo(-1);
+    if (paged) surface.page(1);
+    else surface.viewport.scrollTop = 260;
+    surface.viewport.dispatchEvent(new Event('scroll'));
+    vi.advanceTimersByTime(500);
+    width = 420;
+    notifyResize();
+    frame();
+    surface.body.dispatchEvent(new Event('load'));
+    frame();
+    surface.setBody(`${markdown}\n\nUpdated final paragraph.`, '');
+    frame();
+    surface.flush();
+    expect(position.mock.calls).toEqual(saved);
+    surface.continueReading();
+    expect(surface.isInspectingContext).toBe(false);
+    expect(paged ? surface.viewport.scrollLeft : surface.viewport.scrollTop).toBe(
+      paged ? 452 : 260,
+    );
+    surface.flush(); // Restoration is not adoption.
+    expect(position.mock.calls).toEqual(saved);
+    frame();
+    surface.flush();
+    expect(position).toHaveBeenLastCalledWith(secondMarker);
+    surface.inspectContext(first);
+    frame();
+    surface.viewport.dispatchEvent(new Event('scroll'));
+    const beforeClose = [...position.mock.calls];
+    surface.flush();
+    surface.dispose();
+    vi.runAllTimers();
+    expect(position.mock.calls).toEqual(beforeClose);
+    expect(surface.isInspectingContext).toBe(false);
+  },
+);
+
+it.each([true, false])(
+  'adopts only an explicit Read from here in paged=%s mode and resumes updates',
+  (paged) => {
+    fixture(paged).setBody(markdown, '');
+    surface.restore(secondMarker);
+    frame();
+    surface.inspectContext(first);
+    frame();
+    surface.inspectContext(secondMarker); // Re-entry must not replace the original bookmark.
+    frame();
+    surface.inspectContext(first);
+    frame();
+    surface.continueReading();
+    frame();
+    expect(paged ? surface.viewport.scrollLeft : surface.viewport.scrollTop).toBe(
+      paged ? 332 : 260,
+    );
+    expect(position).not.toHaveBeenCalled();
+    surface.inspectContext(first);
+    // Explicit adoption can occur before the restoration animation frame settles.
+    surface.readFromHere();
+    expect(surface.isInspectingContext).toBe(false);
+    expect(position).toHaveBeenCalledExactlyOnceWith('Alpha first paragraph has enough');
+    surface.continueReading(); // No longer inspecting: must not restore the old bookmark.
+    expect(paged ? surface.viewport.scrollLeft : surface.viewport.scrollTop).toBe(paged ? 0 : 20);
+    if (paged) surface.page(1);
+    else {
+      surface.viewport.scrollTop = 260;
+      surface.viewport.dispatchEvent(new Event('scroll'));
+      vi.advanceTimersByTime(300);
+    }
+    expect(position).toHaveBeenLastCalledWith(secondMarker);
+    const saved = [...position.mock.calls];
+    surface.readFromHere(); // Idempotent outside inspection.
+    surface.dispose();
+    surface.inspectContext(first);
+    surface.continueReading();
+    surface.readFromHere();
+    frame();
+    expect(position.mock.calls).toEqual(saved);
+  },
+);
+
+it.each([true, false])(
+  'preserves the original paged=%s blank-page fallback across inspection and resize',
+  (paged) => {
+    fixture(paged).setBody(`${markdown}\n\n![figure](https://example.com/image.png)`, '');
+    surface.restore(secondMarker);
+    frame();
+    if (paged) surface.page(1);
+    else {
+      surface.viewport.scrollTop = 500;
+      surface.flush();
+    }
+    surface.inspectContext(first);
+    frame();
+    surface.inspectContext(secondMarker);
+    frame();
+    width = 420;
+    notifyResize();
+    frame();
+    surface.continueReading();
+    frame();
+    expect(surface.viewport.scrollLeft).toBe(paged ? 904 : 0);
+    expect(surface.viewport.scrollTop).toBe(paged ? 0 : 500);
+    surface.flush();
+    expect(position).not.toHaveBeenCalled();
+  },
+);
+
+it('does not inspect missing/ambiguous markers or adopt a position during native input holds', () => {
+  fixture(false).setBody(`${markdown}\n\n${first}`, '');
+  surface.restore(secondMarker);
+  frame();
+  surface.inspectContext('Missing source words');
+  surface.inspectContext(first);
+  expect(surface.isInspectingContext).toBe(false);
+  expect(surface.viewport.scrollTop).toBe(260);
+  select();
+  surface.inspectContext(secondMarker);
+  surface.readFromHere();
+  expect(surface.isInspectingContext).toBe(true);
+  expect(position).not.toHaveBeenCalled();
+  deselect();
+  frame();
+  pointer('pointerdown');
+  surface.readFromHere();
+  expect(surface.isInspectingContext).toBe(true);
+  pointer('pointerup', document);
+  surface.readFromHere();
+  expect(position).toHaveBeenCalledExactlyOnceWith(secondMarker);
+});
+
 it('debounces scroll capture, supports flush, and cancels a queued save on disposal', () => {
   fixture(false).setBody(markdown, '');
   surface.viewport.scrollTop = 260;
