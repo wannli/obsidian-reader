@@ -1,5 +1,6 @@
 import { Catalog, DuplicateArticleUrlError } from './catalog';
 import { ReaderAuditor, type ReaderAudit, type ReaderAuditOptions } from './audit';
+import type { ThinkingProtectionAuthority } from './thinking/protection';
 import {
   acquireBody,
   ChangedNote,
@@ -156,6 +157,26 @@ export class ArticleStore<File extends NoteFile> {
   readonly folders: ReaderFolders;
   private statusFolders: ResolvedStatusFolders = defaultStatusFolders;
   private statusFolderRevision = 0;
+  private referenceProtection?: (sourcePath: string) => Promise<ThinkingProtectionAuthority>;
+  /** Inspect incoming notebook references outside every per-file write lane. */
+  setReferenceProtection(
+    inspect?: (sourcePath: string) => Promise<ThinkingProtectionAuthority>,
+  ): void {
+    this.referenceProtection = inspect;
+  }
+  private async referenceAuthority(
+    snapshot: Snapshot<File>,
+    guard: () => void,
+  ): Promise<ThinkingProtectionAuthority | undefined> {
+    this.assert(snapshot.file, snapshot.path);
+    guard();
+    const authority = await this.referenceProtection?.(snapshot.path);
+    this.assert(snapshot.file, snapshot.path);
+    guard();
+    if (authority?.coverage === 'unknown')
+      throw new ChangedNote('Incoming reference coverage is uncertain; the article was retained.');
+    return authority;
+  }
   get statusFolderGeneration(): number {
     return this.statusFolderRevision;
   }
@@ -1100,7 +1121,18 @@ export class ArticleStore<File extends NoteFile> {
     // cannot bypass this: move revalidates the exact bytes before writing or renaming.
     if (protectedArticle(snapshot.body, snapshot.properties))
       return this.move(snapshot, 'Archive', guard).then(() => {});
-    return this.rss.run('rss', () => this.trashNote(snapshot, guard, true));
+    return this.rss.run('rss', async () => {
+      const authority = await this.referenceAuthority(snapshot, guard);
+      if (authority?.protected) return this.move(snapshot, 'Archive', guard).then(() => {});
+      return this.trashNote(
+        snapshot,
+        () => {
+          guard();
+          authority?.assertUnprotected();
+        },
+        true,
+      );
+    });
   }
   private trashNote(
     snapshot: Snapshot<File>,
@@ -1171,7 +1203,8 @@ export class ArticleStore<File extends NoteFile> {
           snapshot.properties.status !== 'feed'
         )
           continue;
-        if (protectedArticle(snapshot.body, snapshot.properties)) {
+        const authority = await this.referenceAuthority(snapshot, guard);
+        if (protectedArticle(snapshot.body, snapshot.properties) || authority?.protected) {
           await this.move(snapshot, 'Archive', guard);
           result.promoted++;
         } else if (
@@ -1182,6 +1215,7 @@ export class ArticleStore<File extends NoteFile> {
             () => {
               guard();
               if (inUse(file)) throw new ChangedNote('Article is in use.');
+              authority?.assertUnprotected();
             },
             false,
             (raw) => {
