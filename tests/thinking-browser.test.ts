@@ -54,8 +54,7 @@ function button(text: string): HTMLButtonElement {
   if (!found) throw new Error(`Missing button: ${text}`);
   return found;
 }
-function fixture() {
-  const vault = new MemoryVault();
+function fixture(vault = new MemoryVault()) {
   const lifetime = new AbortController();
   const host: ThinkingBrowserHost<{ path: string }> = {
     store: new ThinkingStore(vault),
@@ -502,6 +501,130 @@ describe('saved material browser public UI', () => {
     expect(button('Included: New exploration.md').disabled).toBe(true);
     expect((await host.store.read('New exploration.md')).memberships[0].target).toEqual({
       path: 'Notebook.md',
+      blockId: 'comment-one',
+    });
+  });
+  it('native shortest-path About links and relative incoming connections reveal the same saved original', async () => {
+    class NativeVault extends MemoryVault {
+      resolveLink(link: string, source: string) {
+        if (source === 'Other/Reply.md' && link === '../Notes/Notebook')
+          return this.file('Notes/Notebook.md');
+        if (source === 'Notes/Notebook.md' && link === 'Notebook')
+          return this.file('Notes/Notebook.md');
+        return this.file(link) ?? this.file(`${link}.md`);
+      }
+    }
+    const { host, vault } = fixture(new NativeVault());
+    const attached = freeComment('attached-one', 'My attached response').replace(
+      '> **Collected:**',
+      '> **About:** [[Notebook#^comment-one]]\n>\n> **Collected:**',
+    );
+    await vault.create(
+      'Notes/Notebook.md',
+      `---\nfileClass: Notebook\n---\n${freeComment('comment-one', 'A quiet thought')}\n${attached}`,
+    );
+    await vault.create(
+      'Other/Reply.md',
+      `---\nfileClass: Notebook\n---\n${freeComment('reply-one', 'A related response')}`,
+    );
+    host.notebookPaths = () => ['Notes/Notebook.md', 'Other/Reply.md'];
+    const reply = (await host.store.read('Other/Reply.md')).records[0];
+    expect(
+      (
+        await host.store.connect({
+          record: reply,
+          target: { path: '../Notes/Notebook', blockId: 'comment-one' },
+        })
+      ).status,
+    ).toBe('saved');
+    openThinkingBrowser({} as App, host);
+    await settle();
+    button('Comment — A quiet thought').click();
+    expect(document.body.textContent).toContain('Connected from: A related response');
+    expect(document.body.textContent).toContain('Comment: My attached response');
+    button('Comment: My attached response').click();
+    button('About: Notebook#^comment-one').click();
+    expect(document.body.textContent).toContain('Connected from: A related response');
+  });
+  it('relative exploration references display Included in both inclusion pickers and overlapping overview', async () => {
+    class NativeVault extends MemoryVault {
+      resolveLink(link: string, source: string) {
+        if (source === 'Explorations/Question.md' && link === '../Notes/Notebook')
+          return this.file('Notes/Notebook.md');
+        return this.file(link) ?? this.file(`${link}.md`);
+      }
+    }
+    const { host, vault } = fixture(new NativeVault());
+    await vault.create(
+      'Notes/Notebook.md',
+      `---\nfileClass: Notebook\n---\n${freeComment('comment-one', 'A quiet thought')}`,
+    );
+    await vault.create(
+      'Explorations/Question.md',
+      '---\nfileClass: Exploration\n---\n- [[../Notes/Notebook#^comment-one]]\n',
+    );
+    host.notebookPaths = () => ['Notes/Notebook.md'];
+    host.explorationPaths = () => ['Explorations/Question.md'];
+    const browser = addThinkingToExploration({} as App, host, {
+      path: 'Notes/Notebook.md',
+      blockId: 'comment-one',
+    });
+    await settle();
+    expect(button('Included: Explorations/Question.md').disabled).toBe(true);
+    browser.close();
+    openThinkingBrowser({} as App, host);
+    await settle();
+    button('Explorations/Question.md').click();
+    button('Add saved material').click();
+    expect(button('Included: Notes/Notebook.md#^comment-one').disabled).toBe(true);
+    button('Cancel').click();
+    button('Back').click();
+    await settle();
+    button('Overview').click();
+    await settle();
+    const lens = document.querySelector('select')!;
+    lens.value = 'Explorations/Question.md';
+    lens.dispatchEvent(new Event('change'));
+    await settle();
+    expect(button('Comment — A quiet thought')).toBeDefined();
+    expect((await host.store.read('Explorations/Question.md')).memberships).toHaveLength(1);
+  });
+  it('an authoritative unresolved native reference never falls back to an existing same-path file', async () => {
+    class NativeVault extends MemoryVault {
+      resolveLink(link: string, source: string) {
+        if (source === 'Other/Reply.md' || source === 'Explorations/Question.md') return undefined;
+        return this.file(link) ?? this.file(`${link}.md`);
+      }
+    }
+    const { host, vault } = fixture(new NativeVault());
+    await vault.create(
+      'Notes/Notebook.md',
+      `---\nfileClass: Notebook\n---\n${freeComment('comment-one', 'A quiet thought')}`,
+    );
+    const response = freeComment('reply-one', 'An unresolved response').replace(
+      '> _None._',
+      '> - [[Notes/Notebook.md#^comment-one]]',
+    );
+    await vault.create('Other/Reply.md', `---\nfileClass: Notebook\n---\n${response}`);
+    await vault.create(
+      'Explorations/Question.md',
+      '---\nfileClass: Exploration\n---\n- [[Notes/Notebook.md#^comment-one]]\n',
+    );
+    host.notebookPaths = () => ['Notes/Notebook.md', 'Other/Reply.md'];
+    host.explorationPaths = () => ['Explorations/Question.md'];
+    const browser = openThinkingBrowser({} as App, host);
+    await settle();
+    button('Comment — A quiet thought').click();
+    expect(document.body.textContent).not.toContain('Connected from: An unresolved response');
+    browser.close();
+    addThinkingToExploration({} as App, host, {
+      path: 'Notes/Notebook.md',
+      blockId: 'comment-one',
+    });
+    await settle();
+    expect(button('Add: Explorations/Question.md').disabled).toBe(false);
+    expect((await host.store.read('Other/Reply.md')).records[0].connections[0].target).toEqual({
+      path: 'Notes/Notebook.md',
       blockId: 'comment-one',
     });
   });

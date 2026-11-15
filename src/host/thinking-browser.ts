@@ -133,6 +133,24 @@ class ThinkingBrowser<File extends NoteFile> extends Modal {
       : (vault.file(target.path) ?? vault.file(`${target.path}.md`));
     return file ? { ...target, path: file.path } : target;
   }
+  /** References resolve in their owner's native link context; unresolved links assert nothing. */
+  private referencesTarget(
+    reference: ThinkingTarget,
+    ownerPath: string,
+    target: ThinkingTarget,
+  ): boolean {
+    const vault = this.host.store.vault;
+    const referenced = vault.resolveLink
+      ? vault.resolveLink(reference.path, ownerPath)
+      : (vault.file(reference.path) ?? vault.file(`${reference.path}.md`));
+    const destination = vault.file(target.path) ?? vault.file(`${target.path}.md`);
+    return (
+      !!referenced &&
+      !!destination &&
+      referenced === destination &&
+      (reference.blockId ?? '') === (target.blockId ?? '')
+    );
+  }
   private leaveList(): void {
     this.revision++;
     this.readController?.abort();
@@ -343,7 +361,7 @@ class ThinkingBrowser<File extends NoteFile> extends Modal {
         items = items.filter((item) => {
           const included = memberships.filter((doc) =>
             doc.memberships.some((member) =>
-              same(this.resolveTarget(member.target, doc.path), item.target),
+              this.referencesTarget(member.target, doc.path, item.target),
             ),
           );
           return this.lens === 'unassigned'
@@ -509,14 +527,16 @@ class ThinkingBrowser<File extends NoteFile> extends Modal {
           () => this.showItem(this.resolveTarget(connection.target, record.path)),
         );
       const incoming = this.records().filter((owner) =>
-        owner.connections.some((connection) => same(connection.target, target)),
+        owner.connections.some((connection) =>
+          this.referencesTarget(connection.target, owner.path, target),
+        ),
       );
       for (const owner of incoming)
         this.button(this.body, `Connected from: ${owner.body.slice(0, 80)}`, () =>
           this.showItem(recordTarget(owner)),
         );
       const attached = this.records().filter(
-        (comment) => comment.about && same(comment.about, target),
+        (comment) => comment.about && this.referencesTarget(comment.about, comment.path, target),
       );
       for (const comment of attached)
         this.button(this.body, `Comment: ${comment.body.slice(0, 80)}`, () =>
@@ -785,7 +805,9 @@ class ThinkingBrowser<File extends NoteFile> extends Modal {
         'No exploration available. Create a typed exploration through Fileclass, or configure an existing one.',
       );
     for (const document of explorations) {
-      const included = document.memberships.some((member) => same(member.target, target));
+      const included = document.memberships.some((member) =>
+        this.referencesTarget(member.target, document.path, target),
+      );
       const add = this.button(
         this.body,
         `${included ? 'Included: ' : 'Add: '}${document.path}`,
@@ -966,7 +988,9 @@ class ThinkingBrowser<File extends NoteFile> extends Modal {
         .map(recordTarget),
     ];
     for (const target of targets) {
-      const included = document.memberships.some((member) => same(member.target, target));
+      const included = document.memberships.some((member) =>
+        this.referencesTarget(member.target, document.path, target),
+      );
       const button = this.button(this.body, `${included ? 'Included: ' : ''}${title(target)}`, () =>
         this.include(document, target),
       );
