@@ -138,6 +138,22 @@ export class ThinkingStore<File extends NoteFile> {
       message: error instanceof Error ? error.message : String(error),
     };
   }
+  private candidateResult(
+    document: ThinkingDocument<File>,
+    candidates: ThinkingRecord[],
+  ): ThinkingResult<File> {
+    return {
+      status: 'failed',
+      phase: 'validation',
+      records: candidates,
+      originalRecords: candidates,
+      affectedRecords: [],
+      existingCandidates: candidates,
+      document,
+      message:
+        'Existing saved comment candidates match this writing and location. Open the notebook to inspect them before saving again.',
+    };
+  }
   private async commit(
     document: ThinkingDocument<File>,
     next: string,
@@ -348,6 +364,20 @@ export class ThinkingStore<File extends NoteFile> {
               'Several saved passages match. Open the notebook to inspect existing candidates.',
             );
           await this.validateSource(request.source, request.guard);
+          if (same.length === 1 && request.comment !== undefined) {
+            const candidates = document.records.filter(
+              (record) =>
+                record.kind === 'comment' &&
+                record.body === request.comment &&
+                record.about &&
+                this.sameTarget(
+                  record.about,
+                  { path: document.path, blockId: same[0].blockId },
+                  document.path,
+                ),
+            );
+            if (candidates.length) return this.candidateResult(document, candidates);
+          }
           if (same.length === 1 && request.comment === undefined)
             return {
               status: 'unchanged',
@@ -446,12 +476,34 @@ export class ThinkingStore<File extends NoteFile> {
             if (request.gap === undefined)
               throw new Error('Choose an explicit source paragraph gap.');
             context = sourceGap(request.source.body, request.gap);
+            await this.validateSource(request.source, request.guard);
+          } else if (request.gap !== undefined) throw new Error('A gap requires a source article.');
+          if (request.about) await this.validateTarget(request.about, document.path);
+          const candidates = document.records.filter((record) => {
+            if (record.kind !== 'comment' || record.body !== request.body) return false;
+            if (request.about)
+              return !!record.about && this.sameTarget(record.about, request.about, document.path);
+            if (request.source)
+              return (
+                !!record.source &&
+                !record.about &&
+                this.sameTarget(
+                  record.source,
+                  { path: request.source.path },
+                  document.path,
+                  true,
+                ) &&
+                record.before === context.before &&
+                record.after === context.after
+              );
+            return !record.about && !record.source;
+          });
+          if (candidates.length) return this.candidateResult(document, candidates);
+          if (request.source)
             retained = await this.retain(request.source, request.guard, (saved) => {
               retained = saved;
             });
-          } else if (request.gap !== undefined) throw new Error('A gap requires a source article.');
           if (request.about) {
-            await this.validateTarget(request.about, document.path);
             const attached = await this.attachedSource(request.about, document.path);
             if (attached)
               retained = await this.retain(attached, request.guard, (saved) => {

@@ -55,6 +55,8 @@ export interface ThinkingResult<File extends NoteFile> {
   affectedRecords?: ThinkingRecord[];
   /** Proposed native anchors only, not proof of saving, on Possibly saved. */
   attemptedRecords?: ThinkingRecord[];
+  /** Fresh native evidence for an ambiguous repeat save; inspect rather than reappend. */
+  existingCandidates?: ThinkingRecord[];
   document?: ThinkingDocument<File>;
   retainedSource?: Snapshot<File>;
   message?: string;
