@@ -28,6 +28,11 @@ import type {
 } from './thinking/types';
 export * from './thinking/types';
 export { sourceProjection } from './thinking/source';
+export {
+  ThinkingProtection,
+  type ThinkingProtectionAuthority,
+  type ThinkingReferenceObservation,
+} from './thinking/protection';
 
 /** Ordinary Markdown body edits only. Provider-owned creation/fields remain in the host. */
 export class ThinkingStore<File extends NoteFile> {
