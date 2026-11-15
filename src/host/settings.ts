@@ -1,7 +1,7 @@
 import { Modal, Notice, PluginSettingTab, Setting, type App, type Plugin } from 'obsidian';
 import { folderKeys, folderLabels, validateFolders, type ReaderFolders } from '../core/folders';
 import { FolderPicker } from './folder-picker';
-import { logReaderError } from './diagnostics';
+import { logReaderError, readerDebugLoggingEnabled, setReaderDebugLogging } from './diagnostics';
 import { readTriageFlags, saveTriageFlag, triageFlags } from '../reader/feed-triage';
 import type { Ingestion } from './ingestion';
 import type { ArticleStore } from '../core/store';
@@ -228,6 +228,21 @@ export class ReaderSettings extends PluginSettingTab {
         }),
       );
     }
+    new Setting(this.containerEl)
+      .setName('Debug logging (this device)')
+      .setDesc(
+        'Off by default. Send fixed diagnostic events, durations, counts and coarse failure categories to the developer console. Keeps only the latest 200 events in memory; disabling or unloading clears them. No note text, paths or URLs; no synchronized logs. Ordinary errors remain visible when off.',
+      )
+      .addToggle((control) =>
+        control.setValue(readerDebugLoggingEnabled()).onChange((value) => {
+          try {
+            setReaderDebugLogging(value);
+          } catch (error) {
+            control.setValue(readerDebugLoggingEnabled());
+            logReaderError(error);
+          }
+        }),
+      );
     this.containerEl.createEl('h3', { text: 'Experimental Feed triage (this device)' });
     const flags = readTriageFlags();
     for (const flag of triageFlags) {
