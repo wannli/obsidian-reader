@@ -1174,7 +1174,21 @@ export class ReaderView extends ItemView {
       }
       throw error;
     } finally {
-      if (request === this.opening) this.loadingPath = undefined;
+      if (request === this.opening) {
+        this.loadingPath = undefined;
+        const current = this.snapshot;
+        // Entry writes/indexing can revoke an in-flight material observation.
+        // Catch up once at the settled phase boundary; the runtime coalesces a
+        // still-current scan and bounds any replacement, without a retry loop.
+        if (
+          token !== undefined &&
+          current &&
+          this.surface &&
+          this.host.thinking &&
+          this.current(current, token)
+        )
+          void this.paintThinking(current, token);
+      }
     }
   }
   refreshArticleControls(): void {
@@ -1756,16 +1770,20 @@ export class ReaderView extends ItemView {
       this.snapshot?.body === source.body;
     const current = () => paint === this.thinkingPaint && sourceCurrent();
     const material = await runtime.readSourceMaterial(current);
-    const records = material.records;
-    const paintingCurrent = () =>
-      current() && !material.cancelled && material.revision === runtime.sourceMaterialRevision;
-    if (!paintingCurrent()) return;
+    if (!current()) return;
+    if (material.cancelled || material.revision !== runtime.sourceMaterialRevision)
+      this.thinkingProjectionPending = true;
     if (selectionRange(surface.body) || surface.pointerActive) {
       this.thinkingProjectionPending = true;
       return;
     }
     surface.layoutChange(() => {
-      if (!paintingCurrent()) return;
+      if (!current()) return;
+      // Recheck at the actual mutation boundary, including after native holds.
+      // Revoked observations are unknown, never an empty/complete projection.
+      const usable = !material.cancelled && material.revision === runtime.sourceMaterialRevision;
+      const records = usable ? material.records : [];
+      this.thinkingProjectionPending = !usable;
       for (const element of surface.body.querySelectorAll('[data-reader-decoration="thinking"]'))
         element.remove();
       const paragraphs = [...surface.body.querySelectorAll<HTMLElement>('p')].filter(
@@ -1862,7 +1880,7 @@ export class ReaderView extends ItemView {
           if (about && runtime.resolveSource(about) === source.file) append(record, about);
         }
       }
-      if (!material.complete) {
+      if (!usable || !material.complete) {
         const coverage = surface.body.createEl('aside', {
           cls: 'reader-thinking-coverage',
           attr: { 'data-reader-decoration': 'thinking' },
@@ -3823,6 +3841,9 @@ export class ReaderView extends ItemView {
       )
         this.surface?.setBody(current.body, text(current.properties.url));
       this.controls();
+      // Same-body YAML/index updates can supersede thinking reads too; body
+      // MutationObserver callbacks alone do not cover that settled source phase.
+      if (this.host.thinking) void this.paintThinking(current, generation);
     } catch (error) {
       if (!this.stopping && this.current(before, generation)) {
         if (this.operating || this.writing) this.refreshPending = true;

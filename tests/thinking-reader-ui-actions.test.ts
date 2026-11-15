@@ -64,6 +64,164 @@ describe('Reader real thinking actions', () => {
     document.dispatchEvent(new Event('selectionchange'));
     await vi.waitFor(() => expect(project).toHaveBeenCalledOnce());
   });
+  it('automatically repaints saved writing when dog-ear native observations supersede a held entry projection', async () => {
+    const f = await configured();
+    mocks.renderRealArticles = true;
+    const body = 'First paragraph.\n\nSecond paragraph.';
+    const source = await f.note('Reading/Inbox/Entry race.md', body);
+    await f.vault.process(source, (raw) => patchProperties(raw, { bookmark: 'Second paragraph.' }));
+    const snapshot = await f.store.read(source.path);
+    expect(
+      (await f.runtime.comment('Saved before reopening.', snapshot, body.indexOf('\n\n'))).status,
+    ).toBe('saved');
+    let release!: () => void, started!: () => void;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const reading = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const read = f.vault.read.bind(f.vault);
+    let first = true;
+    const reads = vi.spyOn(f.vault, 'read').mockImplementation(async (file) => {
+      if (file === f.notebook && first) {
+        first = false;
+        started();
+        await held;
+      }
+      return read(file);
+    });
+    const dogEar = f.store.dogEar.bind(f.store);
+    vi.spyOn(f.store, 'dogEar').mockImplementation(async (path, guard) => {
+      await reading;
+      const marked = await dogEar(path, guard);
+      // Faithful native observation boundaries: vault modify, metadata changed,
+      // then settled indexing, while openArticle still awaits its entry write.
+      f.runtime.invalidate(source);
+      f.cache.get(source).frontmatter = marked.properties;
+      f.runtime.invalidate(source, false);
+      f.runtime.metadataSettled(source);
+      await f.view.changed({ path: source.path, metadataChanged: true });
+      return marked;
+    });
+    try {
+      await f.view.openArticle(source.path);
+      release();
+      await vi.waitFor(() =>
+        expect(
+          f.view.contentEl.querySelector('.reader-thinking-inline,.reader-thinking-coverage'),
+        ).not.toBeNull(),
+      );
+      expect(
+        f.view.contentEl.querySelector('.reader-thinking-inline')?.textContent ??
+          f.view.contentEl.querySelector('.reader-thinking-coverage')?.textContent,
+      ).toMatch(/Saved before reopening\.|Some saved thinking is not shown/);
+      expect(reads.mock.calls.filter(([file]) => file === f.notebook).length).toBeLessThanOrEqual(
+        2,
+      );
+      await f.view.openArticle(source.path);
+      await vi.waitFor(() =>
+        expect(f.view.contentEl.querySelector('.reader-thinking-inline')?.textContent).toContain(
+          'Saved before reopening.',
+        ),
+      );
+      expect(reads.mock.calls.filter(([file]) => file === f.notebook).length).toBeLessThanOrEqual(
+        4,
+      );
+      const reopened = readDocument(await read(source));
+      expect(reopened.body).toBe(body);
+      expect(reopened.properties.bookmark).toBe('Second paragraph.');
+      expect(f.probe.surface.restore).toHaveBeenCalledWith('Second paragraph.');
+    } finally {
+      release();
+    }
+  });
+  it('catches up a superseded projection at a same-body source refresh without a selection event', async () => {
+    const f = await configured();
+    mocks.renderRealArticles = true;
+    const body = 'First paragraph.\n\nSecond paragraph.';
+    const source = await f.note('Reading/Inbox/Source phase.md', body);
+    await f.view.openArticle(source.path);
+    await f.runtime.readSourceMaterial(() => true);
+    expect(
+      (
+        await f.runtime.comment(
+          'Writing from the source refresh.',
+          await f.store.read(source.path),
+          body.indexOf('\n\n'),
+        )
+      ).status,
+    ).toBe('saved');
+    let release!: () => void, started!: () => void;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const reading = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const read = f.vault.read.bind(f.vault);
+    let first = true;
+    const reads = vi.spyOn(f.vault, 'read').mockImplementation(async (file) => {
+      if (file === f.notebook && first) {
+        first = false;
+        started();
+        await held;
+      }
+      return read(file);
+    });
+    try {
+      await f.view.changed({ path: source.path, metadataChanged: true });
+      await reading;
+      f.runtime.invalidate(source, false);
+      f.runtime.metadataSettled(source);
+      await f.view.changed({ path: source.path, metadataChanged: true });
+      release();
+      await vi.waitFor(() =>
+        expect(f.view.contentEl.querySelector('.reader-thinking-inline')?.textContent).toContain(
+          'Writing from the source refresh.',
+        ),
+      );
+      expect(reads.mock.calls.filter(([file]) => file === f.notebook).length).toBeLessThanOrEqual(
+        2,
+      );
+      expect(readDocument(await read(source)).body).toBe(body);
+    } finally {
+      release();
+    }
+  });
+  it('shows honest unknown coverage if a settled-phase replacement is revoked too, without a scan retry loop', async () => {
+    const f = await configured();
+    mocks.renderRealArticles = true;
+    const body = 'First paragraph.\n\nSecond paragraph.';
+    const source = await f.note('Reading/Inbox/Repeated observations.md', body);
+    expect(
+      (
+        await f.runtime.comment(
+          'Saved writing must not look completely absent.',
+          await f.store.read(source.path),
+          body.indexOf('\n\n'),
+        )
+      ).status,
+    ).toBe('saved');
+    const read = f.vault.read.bind(f.vault);
+    const reads = vi.spyOn(f.vault, 'read').mockImplementation(async (file) => {
+      if (file === f.notebook) {
+        f.runtime.invalidate(f.notebook, false);
+        f.runtime.metadataSettled(f.notebook);
+      }
+      return read(file);
+    });
+    await f.view.openArticle(source.path);
+    await vi.waitFor(() =>
+      expect(f.view.contentEl.querySelector('.reader-thinking-coverage')?.textContent).toContain(
+        'Some saved thinking is not shown',
+      ),
+    );
+    await f.runtime.drain();
+    expect(reads.mock.calls.filter(([file]) => file === f.notebook).length).toBeLessThanOrEqual(2);
+    expect(f.view.contentEl.querySelector('.reader-thinking-inline')).toBeNull();
+    expect(readDocument(await read(source)).body).toBe(body);
+  });
   it('shows honest partial automatic source coverage with an explicit saved-material action', async () => {
     const f = await configured();
     mocks.renderRealArticles = true;
