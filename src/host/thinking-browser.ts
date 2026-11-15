@@ -33,7 +33,8 @@ export interface ThinkingBrowserHost<File extends NoteFile> {
 }
 
 const same = (a: ThinkingTarget, b: ThinkingTarget) =>
-  a.path === b.path && (a.blockId ?? '') === (b.blockId ?? '');
+  a.path.replace(/\.md$/iu, '') === b.path.replace(/\.md$/iu, '') &&
+  (a.blockId ?? '') === (b.blockId ?? '');
 const title = (target: ThinkingTarget) =>
   target.label || `${target.path}${target.blockId ? `#^${target.blockId}` : ''}`;
 const recordTarget = (record: ThinkingRecord): ThinkingTarget => ({
@@ -68,6 +69,7 @@ class ThinkingBrowser<File extends NoteFile> extends Modal {
   inclusion?: ThinkingTarget;
   private lifetime = new AbortController();
   private readController?: AbortController;
+  private readLane: Promise<void> = Promise.resolve();
   private revision = 0;
   private documents: ThinkingDocument<File>[] = [];
   private failures: string[] = [];
@@ -76,10 +78,15 @@ class ThinkingBrowser<File extends NoteFile> extends Modal {
   private query = '';
   private searchVisible = false;
   private selected?: ThinkingTarget;
+  private inspectionTarget?: ThinkingTarget;
   private status!: HTMLElement;
   private body!: HTMLElement;
   private toolbar!: HTMLElement;
   private busy = false;
+  private documentLimit = 100;
+  private itemLimit = 100;
+  private limitedDocuments = false;
+  private createdExplorations = new Set<string>();
   private screen = 0;
   private disposers: (() => void)[] = [];
   private abort = () => this.close();
@@ -116,6 +123,32 @@ class ThinkingBrowser<File extends NoteFile> extends Modal {
     this.host.signal.removeEventListener('abort', this.abort);
     this.revision++;
   }
+  private explorationPaths(): string[] {
+    return [...new Set([...this.host.explorationPaths(), ...this.createdExplorations])];
+  }
+  private resolveTarget(target: ThinkingTarget, sourcePath = ''): ThinkingTarget {
+    const vault = this.host.store.vault;
+    const file = vault.resolveLink
+      ? vault.resolveLink(target.path, sourcePath)
+      : (vault.file(target.path) ?? vault.file(`${target.path}.md`));
+    return file ? { ...target, path: file.path } : target;
+  }
+  private leaveList(): void {
+    this.revision++;
+    this.readController?.abort();
+  }
+  private openNative(target: ThinkingTarget): Promise<void> {
+    this.guard();
+    const opening = this.host.openNative(target);
+    this.close();
+    return opening;
+  }
+  private openSource(target: ThinkingTarget, record?: ThinkingRecord): Promise<void> {
+    this.guard();
+    const opening = record ? this.host.openSource(target, record) : this.host.openSource(target);
+    this.close();
+    return opening;
+  }
   private clearBody(): void {
     this.screen++;
     for (const dispose of this.disposers.splice(0)) dispose();
@@ -130,7 +163,7 @@ class ThinkingBrowser<File extends NoteFile> extends Modal {
       event.preventDefault();
       const raw = decodeURI(link.getAttribute('href') ?? '');
       const [path, blockId] = raw.split('#^');
-      void this.host.openNative({ path: path || sourcePath, ...(blockId ? { blockId } : {}) });
+      void this.openNative({ path: path || sourcePath, ...(blockId ? { blockId } : {}) });
     });
   }
   private element<K extends keyof HTMLElementTagNameMap>(
@@ -199,7 +232,7 @@ class ThinkingBrowser<File extends NoteFile> extends Modal {
       for (const [value, name] of [
         ['', 'All memberships'],
         ['unassigned', 'Unassigned'],
-        ...this.host.explorationPaths().map((path) => [path, path]),
+        ...this.explorationPaths().map((path) => [path, path]),
       ]) {
         const option = this.element('option', select, name);
         option.value = value;
@@ -212,17 +245,38 @@ class ThinkingBrowser<File extends NoteFile> extends Modal {
     }
     this.button(this.toolbar, 'Close', () => this.close());
   }
-  private async load(): Promise<void> {
+  private inReadSlot<T>(read: () => Promise<T>): Promise<T> {
+    const result = this.readLane.then(read);
+    // Native reads cannot be released merely by aborting their caller.
+    this.readLane = result.then(
+      () => {},
+      () => {},
+    );
+    return result;
+  }
+  private load(): Promise<void> {
     const revision = ++this.revision;
     this.readController?.abort();
     const controller = new AbortController();
     this.readController = controller;
-    const current = () => this.active() && revision === this.revision;
     this.status.textContent = 'Loading saved material…';
+    return this.inReadSlot(() => this.loadCurrent(revision, controller)).catch(() => {
+      if (this.active() && revision === this.revision)
+        this.status.textContent =
+          'Saved-material discovery failed. Open Markdown to inspect your saved work.';
+    });
+  }
+  private async loadCurrent(revision: number, controller: AbortController): Promise<void> {
+    const current = () => this.active() && revision === this.revision;
+    if (!current()) return;
     const documents: ThinkingDocument<File>[] = [],
       failures: string[] = [];
     // Serial reads keep occupancy bounded; no startup/background notebook scans.
-    for (const path of new Set([...this.host.notebookPaths(), ...this.host.explorationPaths()])) {
+    const paths = [...new Set([...this.host.notebookPaths(), ...this.explorationPaths()])];
+    if (this.selected)
+      paths.sort((a, b) => Number(b === this.selected!.path) - Number(a === this.selected!.path));
+    this.limitedDocuments = paths.length > this.documentLimit;
+    for (const path of paths.slice(0, this.documentLimit)) {
       if (!current()) return;
       try {
         documents.push(await this.host.store.read(path));
@@ -233,9 +287,10 @@ class ThinkingBrowser<File extends NoteFile> extends Modal {
     if (!current()) return;
     this.documents = documents;
     this.failures = failures;
-    this.status.textContent = failures.length
-      ? 'Some configured documents are unavailable. Coverage is incomplete; open Markdown to inspect.'
-      : '';
+    this.status.textContent =
+      failures.length || documents.some((document) => document.issues.length)
+        ? 'Some configured documents are unavailable or contain unsupported records. Coverage is incomplete; open Markdown to inspect. Originals were preserved.'
+        : '';
     if (this.inclusion) return this.showInclusion(this.inclusion);
     if (this.selected) return this.showItem(this.selected);
     await this.showList(controller.signal, current);
@@ -258,7 +313,7 @@ class ThinkingBrowser<File extends NoteFile> extends Modal {
           ...new Set([
             ...this.host.sources().map((source) => source.path),
             ...this.host.notebookPaths(),
-            ...this.host.explorationPaths(),
+            ...this.explorationPaths(),
           ]),
         ],
         this.query,
@@ -282,12 +337,14 @@ class ThinkingBrowser<File extends NoteFile> extends Modal {
         'reader-thinking-evidence',
       );
       const memberships = this.documents.filter((doc) =>
-        this.host.explorationPaths().includes(doc.path),
+        this.explorationPaths().includes(doc.path),
       );
       if (this.lens)
         items = items.filter((item) => {
           const included = memberships.filter((doc) =>
-            doc.memberships.some((member) => same(member.target, item.target)),
+            doc.memberships.some((member) =>
+              same(this.resolveTarget(member.target, doc.path), item.target),
+            ),
           );
           return this.lens === 'unassigned'
             ? !included.length
@@ -304,7 +361,7 @@ class ThinkingBrowser<File extends NoteFile> extends Modal {
           : 'No saved material here yet. Use Keep passage or Comment while reading. Unassigned entries will appear here too.',
       );
     let day = '';
-    for (const item of items) {
+    for (const item of items.slice(0, this.itemLimit)) {
       const date = item.record?.collected || 'Undated';
       if (this.overview && date !== day) {
         day = date;
@@ -318,6 +375,11 @@ class ThinkingBrowser<File extends NoteFile> extends Modal {
           : title(item.target),
         () => {
           this.selected = item.target;
+          if (
+            item.record &&
+            !this.documents.some((document) => document.path === item.record!.path)
+          )
+            return this.load();
           this.showItem(item.target);
         },
       );
@@ -330,9 +392,26 @@ class ThinkingBrowser<File extends NoteFile> extends Modal {
         );
       if (item.evidence) this.element('p', row, item.evidence, 'reader-thinking-evidence');
     }
-    if (this.host.explorationPaths().length) {
+    if (items.length > this.itemLimit)
+      this.button(this.body, 'Show more saved material', () => {
+        this.itemLimit += 100;
+        return this.load();
+      });
+    if (this.limitedDocuments) {
+      this.element(
+        'p',
+        this.body,
+        'Notebook/exploration coverage is limited to the loaded documents. Unassigned means no membership found within that coverage.',
+        'reader-thinking-evidence',
+      );
+      this.button(this.body, 'Load more notebooks and explorations', () => {
+        this.documentLimit += 100;
+        return this.load();
+      });
+    }
+    if (this.explorationPaths().length) {
       this.element('h3', this.body, 'Explorations');
-      for (const path of this.host.explorationPaths())
+      for (const path of this.explorationPaths())
         this.button(this.body, path, () => this.showExploration(path));
     }
     if (this.host.createExploration)
@@ -345,10 +424,21 @@ class ThinkingBrowser<File extends NoteFile> extends Modal {
     void this.load();
   }
   private showItem(target: ThinkingTarget): void {
+    this.inspectionTarget = target;
+    this.leaveList();
     this.clearBody();
     this.button(this.body, 'Back', () => this.back());
     this.element('h3', this.body, title(target));
+    target = this.resolveTarget(target);
     const matches = this.records().filter((record) => same(recordTarget(record), target));
+    if (matches.length > 1) {
+      this.element(
+        'p',
+        this.body,
+        'Read-only: ambiguous native anchor. All matching snapshots are preserved; Reader cannot choose or repair one.',
+      );
+      for (const match of matches) this.markdown(this.body, match.body, match.path);
+    }
     const record = matches.length === 1 ? matches[0] : undefined;
     if (record) {
       this.element(
@@ -378,8 +468,11 @@ class ThinkingBrowser<File extends NoteFile> extends Modal {
         );
         const screen = this.screen;
         if (this.host.sourceSnapshot)
-          void this.host
-            .sourceSnapshot(record.source.path)
+          void this.inReadSlot(() => {
+            if (!this.active() || screen !== this.screen)
+              throw new Error('Source inspection was left.');
+            return this.host.sourceSnapshot!(this.resolveTarget(record.source!, record.path).path);
+          })
             .then((source) => {
               if (!this.active() || screen !== this.screen) return;
               const context = this.host.store.context(record, source);
@@ -398,18 +491,22 @@ class ThinkingBrowser<File extends NoteFile> extends Modal {
                   'Source unavailable or unresolved — saved snapshot retained.';
             });
         this.button(this.body, 'Back to source', () =>
-          this.host.openSource(record.source!, record),
+          this.openSource(this.resolveTarget(record.source!, record.path), record),
         );
-        this.button(this.body, 'Open source Markdown', () => this.host.openNative(record.source!));
+        this.button(this.body, 'Open source Markdown', () =>
+          this.openNative(this.resolveTarget(record.source!, record.path)),
+        );
       } else if (record.about)
-        this.button(this.body, `About: ${title(record.about)}`, () => this.showItem(record.about!));
+        this.button(this.body, `About: ${title(record.about)}`, () =>
+          this.showItem(this.resolveTarget(record.about!, record.path)),
+        );
       else
         this.element('p', this.body, 'No source — local free comment.', 'reader-thinking-evidence');
       for (const connection of record.connections)
         this.button(
           this.body,
           `${connection.label ? `${connection.label} → ` : 'Connection → '}${title(connection.target)}`,
-          () => this.showItem(connection.target),
+          () => this.showItem(this.resolveTarget(connection.target, record.path)),
         );
       const incoming = this.records().filter((owner) =>
         owner.connections.some((connection) => same(connection.target, target)),
@@ -444,8 +541,8 @@ class ThinkingBrowser<File extends NoteFile> extends Modal {
         this.body,
         'Unresolved saved entry. Its original link remains available; no replacement was inferred.',
       );
-    else this.button(this.body, 'Open source', () => this.host.openSource(target));
-    this.button(this.body, 'Open Markdown', () => this.host.openNative(target));
+    else this.button(this.body, 'Open source', () => this.openSource(target));
+    this.button(this.body, 'Open Markdown', () => this.openNative(target));
     if (!target.blockId || (record && !record.readOnly))
       this.button(this.body, 'Add to exploration', () => this.showInclusion(target));
   }
@@ -587,24 +684,29 @@ class ThinkingBrowser<File extends NoteFile> extends Modal {
     if (!this.host.createStructuredNote || this.busy) return;
     this.guard();
     this.busy = true;
+    const screen = this.screen;
+    const controller = new AbortController();
+    this.disposers.push(() => controller.abort());
     let created: ThinkingCreatedNote;
     try {
-      created = await this.host.createStructuredNote(recordTarget(record), this.lifetime.signal);
+      created = await this.host.createStructuredNote(recordTarget(record), controller.signal);
     } finally {
       this.busy = false;
     }
-    if (!this.active()) return;
+    if (!this.active() || screen !== this.screen) return;
     this.creationStatus(created);
     if (created.target || created.status === 'possibly-saved' || created.status === 'partial') {
       for (const button of this.body.querySelectorAll('button'))
         if (button.textContent === 'Create structured note') button.disabled = true;
     }
     if (created.target)
-      this.button(this.body, 'Open created note', () => this.host.openNative(created.target!));
+      this.button(this.body, 'Open created note', () => this.openNative(created.target!));
     if (created.status !== 'saved' || !created.target) return;
     // No source anchor/quotation writes. Creation callback preserves existing origin.
     const eligibility = () => {
       this.guard();
+      if (screen !== this.screen)
+        throw new Error('Creation was left; the created note is preserved.');
       if (!this.host.canConnectStructuredNote?.(created.target!))
         throw new Error(
           'Fileclass changed or the created note is no longer eligible. The note is saved but unlinked.',
@@ -619,11 +721,11 @@ class ThinkingBrowser<File extends NoteFile> extends Modal {
       this.host.store.connect({
         record,
         target: created.target!,
-        ...{ allowFileTarget: true },
+        allowFileTarget: true,
         guard: eligibility,
       }),
     );
-    if (!this.active()) return;
+    if (!this.active() || screen !== this.screen) return;
     if (this.status.textContent?.startsWith('Saved'))
       this.status.textContent = 'Saved structured note and explicit connection locally.';
     else
@@ -646,25 +748,27 @@ class ThinkingBrowser<File extends NoteFile> extends Modal {
     if (!this.host.createExploration || this.busy) return;
     this.guard();
     this.busy = true;
+    const screen = this.screen;
+    const controller = new AbortController();
+    this.disposers.push(() => controller.abort());
     let created: ThinkingCreatedNote;
     try {
-      created = await this.host.createExploration(this.lifetime.signal);
+      created = await this.host.createExploration(controller.signal);
     } finally {
       this.busy = false;
     }
-    if (!this.active()) return;
+    if (!this.active() || screen !== this.screen) return;
     this.creationStatus(created);
     if (created.target || created.status === 'possibly-saved' || created.status === 'partial') {
       for (const button of this.body.querySelectorAll('button'))
         if (button.textContent === 'Create exploration') button.disabled = true;
     }
     if (created.target)
-      this.button(this.body, 'Open created exploration', () =>
-        this.host.openNative(created.target!),
-      );
+      this.button(this.body, 'Open created exploration', () => this.openNative(created.target!));
     if (created.status !== 'saved' || !created.target) return;
     const document = await this.host.store.read(created.target.path);
-    if (!this.active()) return;
+    if (!this.active() || screen !== this.screen) return;
+    this.createdExplorations.add(document.path);
     this.documents = [...this.documents.filter((doc) => doc.path !== document.path), document];
     if (target) await this.include(document, target);
     else this.showExploration(document.path);
@@ -673,9 +777,7 @@ class ThinkingBrowser<File extends NoteFile> extends Modal {
     this.clearBody();
     this.element('h3', this.body, 'Add to exploration');
     this.element('p', this.body, title(target), 'reader-thinking-evidence');
-    const explorations = this.documents.filter((doc) =>
-      this.host.explorationPaths().includes(doc.path),
-    );
+    const explorations = this.documents.filter((doc) => this.explorationPaths().includes(doc.path));
     if (!explorations.length)
       this.element(
         'p',
@@ -702,6 +804,7 @@ class ThinkingBrowser<File extends NoteFile> extends Modal {
     this.button(this.body, 'Cancel', () => (this.inclusion ? this.close() : this.showItem(target)));
   }
   private async include(document: ThinkingDocument<File>, target: ThinkingTarget): Promise<void> {
+    this.inspectionTarget = { path: document.path };
     await this.mutate(
       async () => {
         const isSource =
@@ -723,11 +826,13 @@ class ThinkingBrowser<File extends NoteFile> extends Modal {
     );
   }
   private showExploration(path: string): void {
+    this.inspectionTarget = { path };
+    this.leaveList();
     const document = this.documents.find((doc) => doc.path === path);
     this.clearBody();
     this.button(this.body, 'Back', () => this.back());
     this.element('h3', this.body, path);
-    this.button(this.body, 'Open exploration Markdown', () => this.host.openNative({ path }));
+    this.button(this.body, 'Open exploration Markdown', () => this.openNative({ path }));
     if (!document) {
       this.element('p', this.body, 'Exploration unavailable. Open native Markdown to inspect.');
       return;
@@ -781,7 +886,9 @@ class ThinkingBrowser<File extends NoteFile> extends Modal {
       if (span.member) {
         const member = span.member;
         const row = this.element('section', this.body, undefined, 'reader-thinking-item');
-        this.button(row, title(member.target), () => this.showItem(member.target));
+        this.button(row, title(member.target), () =>
+          this.showItem(this.resolveTarget(member.target, path)),
+        );
         this.button(row, 'Remove inclusion', () =>
           this.mutate(
             () =>
@@ -885,9 +992,9 @@ class ThinkingBrowser<File extends NoteFile> extends Modal {
           : result.status === 'unchanged'
             ? 'Already saved — no change.'
             : result.status === 'possibly-saved'
-              ? `Possibly saved — open notebook to check. Completed phase: ${result.phase}. Do not blindly retry.`
+              ? `Possibly saved — open notebook to check. Native write phase: ${result.phase}; readback is unverified. Do not blindly retry.`
               : result.status === 'partial'
-                ? `Partially saved. Completed phase: ${result.phase}. Inspect saved work before retrying.`
+                ? `Partially saved. ${result.retainedSource ? 'Source retention saved. ' : ''}Incomplete phase: ${result.phase}. Inspect saved work before retrying.`
                 : 'Not saved. Open Markdown to inspect or reopen and retry.';
       if (result.status === 'possibly-saved' || result.status === 'partial') {
         for (const button of this.body.querySelectorAll('button')) {
@@ -910,9 +1017,13 @@ class ThinkingBrowser<File extends NoteFile> extends Modal {
       if (result.status === 'saved' || result.status === 'unchanged') after?.();
       else
         this.button(this.body, 'Open notebook to check', () =>
-          this.host.openNative({
+          this.openNative({
             path:
-              result.document?.path ?? this.selected?.path ?? this.host.notebookPaths()[0] ?? '',
+              result.document?.path ??
+              this.inspectionTarget?.path ??
+              this.selected?.path ??
+              this.host.notebookPaths()[0] ??
+              '',
           }),
         );
     } finally {
