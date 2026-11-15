@@ -183,8 +183,11 @@ function record(
   const bodyStart = tokens[firstRule].to;
   const bodyEnd = rule.from;
   const bodyRegion = payload.slice(bodyStart, bodyEnd);
-  const leading = /^\n*/.exec(bodyRegion)![0].length;
-  const body = bodyRegion.slice(leading).replace(/\n+$/, '');
+  // Exactly the canonical separator blank line is structural. Further blank lines
+  // belong to the authored body and must survive Reader edits unchanged.
+  if (!bodyRegion.startsWith('\n\n') || !bodyRegion.endsWith('\n\n')) return;
+  const leading = 2;
+  const body = bodyRegion.slice(leading, -2);
   if (!body.trim()) return;
   // Map payload columns back to original quoted bytes, including CRLF and outer prefixes.
   const originalRows = quoteRaw.split('\n');

@@ -18,10 +18,25 @@ function visibleTokens(tokens: Token[]): Token[] {
   });
 }
 export function sourceProjection(body: string) {
-  const blocks = blockSpans(body).inlineBlocks.map((block) => ({
-    ...block,
-    tokens: visibleTokens(block.tokens),
-  }));
+  const blocks = blockSpans(body).inlineBlocks.map((block) => {
+    const text = block.text.replace(/\s+\^[A-Za-z0-9-]+\s*$/, '');
+    let remaining = text.length;
+    const tokens = block.tokens.flatMap((token) => {
+      if (remaining <= 0) return [];
+      const length = Math.min(remaining, token.raw.length);
+      remaining -= token.raw.length;
+      return length === token.raw.length
+        ? [token]
+        : [
+            {
+              type: 'text',
+              raw: token.raw.slice(0, length),
+              text: token.raw.slice(0, length),
+            } as Token,
+          ];
+    });
+    return { ...block, text, tokens: visibleTokens(tokens) };
+  });
   return blockProjection(body, blocks);
 }
 export function selectedSource(body: string, from: number, to: number) {
@@ -36,24 +51,42 @@ export function selectedSource(body: string, from: number, to: number) {
   const blocks = blockSpans(body).inlineBlocks;
   // Existing projection deliberately protects inline code for source mutation. Thinking
   // never mutates the source: allow only complete code tokens in a snapshot selection.
-  function quoteTokens(tokens: Token[], text: string, offset: number): Token[] {
+  function quoteTokens(
+    tokens: Token[],
+    text: string,
+    base: number,
+    map: (at: number) => number,
+  ): Token[] {
     let cursor = 0;
     return tokens.map((token) => {
       const at = text.indexOf(token.raw, cursor);
       cursor = at + token.raw.length;
       if (token.type === 'codespan') {
-        const start = offset + at,
-          end = start + token.raw.length;
+        const start = map(base + at),
+          end = map(base + at + token.raw.length - 1) + 1;
         if (from < end && to > start && (from > start || to < end))
           throw new Error('Select the complete inline code span.');
         return { ...token, type: 'text' } as Token;
+      }
+      if (
+        'tokens' in token &&
+        Array.isArray(token.tokens) &&
+        'text' in token &&
+        typeof token.text === 'string'
+      ) {
+        const inner = token.raw.indexOf(token.text);
+        if (inner < 0) throw new Error('The nested selection cannot be mapped safely.');
+        return {
+          ...token,
+          tokens: quoteTokens(token.tokens, token.text, base + at + inner, map),
+        } as Token;
       }
       return token;
     });
   }
   const mapped = blocks.map((block) => ({
     ...block,
-    tokens: quoteTokens(block.tokens, block.text, block.offset(0)),
+    tokens: quoteTokens(block.tokens, block.text, 0, block.offset),
   }));
   const quote = selectionPlan(body, from, to, 'quote', mapped).quoteMarkdown;
   if (!quote.trim()) throw new Error('Select visible source words.');

@@ -79,6 +79,18 @@ it('edits only the selected comment body and rejects a stale edited record', asy
   expect(stale.status).toBe('failed');
   expect((await store.read('Book.md')).raw).toBe(result.document?.raw);
 });
+it('preserves authored leading/trailing blank lines and spaces through save and owned body edit', async () => {
+  const body = '\n\n  My words.  \n\n';
+  const { store, document, result } = await free(body);
+  expect(result.status).toBe('saved');
+  expect(document.records[0].body).toBe(body);
+  const edited = await store.editComment({
+    record: document.records[0],
+    body: '\nA changed body.\n',
+  });
+  expect(edited.status).toBe('saved');
+  expect(edited.records[0].body).toBe('\nA changed body.\n');
+});
 it('keeps native Windows newline conventions outside the owned edit', async () => {
   const { vault, store, document } = await free('First.\n\nSecond.');
   const windows = document.raw.replaceAll('\n', '\r\n') + '\r\nOutside after.\r\n';

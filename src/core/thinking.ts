@@ -247,7 +247,7 @@ export class ThinkingStore<File extends NoteFile> {
     const newline = document.raw.includes('\r\n') ? '\r\n' : '\n';
     let next = document.raw;
     for (const entry of entries) {
-      const blockId = entry.blockId || this.allocate(next, entry.kind);
+      const blockId = entry.blockId || this.allocate(next + '\n' + entry.body, entry.kind);
       next +=
         (next.endsWith(newline + newline)
           ? ''
@@ -347,7 +347,12 @@ export class ThinkingStore<File extends NoteFile> {
               : {}),
           };
           const collected = localCollectionDate(this.options.now?.());
-          const blockId = same[0]?.blockId ?? this.allocate(document.raw, 'passage');
+          const blockId =
+            same[0]?.blockId ??
+            this.allocate(
+              document.raw + '\n' + selected.body + '\n' + (request.comment ?? ''),
+              'passage',
+            );
           const entries: Parameters<ThinkingStore<File>['append']>[1] = same.length
             ? []
             : [
@@ -423,16 +428,20 @@ export class ThinkingStore<File extends NoteFile> {
             context = sourceGap(request.source.body, request.gap);
             retained = await this.retain(request.source, request.guard);
           } else if (request.gap !== undefined) throw new Error('A gap requires a source article.');
-          if (request.about) await this.validateTarget(request.about, document.path);
+          if (request.about) {
+            await this.validateTarget(request.about, document.path);
+            const attached = await this.attachedSource(request.about, document.path);
+            if (attached) retained = await this.retain(attached, request.guard);
+          }
           const next = this.append(document, [
             {
               kind: 'comment',
               body: request.body,
               about: request.about,
-              source: retained ? { path: retained.path } : undefined,
+              source: retained && request.source ? { path: retained.path } : undefined,
               ...context,
               url:
-                retained && typeof retained.properties.url === 'string'
+                retained && request.source && typeof retained.properties.url === 'string'
                   ? retained.properties.url
                   : undefined,
               collected: localCollectionDate(this.options.now?.()),
@@ -478,6 +487,39 @@ export class ThinkingStore<File extends NoteFile> {
       if (records.length !== 1) throw new Error('The target entry is missing or read-only.');
     }
   }
+  private async attachedSource(
+    target: ThinkingTarget,
+    sourcePath: string,
+  ): Promise<Snapshot<File> | undefined> {
+    const seen = new Set<string>();
+    let current: ThinkingTarget | undefined = target;
+    for (let depth = 0; current?.blockId && depth < 32; depth++) {
+      const file = this.resolveTarget(current, sourcePath);
+      if (!file) return;
+      const key = file.path + '#^' + current.blockId;
+      if (seen.has(key)) return;
+      seen.add(key);
+      const document = await this.read(file.path);
+      const records = document.records.filter(
+        (record) => record.blockId === current!.blockId && !record.readOnly,
+      );
+      if (records.length !== 1)
+        throw new ChangedNote('The attached entry is missing or ambiguous.');
+      const record = records[0];
+      if (record.source) {
+        const sourceFile = this.resolveTarget(record.source, file.path);
+        if (!sourceFile) return;
+        const path = sourceFile.path,
+          raw = await this.vault.read(sourceFile);
+        this.identity(sourceFile, path);
+        const source = requireArticle(raw);
+        return { file: sourceFile, path, raw, body: source.body, properties: source.properties };
+      }
+      sourcePath = file.path;
+      current = record.about;
+    }
+    return;
+  }
   private freshRecord(document: ThinkingDocument<File>, original: ThinkingRecord): ThinkingRecord {
     const matches = document.records.filter((record) => record.blockId === original.blockId);
     if (
@@ -506,9 +548,10 @@ export class ThinkingStore<File extends NoteFile> {
           if (current.kind !== 'comment' || !body.trim())
             throw new Error('Only a nonempty comment body can be edited.');
           const newline = document.raw.includes('\r\n') ? '\r\n' : '\n';
-          const quoted = quoteLines(body, newline).slice(2);
+          const lineStart = document.raw.lastIndexOf('\n', current.bodyFrom - 1) + 1;
+          const quoted = quoteLines(body, newline);
           const next =
-            document.raw.slice(0, current.bodyFrom) + quoted + document.raw.slice(current.bodyTo);
+            document.raw.slice(0, lineStart) + quoted + document.raw.slice(current.bodyTo);
           return await this.commit(document, next, 'notebook', guard, undefined, [original]);
         } catch (error) {
           return this.failure(error);
@@ -801,7 +844,10 @@ export class ThinkingStore<File extends NoteFile> {
           )
             hits.push({ path, evidence: 'literal', text: doc.body.slice(0, 500) });
           for (const record of document.records) {
-            if (hits.length >= limit) break;
+            if (hits.length >= limit) {
+              coverage = false;
+              break;
+            }
             if (!needle || record.body.toLocaleLowerCase().includes(needle))
               hits.push({ path, record, evidence: 'literal', text: record.body.slice(0, 500) });
             else if (
