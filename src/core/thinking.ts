@@ -940,9 +940,26 @@ export class ThinkingStore<File extends NoteFile> {
               coverage = false;
               break;
             }
+            const connectionText = record.connections
+              .map(
+                (connection) =>
+                  `${targetLink(connection.target)}${connection.label ? ` — ${connection.label}` : ''}`,
+              )
+              .join('\n');
+            const connectionMatch = needle
+              ? connectionText.toLocaleLowerCase().indexOf(needle)
+              : -1;
             if (!needle || record.body.toLocaleLowerCase().includes(needle))
               hits.push({ path, record, evidence: 'literal', text: record.body.slice(0, 500) });
-            else if (
+            else if (connectionMatch >= 0) {
+              const start = Math.max(0, connectionMatch - 120);
+              hits.push({
+                path,
+                record,
+                evidence: 'literal',
+                text: connectionText.slice(start, start + 500),
+              });
+            } else if (
               record.source &&
               targetLink(record.source).toLocaleLowerCase().includes(needle)
             )
