@@ -918,13 +918,23 @@ export class ThinkingStore<File extends NoteFile> {
           )
             hits.push({ path, evidence: 'literal', text: doc.body.slice(0, 500) });
         } else {
+          // Search ordinary authored regions as well as saved entries, excluding
+          // each complete record range so a record match is not reported twice.
+          const authored: string[] = [];
+          let cursor = doc.headerEnd;
+          for (const record of document.records) {
+            authored.push(document.raw.slice(cursor, record.from));
+            cursor = record.to;
+          }
+          authored.push(document.raw.slice(cursor));
+          const prose = authored.join('\n\n');
           if (
-            !document.records.length &&
-            (!needle ||
-              doc.body.toLocaleLowerCase().includes(needle) ||
-              path.toLocaleLowerCase().includes(needle))
+            (!needle && prose.trim()) ||
+            (needle &&
+              (prose.toLocaleLowerCase().includes(needle) ||
+                path.toLocaleLowerCase().includes(needle)))
           )
-            hits.push({ path, evidence: 'literal', text: doc.body.slice(0, 500) });
+            hits.push({ path, evidence: 'literal', text: prose.slice(0, 500) });
           for (const record of document.records) {
             if (hits.length >= limit) {
               coverage = false;
