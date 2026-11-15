@@ -51,6 +51,23 @@ vi.mock('../src/reader/surface', () => ({
   },
 }));
 vi.mock('obsidian', () => ({
+  Modal: class {
+    contentEl = document.createElement('div');
+    constructor(public app: unknown) {}
+    setTitle(title: string) {
+      this.contentEl.setAttribute('aria-label', title);
+    }
+    open() {
+      document.body.append(this.contentEl);
+      this.onOpen();
+    }
+    close() {
+      this.onClose();
+      this.contentEl.remove();
+    }
+    onOpen() {}
+    onClose() {}
+  },
   ItemView: class {
     app: any;
     contentEl = document.createElement('div');

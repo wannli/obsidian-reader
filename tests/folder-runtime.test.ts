@@ -86,6 +86,24 @@ it('ignores legacy settings, applies the whole group, and recreates only Reader 
   expect(f.reader.view.host.paged).toBe(true);
 });
 
+it('retires every native adapter, including Thinking, before activating replacement adapters', async () => {
+  const f = await runtimeFixture();
+  const retired = [...f.runtime.allAdapters];
+  expect(retired).toHaveLength(2);
+  expect(retired).toContain(f.runtime.vaults[0]);
+  expect(retired.every((adapter) => adapter.active())).toBe(true);
+  await f.plugin.applyFolders(folders);
+  expect(retired.every((adapter) => !adapter.active())).toBe(true);
+  const replacements = f.runtime.allAdapters.filter(
+    (adapter: unknown) => !retired.includes(adapter),
+  );
+  expect(replacements).toHaveLength(2);
+  expect(replacements).toContain(f.runtime.vaults[1]);
+  expect(replacements.every((adapter: any) => adapter.active())).toBe(true);
+  f.plugin.onunload();
+  expect(f.runtime.allAdapters.every((adapter: any) => !adapter.active())).toBe(true);
+});
+
 it('leaves obsolete and unknown saved settings untouched on load and folder saves', async () => {
   const saved = { extra: { keep: true }, showPagedArticleButtons: true };
   const f = await runtimeFixture(saved);

@@ -1,11 +1,31 @@
 import { vi } from 'vitest';
 
 const runtime = vi.hoisted(() => ({
+  // Watched ArticleStore ports are the public folder-generation seam.
   vaults: [] as any[],
+  // Keep every adapter visible too, including Thinking's separately drained port.
+  allAdapters: [] as any[],
   watchers: [] as any[],
   notices: [] as string[],
 }));
 vi.mock('obsidian', () => ({
+  Modal: class {
+    contentEl = document.createElement('div');
+    constructor(public app: unknown) {}
+    setTitle(title: string) {
+      this.contentEl.setAttribute('aria-label', title);
+    }
+    open() {
+      document.body.append(this.contentEl);
+      this.onOpen();
+    }
+    close() {
+      this.onClose();
+      this.contentEl.remove();
+    }
+    onOpen() {}
+    onClose() {}
+  },
   FileView: class {},
   MarkdownView: class {},
   TFile: class {},
@@ -95,7 +115,7 @@ vi.mock('../../src/host/vault', () => ({
       public app: any,
       public active: () => boolean,
     ) {
-      runtime.vaults.push(this);
+      runtime.allAdapters.push(this);
     }
     file(path: string) {
       return this.app.notes.get(path)?.file;
@@ -103,6 +123,7 @@ vi.mock('../../src/host/vault', () => ({
   },
   watchLibrary: vi.fn((plugin: any, store: any, changed: any) => {
     const stop = vi.fn();
+    runtime.vaults.push(store.vault);
     runtime.watchers.push({ stop, changed });
     for (const [path, note] of plugin.app.notes) store.catalog.update(path, note.properties);
     return stop;
@@ -114,6 +135,7 @@ import { MarkdownView } from 'obsidian';
 
 export async function runtimeFixture(data: unknown = {}) {
   runtime.vaults = [];
+  runtime.allAdapters = [];
   runtime.watchers = [];
   runtime.notices = [];
   vi.stubGlobal('document', {
@@ -132,7 +154,10 @@ export async function runtimeFixture(data: unknown = {}) {
   const leaves: any[] = [];
   const app: any = {
     notes: new Map(),
-    vault: { getMarkdownFiles: () => [...app.notes.values()].map((note: any) => note.file) },
+    vault: {
+      on: vi.fn(),
+      getMarkdownFiles: () => [...app.notes.values()].map((note: any) => note.file),
+    },
     workspace: {
       getLeavesOfType: (type: string) => leaves.filter((leaf) => leaf.view.getViewType() === type),
       iterateAllLeaves: (visit: any) => leaves.forEach(visit),

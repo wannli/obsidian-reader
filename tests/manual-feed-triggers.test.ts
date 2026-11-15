@@ -54,7 +54,8 @@ async function fixture() {
       await settle();
     },
     async metadata(name: string, file?: unknown) {
-      f.app.metadataCache.on.mock.calls.find(([event]: [string]) => event === name)![1](file);
+      for (const [event, handler] of f.app.metadataCache.on.mock.calls)
+        if (event === name) handler(file);
       await settle();
     },
   };

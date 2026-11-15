@@ -69,6 +69,23 @@ vi.mock('obsidian', () => {
     }
   }
   return {
+    Modal: class {
+      contentEl = document.createElement('div');
+      constructor(public app: unknown) {}
+      setTitle(title: string) {
+        this.contentEl.setAttribute('aria-label', title);
+      }
+      open() {
+        document.body.append(this.contentEl);
+        this.onOpen();
+      }
+      close() {
+        this.onClose();
+        this.contentEl.remove();
+      }
+      onOpen() {}
+      onClose() {}
+    },
     FileView,
     MarkdownView,
     TFile,
@@ -126,6 +143,7 @@ async function fixture() {
   const memory = new MemoryVault();
   const events = new Map<string, ((...args: unknown[]) => void)[]>();
   const metadataEvents = new Map<string, ((...args: unknown[]) => void)[]>();
+  const vaultEvents = new Map<string, ((...args: unknown[]) => void)[]>();
   const listen = (map: typeof events) => (name: string, callback: (...args: unknown[]) => void) => {
     map.set(name, [...(map.get(name) ?? []), callback]);
     return {};
@@ -180,6 +198,11 @@ async function fixture() {
   });
   const app = {
     memory,
+    vault: {
+      on: listen(vaultEvents),
+      getMarkdownFiles: () => [...memory.files.values()],
+      getAbstractFileByPath: (path: string) => memory.file(path),
+    },
     workspace: {
       on: listen(events),
       onLayoutReady() {},
