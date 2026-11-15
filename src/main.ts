@@ -7,6 +7,7 @@ import {
   Plugin,
   TFile,
   type WorkspaceLeaf,
+  type App,
 } from 'obsidian';
 import { hasAnnotations, hasPropertyAnnotations, isAnnotationProperty } from './core/annotations';
 import { excludedReaderPath, type Queue } from './core/model';
@@ -22,23 +23,55 @@ import {
   type ResolvedStatusFolders,
 } from './core/status-folders';
 import { Network } from './host/network';
-import { logReaderError } from './host/diagnostics';
-import { readDocument } from './core/document';
+import {
+  logReaderError,
+  initializeReaderDebugLogging,
+  disposeReaderDebugLogging,
+} from './host/diagnostics';
+import { readDocument, patchProperties } from './core/document';
+import { ThinkingRuntime, thinkingSaveMessage } from './host/thinking-runtime';
+import {
+  configureThinking,
+  loadThinkingSettings,
+  providerResult,
+  type ThinkingSettings,
+} from './host/thinking-setup';
+import { editThinkingMarkdown } from './host/thinking-editor';
+import { openThinkingAudit } from './host/thinking-audit';
+import {
+  openThinkingBrowser,
+  addThinkingToExploration,
+  type ThinkingBrowserHost,
+  type ThinkingCreatedNote,
+} from './host/thinking-browser';
+import type { ThinkingTarget, ThinkingRecord } from './core/thinking';
+import { vaultLink, linkPath } from './core/model';
 import { ArticleStore } from './core/store';
-import { confirmArticleReplacement, input } from './host/dialogs';
+import { choose, confirmArticleReplacement, input } from './host/dialogs';
 import { Ingestion } from './host/ingestion';
 import { ReaderSettings, showFeeds } from './host/settings';
 import { type LibraryChange } from './host/vault';
 import { FolderRuntime } from './host/folder-runtime';
 import { READER_VIEW, ReaderView } from './reader/view';
 import { nativeLinkPath } from './host/note-links';
-import { bindNodesApi } from './host/nodes';
+import { bindNodesApi, nodesApi, type NodesApi } from './host/nodes';
 import { ReaderNodes } from './host/fileclass/reader-nodes';
 import {
   DEFAULT_SETTINGS as defaultTypedNotes,
   validateSettings as validateTypedNotes,
   type NodesSettings,
 } from './host/fileclass/settings';
+
+function bindThinkingProvider(app: App, api: NodesApi, path: string, type: string) {
+  const file = app.vault.getAbstractFileByPath(path);
+  return {
+    valid: () =>
+      nodesApi(app) === api &&
+      app.vault.getAbstractFileByPath(path) === file &&
+      !!api.getNode(path)?.classes.includes(type) &&
+      api.listTypes().some((candidate) => candidate.type === type),
+  };
+}
 
 export default class ReaderPlugin extends Plugin {
   private runtime = new FolderRuntime();
@@ -52,6 +85,10 @@ export default class ReaderPlugin extends Plugin {
     return this.runtime.ingestion;
   }
   private unloaded = false;
+  thinking?: ThinkingRuntime;
+  private thinkingSettings?: ThinkingSettings;
+  private thinkingBinding = 'fileClass';
+  private thinkingCreated = new Map<string, ReturnType<typeof bindThinkingProvider>>();
   private network = new Network();
   private folderSaves = new SerialWrites<string>();
   private viewWrites = new Set<Promise<unknown>>();
@@ -130,6 +167,8 @@ export default class ReaderPlugin extends Plugin {
   async onload(): Promise<void> {
     const data = await this.loadData();
     if (this.unloaded) return;
+    initializeReaderDebugLogging();
+    this.thinkingSettings = loadThinkingSettings(data);
     let folders = defaultFolders;
     let statusFolders: ResolvedStatusFolders = defaultStatusFolders;
     try {
@@ -153,6 +192,7 @@ export default class ReaderPlugin extends Plugin {
     const typedSettings = validateTypedNotes(typedCandidate) ? defaultTypedNotes : typedCandidate;
     if (typedSettings !== typedCandidate)
       this.notice('Invalid typed-note settings; using defaults.');
+    this.thinkingBinding = typedSettings.classProperty;
     this.typedNotes = new ReaderNodes(this.app, typedSettings);
     this.typedNotes.start();
     this.unbindNodes = bindNodesApi(this.app, () => this.typedNotes?.api());
@@ -199,6 +239,41 @@ export default class ReaderPlugin extends Plugin {
       },
     });
     this.addCommand({ id: 'add-url', name: 'Add URL', callback: () => this.capture() });
+    this.addCommand({
+      id: 'configure-saved-thinking',
+      name: 'Configure saved thinking',
+      callback: () => this.configureSavedThinking(),
+    });
+    this.addCommand({
+      id: 'open-saved-material',
+      name: 'Open saved material',
+      callback: () => this.openSavedMaterial(),
+    });
+    this.addCommand({
+      id: 'free-comment',
+      name: 'Write a free comment',
+      callback: () => this.freeComment(),
+    });
+    this.addCommand({
+      id: 'audit-saved-material',
+      name: 'Audit saved material (read only)',
+      callback: () => openThinkingAudit(this.app, this.store, this.signal),
+    });
+    for (const [id, name, action] of [
+      ['keep-passage', 'Keep passage', 'keep'],
+      ['comment-on-selection', 'Comment on selection', 'comment'],
+      ['add-selection-to-exploration', 'Add selection to exploration', 'exploration'],
+    ] as const)
+      this.addCommand({
+        id,
+        name,
+        checkCallback: (checking) => {
+          const view = this.app.workspace.getActiveViewOfType(ReaderView);
+          if (!view?.file || this.signal.aborted) return false;
+          if (!checking) void view.captureThinking(action).catch((error) => this.notice(error));
+          return true;
+        },
+      });
     this.addCommand({
       id: 'add-articles-from-csv',
       name: 'Add articles from URLs',
@@ -306,6 +381,51 @@ export default class ReaderPlugin extends Plugin {
       }),
     );
     this.syncMobileNavigation();
+    const observeThinking = (file: import('obsidian').TAbstractFile) => {
+      if (file instanceof TFile) this.thinking?.invalidate(file);
+    };
+    this.registerEvent(this.app.vault.on('create', observeThinking));
+    this.registerEvent(this.app.vault.on('modify', observeThinking));
+    this.registerEvent(this.app.vault.on('delete', observeThinking));
+    this.registerEvent(
+      this.app.vault.on('rename', (file, oldPath) => {
+        if (file instanceof TFile) {
+          this.thinking?.invalidate(file);
+          const settings = this.thinkingSettings;
+          if (settings && linkPath(settings.notebook) === oldPath) {
+            let notebook: string;
+            try {
+              notebook = vaultLink(file.path);
+            } catch {
+              this.notice(
+                'The renamed notebook cannot be represented by a safe native link. Configure saved thinking again.',
+              );
+              return;
+            }
+            const next = { ...settings, notebook };
+            const signal = this.signal;
+            void this.folderSaves
+              .run('folders', async () => {
+                if (signal.aborted || this.thinkingSettings !== settings) return;
+                const data = await this.loadData();
+                if (signal.aborted || this.thinkingSettings !== settings) return;
+                await this.saveData({
+                  ...(data && typeof data === 'object' ? data : {}),
+                  thinking: next,
+                });
+                if (!signal.aborted) this.thinkingSettings = next;
+              })
+              .catch((error) => this.notice(error));
+          }
+        }
+      }),
+    );
+    this.registerEvent(
+      this.app.metadataCache.on('changed', (file) => this.thinking?.invalidate(file, false)),
+    );
+    this.registerEvent(
+      this.app.metadataCache.on('resolved', () => this.thinking?.metadataSettled()),
+    );
     this.registerEvent(
       this.app.workspace.on('file-open', (file) => {
         this.syncMobileNavigation();
@@ -348,6 +468,7 @@ export default class ReaderPlugin extends Plugin {
     );
     this.registerEvent(
       this.app.metadataCache.on('resolve', (file) => {
+        this.thinking?.metadataSettled(file);
         if (!this.signal.aborted) {
           this.indexCapture(file);
           this.keepReferences(file);
@@ -386,12 +507,238 @@ export default class ReaderPlugin extends Plugin {
       void this.tick(false, true).catch((error) => this.notice(error));
     });
   }
+  private configureSavedThinking(): void {
+    const signal = this.signal;
+    configureThinking(
+      this.app,
+      this.thinkingSettings,
+      this.thinkingBinding,
+      (settings) =>
+        this.folderSaves.run('folders', async () => {
+          if (signal.aborted || this.unloaded)
+            throw new Error('Reader settings changed. Reopen setup.');
+          const data = await this.loadData();
+          if (signal.aborted || this.unloaded)
+            throw new Error('Reader settings changed. Reopen setup.');
+          await this.saveData({
+            ...(data && typeof data === 'object' ? data : {}),
+            thinking: settings,
+          });
+          if (!signal.aborted && !this.unloaded) {
+            this.thinkingSettings = settings;
+            this.thinking?.configure(settings);
+          }
+        }),
+      signal,
+    );
+  }
+  private freeComment(): void {
+    const runtime = this.thinking;
+    if (!runtime?.guard()) return;
+    let notebook: string;
+    try {
+      notebook = runtime.notebookPath();
+    } catch {
+      this.configureSavedThinking();
+      return;
+    }
+    editThinkingMarkdown(this.app, {
+      title: 'Write a free comment',
+      preview: 'Save to ' + notebook,
+      signal: runtime.signal,
+      save: async (body, signal) => {
+        const result = await runtime.comment(body, undefined, undefined, () => {
+          runtime.assertActive();
+          if (signal.aborted || runtime.notebookPath() !== notebook)
+            throw new Error('Comment cancelled or capture notebook changed.');
+        });
+        return { status: result.status, message: thinkingSaveMessage(result) };
+      },
+    });
+  }
+  private thinkingBrowserHost(): ThinkingBrowserHost<TFile> | undefined {
+    const runtime = this.thinking;
+    if (!runtime?.guard()) return;
+    return {
+      store: runtime.store,
+      signal: runtime.signal,
+      guard: () => runtime.guard(),
+      notebookPaths: () => runtime.paths('notebook'),
+      explorationPaths: () => runtime.paths('exploration'),
+      sources: () =>
+        [...runtime.articles.catalog.values()].map(({ path, title }) => ({ path, title })),
+      sourceSnapshot: (path) => runtime.articles.read(path),
+      openNative: (target) => this.openThinkingMarkdown(runtime, target),
+      openSource: async (target, record) => this.openThinkingSource(runtime, target, record),
+      createExploration: (signal) => this.createThinkingNote(runtime, signal),
+      createStructuredNote: (origin, signal) => this.createThinkingNote(runtime, signal, origin),
+      canConnectStructuredNote: (target) => {
+        const captured = this.thinkingCreated.get(target.path);
+        return runtime.guard() && !!captured && captured.valid();
+      },
+    };
+  }
+  openSavedMaterial(target?: ThinkingTarget): void {
+    const host = this.thinkingBrowserHost();
+    if (host) openThinkingBrowser(this.app, host, target);
+  }
+  private addSavedToExploration(target: ThinkingTarget): void {
+    const host = this.thinkingBrowserHost();
+    if (host) addThinkingToExploration(this.app, host, target);
+  }
+  private async openThinkingMarkdown(
+    runtime: ThinkingRuntime,
+    target: ThinkingTarget,
+  ): Promise<void> {
+    runtime.assertActive();
+    const file = runtime.vault.resolveLink(target.path, '');
+    if (!file) throw new Error('This native target no longer resolves.');
+    const leaf = this.app.workspace.getLeaf('tab');
+    const exemption = { file, transitioning: true };
+    this.sourceLeaves.set(leaf, exemption);
+    try {
+      await this.dispatchView(() =>
+        leaf.openFile(file, {
+          active: true,
+          state: { mode: 'source' },
+          ...(target.blockId ? { eState: { subpath: '#^' + target.blockId } } : {}),
+        }),
+      );
+    } finally {
+      exemption.transitioning = false;
+      if (!runtime.signal.aborted) this.pruneSourceLeaves();
+    }
+  }
+  private async openThinkingSource(
+    runtime: ThinkingRuntime,
+    target: ThinkingTarget,
+    record?: ThinkingRecord,
+  ): Promise<void> {
+    runtime.assertActive();
+    const file = record
+      ? runtime.resolveSource(record)
+      : runtime.vault.resolveLink(target.path, '');
+    if (!file || !runtime.articles.catalog.article(file.path))
+      throw new Error(
+        'Source missing or no longer an article. The saved snapshot remains readable.',
+      );
+    const view = this.app.workspace.getActiveViewOfType(ReaderView) ?? (await this.openList());
+    runtime.assertActive();
+    await view.openArticle(file.path);
+    runtime.assertActive();
+    if (record && view.file === file) view.inspectThinkingContext(record);
+  }
+  private async createThinkingNote(
+    runtime: ThinkingRuntime,
+    signal: AbortSignal,
+    origin?: ThinkingTarget,
+  ): Promise<ThinkingCreatedNote> {
+    const api = nodesApi(this.app);
+    if (!api)
+      return {
+        status: 'failed',
+        message:
+          'Enable Fileclass public API v1 to create typed notes. Existing writing stays readable.',
+      };
+    let created: TFile | undefined;
+    let originDispatched = false;
+    try {
+      runtime.assertActive();
+      let type = origin ? undefined : this.thinkingSettings?.explorationType;
+      if (origin) {
+        type = (
+          await choose(
+            this.app,
+            'Create structured note — choose type',
+            api.listTypes(),
+            (type) => type.label,
+            signal,
+          )
+        )?.type;
+        if (!type) return { status: 'cancelled' };
+      }
+      if (!type || !api.listTypes().some((candidate) => candidate.type === type))
+        throw new Error('Configure an existing exploration type first.');
+      const node = await providerResult(api.createNode({ type, signal }), signal);
+      if (signal.aborted || !runtime.guard())
+        return {
+          status: 'cancelled',
+          message:
+            'Cancelled. Any note already created is preserved; check native notes before creating another.',
+        };
+      if (!node)
+        return {
+          status: 'cancelled',
+          message: 'Creation cancelled; any completed note is preserved.',
+        };
+      created = runtime.vault.file(node.path);
+      if (!created) throw new Error('The created note no longer resolves.');
+      const authority = bindThinkingProvider(this.app, api, node.path, type);
+      if (!authority.valid())
+        throw new Error(
+          'Fileclass changed. The created note is preserved; reopen it to inspect its type.',
+        );
+      this.thinkingCreated.set(created.path, authority);
+      if (origin) {
+        if (!origin.blockId || !/^[A-Za-z0-9-]+$/.test(origin.blockId))
+          throw new Error('The saved entry no longer has a valid block target.');
+        const link = vaultLink(origin.path).slice(0, -2) + '#^' + origin.blockId + ']]';
+        const path = created.path;
+        const original = await runtime.vault.read(created);
+        const next = Object.hasOwn(readDocument(original).properties, 'origin')
+          ? original
+          : patchProperties(original, { origin: link });
+        await runtime.vault.process(created, (current) => {
+          runtime.assertActive();
+          if (signal.aborted || !authority.valid() || current !== original)
+            throw new Error('The created note changed. Its existing text is preserved.');
+          originDispatched = true;
+          return next;
+        });
+        if (
+          (await runtime.vault.read(created)) !== next ||
+          created.path !== path ||
+          runtime.vault.file(path) !== created
+        )
+          return {
+            status: 'possibly-saved',
+            target: { path: created.path },
+            message: 'Note created; origin possibly saved. Open Markdown to check before retrying.',
+          };
+      }
+      return { status: 'saved', target: { path: created.path } };
+    } catch (error) {
+      return {
+        status: originDispatched ? 'possibly-saved' : created ? 'partial' : 'failed',
+        target: created ? { path: created.path } : undefined,
+        message: originDispatched
+          ? 'Note created; origin possibly saved. Open Markdown to check before retrying.'
+          : error instanceof Error
+            ? error.message
+            : String(error),
+      };
+    }
+  }
   private readerHost(): ConstructorParameters<typeof ReaderView>[1] {
     const plugin = this,
       signal = this.signal;
     return Object.freeze({
       app: this.app,
       store: this.store,
+      thinking: this.thinking,
+      configureThinking: () => {
+        if (!signal.aborted) plugin.configureSavedThinking();
+      },
+      openSavedMaterial: (target?: ThinkingTarget) => {
+        if (!signal.aborted) plugin.openSavedMaterial(target);
+      },
+      addToExploration: (target: ThinkingTarget) => {
+        if (!signal.aborted) plugin.addSavedToExploration(target);
+      },
+      openThinkingNotebook: async (path: string) => {
+        if (!signal.aborted && plugin.thinking)
+          await plugin.openThinkingMarkdown(plugin.thinking, { path });
+      },
       ingestion: this.ingestion,
       signal,
       get paged() {
@@ -420,8 +767,12 @@ export default class ReaderPlugin extends Plugin {
       (change) => this.changed(change),
       (message) => this.notice(message),
     );
+    const thinking = new ThinkingRuntime(this.app, this.store, this.signal, this.thinkingSettings);
+    this.thinking = thinking;
+    this.store.setReferenceProtection((path) => thinking.referenceAuthority(path));
   }
   private stopFolders(): void {
+    this.thinking?.dispose();
     this.runtime.stop();
     this.routingEpoch++;
     this.articleFragments.clear();
@@ -473,10 +824,12 @@ export default class ReaderPlugin extends Plugin {
       assertLoaded();
       // No candidate path becomes live until the complete group is valid and durable.
       const retiring = this.runtime;
+      const retiringThinking = this.thinking;
       for (const view of this.views()) view.stopForUnload();
       this.stopFolders();
       while (this.viewWrites.size) await Promise.allSettled([...this.viewWrites]);
       await retiring.drain();
+      await retiringThinking?.drain();
       assertLoaded();
       const cleared = await Promise.allSettled(
         this.views().map(async (view) => {
@@ -1099,6 +1452,8 @@ export default class ReaderPlugin extends Plugin {
     }
   }
   onunload(): void {
+    disposeReaderDebugLogging();
+    this.thinking?.dispose();
     this.unbindNodes?.();
     this.unbindNodes = undefined;
     this.typedNotes?.dispose();

@@ -1,5 +1,6 @@
 import {
   ItemView,
+  Menu,
   Notice,
   Platform,
   parseLinktext,
@@ -56,6 +57,12 @@ import type { LibraryChange } from '../host/vault';
 import { ReadingSurface } from './surface';
 import { selectedPassage, selectionRange } from './render';
 import { TapHighlighter, type TapToolbarAction } from './tap-highlighter';
+import { blockSpans } from '../core/markdown';
+import type { ThinkingRecord, ThinkingTarget } from '../core/thinking';
+import { ThinkingRuntime, thinkingSaveMessage } from '../host/thinking-runtime';
+import { editThinkingMarkdown } from '../host/thinking-editor';
+import { previewThinkingSelection } from '../host/thinking-capture';
+import { thinkingContextMarker, thinkingSelectionOffsets } from './thinking-selection';
 
 export const READER_VIEW = 'obsidian-reader';
 type PendingSelection = {
@@ -94,6 +101,11 @@ interface ReaderHost {
   capture(): void;
   edit(view: ReaderView, file: TFile): Promise<void>;
   refreshPresentation?(view: ReaderView, valid: () => boolean): Promise<void>;
+  thinking?: ThinkingRuntime;
+  configureThinking?(): void;
+  openSavedMaterial?(target?: ThinkingTarget): void;
+  addToExploration?(target: ThinkingTarget): void;
+  openThinkingNotebook?(path: string): Promise<void>;
 }
 export class ReaderView extends ItemView {
   private queue: Queue = 'Inbox';
@@ -101,6 +113,13 @@ export class ReaderView extends ItemView {
   private snapshot?: Snapshot<TFile>;
   private fallbackFile?: TFile;
   private surface?: ReadingSurface;
+  private thinkingObserver?: MutationObserver;
+  private thinkingPaint = 0;
+  private thinkingMenuSurfaces = new WeakSet<ReadingSurface>();
+  private thinkingParagraphMenu?: {
+    surface: ReadingSurface;
+    open(paragraph: HTMLElement, event?: MouseEvent): void;
+  };
   private tapHighlighter?: TapHighlighter;
   private passageActions?: readonly TapToolbarAction[];
   private selectedPassage?: { snapshot: Snapshot<TFile>; from: number; to: number };
@@ -119,6 +138,7 @@ export class ReaderView extends ItemView {
   private actions?: HTMLElement;
   private status?: HTMLElement;
   private statusMessage?: string;
+  private thinkingMessage?: string;
   private articleTitle?: HTMLElement;
   private presentationKey = '';
   private ownDeferred?: { displayed: string; saved: string };
@@ -289,6 +309,8 @@ export class ReaderView extends ItemView {
   private disposeReading(): void {
     if (this.lifetime.signal.aborted) return;
     this.lifetime.abort();
+    this.thinkingObserver?.disconnect();
+    this.thinkingObserver = undefined;
     this.generation++;
     this.clearSend();
     this.passageActions = undefined;
@@ -424,6 +446,8 @@ export class ReaderView extends ItemView {
     return button;
   }
   private clear(): void {
+    this.thinkingObserver?.disconnect();
+    this.thinkingObserver = undefined;
     this.rowIndicators?.dispose();
     this.rowIndicators = undefined;
     this.mountedListRows = undefined;
@@ -449,6 +473,7 @@ export class ReaderView extends ItemView {
     this.actions = undefined;
     this.status = undefined;
     this.statusMessage = undefined;
+    this.thinkingMessage = undefined;
     this.articleTitle = undefined;
     this.automatic = undefined;
     this.lastSelection = '';
@@ -527,6 +552,20 @@ export class ReaderView extends ItemView {
       button.classList.toggle('mod-cta', name === queue);
     }
     this.button(tabs, 'Add URL', () => this.host.capture(), 'plus', 'u');
+    if (this.host.thinking) {
+      this.button(
+        tabs,
+        'Open saved material',
+        () => this.host.openSavedMaterial?.(),
+        'notebook-pen',
+      );
+      this.button(
+        tabs,
+        'Configure saved thinking',
+        () => this.host.configureThinking?.(),
+        'settings-2',
+      );
+    }
     const filterButton = this.button(
       tabs,
       'Filter by topic',
@@ -1076,6 +1115,29 @@ export class ReaderView extends ItemView {
         attr: { 'aria-label': 'Article actions' },
       });
       this.controls();
+      if (this.host.thinking) {
+        this.installThinkingParagraphMenu(surface);
+        this.thinkingObserver = new MutationObserver((changes) => {
+          const sourceChanged = changes.some((change) =>
+            [...change.addedNodes, ...change.removedNodes].some(
+              (node) => !(node instanceof Element) || !node.hasAttribute('data-reader-decoration'),
+            ),
+          );
+          const current = this.snapshot;
+          if (
+            !sourceChanged ||
+            !current ||
+            this.surface !== surface ||
+            surface.displayedBody !== current.body ||
+            !this.current(current, token!)
+          )
+            return;
+          this.installThinkingParagraphMenu(surface);
+          void this.paintThinking(current, token!);
+        });
+        this.thinkingObserver.observe(surface.body, { childList: true });
+        void this.paintThinking(snapshot, token);
+      }
       try {
         const marked = await this.host.store.dogEar(snapshot.path, () => {
           if (!this.current(snapshot, token!) || signal?.aborted || request !== this.opening)
@@ -1346,6 +1408,27 @@ export class ReaderView extends ItemView {
       );
     const related = this.button(this.actions, 'Related notes', () => this.topics(), 'tags', 'r');
     related.classList.add('reader-related-notes');
+    if (this.host.thinking) {
+      for (const [label, action, icon] of [
+        ['Keep passage', 'keep', 'bookmark-plus'],
+        ['Comment on selection', 'comment', 'message-square-plus'],
+        ['Add to exploration', 'exploration', 'notebook-pen'],
+      ] as const) {
+        const button = this.button(this.actions, label, () => this.captureThinking(action), icon);
+        // Keep the native source selection while a touch/mouse control takes intent.
+        button.addEventListener('pointerdown', (event) => event.preventDefault());
+      }
+      if (this.surface.isInspectingContext) {
+        this.button(this.actions, 'Continue reading', () => {
+          this.surface?.continueReading();
+          this.controls();
+        });
+        this.button(this.actions, 'Read from here', () => {
+          this.surface?.readFromHere();
+          this.controls();
+        });
+      }
+    }
     this.setupTapHighlighter();
     this.updateStatus();
   }
@@ -1402,14 +1485,384 @@ export class ReaderView extends ItemView {
       save: (range, mode) =>
         mode === 'node'
           ? this.saveTapNode(surface.body, range)
-          : this.saveTapSelection(surface.body, range),
+          : this.host.thinking
+            ? this.previewThinkingRange(range)
+            : this.saveTapSelection(surface.body, range),
       undo: () => this.undoTapHighlight(),
       notify: (error) => this.error(error),
     });
+    if (this.host.thinking) {
+      const trigger = this.actions.querySelector<HTMLButtonElement>(
+        '[aria-label="Highlight mode"]',
+      );
+      if (trigger) {
+        trigger.setAttribute('aria-label', 'Keep passage mode');
+        setTooltip(trigger, 'Keep passage mode (H)');
+      }
+    }
+  }
+  /** Shared direct/exploration source return; normal destination entry happens first. */
+  inspectThinkingContext(record: ThinkingRecord): void {
+    const runtime = this.host.thinking,
+      snapshot = this.snapshot;
+    if (!runtime || !snapshot || !this.surface) return;
+    const context = runtime.store.context(record, snapshot);
+    if (context.status === 'exact' && context.from !== undefined && context.to !== undefined) {
+      const marker = thinkingContextMarker(snapshot.body, context.from, context.to);
+      if (marker) this.surface.inspectContext(marker);
+    }
+    if (!this.surface.isInspectingContext)
+      this.thinkingFeedback(
+        'Source context is uncertain. Saved snapshot remains unchanged; this is an article-level return.',
+      );
+    this.controls();
+  }
+  private thinkingFeedback(message: string, notebook?: string): void {
+    if (!this.status) return;
+    this.statusMessage = undefined;
+    this.thinkingMessage = message;
+    this.status.empty();
+    this.status.createEl('span', { text: message });
+    if (notebook)
+      this.button(this.status, 'Open notebook', () => this.host.openThinkingNotebook?.(notebook));
+    this.button(this.status, 'Configure saved thinking', () => this.host.configureThinking?.());
+  }
+  private previewThinkingRange(range: Range): Promise<void> {
+    const surface = this.surface,
+      source = this.snapshot,
+      generation = this.generation;
+    const selection = surface && selectedPassage(surface.body, range);
+    if (!source || !surface || !selection) return Promise.resolve();
+    const captured = selection.range.cloneRange();
+    previewThinkingSelection(this.app, selection.quote, this.articleLifetime.signal, (action) => {
+      if (
+        !this.current(source, generation) ||
+        this.snapshot?.body !== source.body ||
+        this.surface !== surface ||
+        surface.displayedBody !== source.body
+      ) {
+        this.thinkingFeedback('The source changed while previewing. Tap the passage again.');
+        return;
+      }
+      void this.captureThinking(action, captured).catch((error) => this.error(error));
+    });
+    return Promise.resolve();
+  }
+  /** Palette and visible toolbar share exactly this source-mapped action path. */
+  async captureThinking(action: 'keep' | 'comment' | 'exploration', range?: Range): Promise<void> {
+    const runtime = this.host.thinking,
+      surface = this.surface,
+      original = this.snapshot;
+    if (!runtime || !surface || !original || this.stopping) return;
+    const selection = selectedPassage(surface.body, range);
+    if (!selection) {
+      this.thinkingFeedback(
+        'Select source words first, or use Add comment here from a paragraph menu.',
+      );
+      return;
+    }
+    const generation = this.generation,
+      signal = this.articleLifetime.signal;
+    const guard = () => {
+      if (
+        signal.aborted ||
+        !this.current(original, generation) ||
+        this.snapshot?.body !== original.body ||
+        this.surface !== surface ||
+        surface.displayedBody !== original.body
+      )
+        throw new Error('The source changed. Reselect current words before saving.');
+      runtime.assertActive();
+    };
+    let offsets: { from: number; to: number };
+    let notebookPath: string;
+    try {
+      guard();
+      offsets = thinkingSelectionOffsets(original.body, selection);
+      notebookPath = runtime.notebookPath();
+    } catch (error) {
+      this.thinkingFeedback(error instanceof Error ? error.message : String(error));
+      return;
+    }
+    const save = async (comment?: string, editorSignal?: AbortSignal) => {
+      await this.positionWrite;
+      guard();
+      if (editorSignal?.aborted) throw new Error('Comment cancelled.');
+      const source = this.snapshot!;
+      if (runtime.notebookPath() !== notebookPath)
+        throw new Error('The capture notebook changed. Reselect the passage before saving.');
+      const before = await runtime.store.read(notebookPath);
+      guard();
+      const promise = runtime.keep(source, offsets.from, offsets.to, comment, () => {
+        guard();
+        if (editorSignal?.aborted) throw new Error('Comment cancelled.');
+      });
+      this.writing = promise;
+      try {
+        const result = await promise;
+        if (this.current(original, generation)) {
+          if (result.retainedSource) this.adoptSnapshot(result.retainedSource);
+          this.thinkingFeedback(thinkingSaveMessage(result), result.document?.path ?? before.path);
+          void this.paintThinking(this.snapshot!, generation);
+          if (
+            (result.status === 'saved' || result.status === 'unchanged') &&
+            action === 'exploration'
+          ) {
+            const record =
+              result.affectedRecords?.find((record) => record.kind === 'passage') ??
+              result.records.find(
+                (record) =>
+                  record.kind === 'passage' &&
+                  !before.records.some((old) => old.blockId === record.blockId),
+              );
+            if (record) this.host.addToExploration?.(runtime.target(record));
+            else
+              this.thinkingFeedback(
+                'Passage saved. Open saved material to add the existing passage to an exploration.',
+                before.path,
+              );
+          }
+        }
+        return { status: result.status, message: thinkingSaveMessage(result) };
+      } finally {
+        if (this.writing === promise) this.writing = undefined;
+      }
+    };
+    if (action === 'comment') {
+      editThinkingMarkdown(this.app, {
+        title: 'Comment on passage',
+        preview: selection.quote,
+        signal,
+        save: (body, editorSignal) => save(body, editorSignal),
+      });
+      return;
+    }
+    if (this.writing) return;
+    try {
+      await save();
+    } catch (error) {
+      if (!signal.aborted)
+        this.thinkingFeedback(error instanceof Error ? error.message : String(error));
+    }
+  }
+  private installThinkingParagraphMenu(surface: ReadingSurface): void {
+    const source = this.snapshot!,
+      generation = this.generation;
+    const paragraphGap = (paragraph: HTMLElement): number => {
+      const range = paragraph.ownerDocument.createRange();
+      range.selectNodeContents(paragraph);
+      const selection = selectedPassage(surface.body, range);
+      if (!selection) throw new Error('Choose a source paragraph.');
+      const offsets = thinkingSelectionOffsets(source.body, selection);
+      const span = blockSpans(source.body).paragraphs.find(
+        (span) => span.from <= offsets.from && span.to >= offsets.to,
+      );
+      if (!span) throw new Error('This paragraph cannot accept an independent comment.');
+      return span.to;
+    };
+    const open = (paragraph: HTMLElement, event?: MouseEvent) => {
+      const menu = new Menu();
+      menu.addItem((item) =>
+        item.setTitle('Add comment here').onClick(() => {
+          try {
+            const gap = paragraphGap(paragraph),
+              runtime = this.host.thinking!;
+            const notebookPath = runtime.notebookPath();
+            editThinkingMarkdown(this.app, {
+              title: 'Add comment here',
+              preview: 'After: ' + (paragraph.textContent ?? '').slice(-160),
+              signal: this.articleLifetime.signal,
+              save: async (body, signal) => {
+                await this.positionWrite;
+                const guard = () => {
+                  if (
+                    signal.aborted ||
+                    !this.current(source, generation) ||
+                    this.snapshot?.body !== source.body ||
+                    runtime.notebookPath() !== notebookPath
+                  )
+                    throw new Error(
+                      'The paragraph or capture notebook changed. Choose its gap again.',
+                    );
+                };
+                guard();
+                const result = await runtime.comment(body, this.snapshot!, gap, guard);
+                if (this.current(source, generation)) {
+                  if (result.retainedSource) this.adoptSnapshot(result.retainedSource);
+                  this.thinkingFeedback(thinkingSaveMessage(result), runtime.notebookPath());
+                  void this.paintThinking(this.snapshot!, generation);
+                }
+                return { status: result.status, message: thinkingSaveMessage(result) };
+              },
+            });
+          } catch (error) {
+            this.thinkingFeedback(error instanceof Error ? error.message : String(error));
+          }
+        }),
+      );
+      if (event) menu.showAtMouseEvent(event);
+      else
+        menu.showAtPosition({
+          x: paragraph.getBoundingClientRect().left,
+          y: paragraph.getBoundingClientRect().bottom,
+        });
+    };
+    for (const paragraph of surface.body.querySelectorAll<HTMLElement>('p')) {
+      if (
+        paragraph.closest('[data-reader-decoration]') ||
+        paragraph.querySelector('[data-reader-decoration="thinking-controls"]')
+      )
+        continue;
+      const controls = paragraph.createEl('span', {
+        cls: 'reader-thinking-paragraph-controls',
+        attr: { 'data-reader-decoration': 'thinking-controls' },
+      });
+      this.button(controls, 'Paragraph actions', () => open(paragraph), 'ellipsis');
+    }
+    this.thinkingParagraphMenu = { surface, open };
+    if (this.thinkingMenuSurfaces.has(surface)) return;
+    this.thinkingMenuSurfaces.add(surface);
+    surface.body.addEventListener(
+      'contextmenu',
+      (event) => {
+        const paragraph =
+          event.target instanceof Element ? event.target.closest<HTMLElement>('p') : null;
+        if (!paragraph || paragraph.closest('[data-reader-decoration]')) return;
+        event.preventDefault();
+        if (this.thinkingParagraphMenu?.surface === surface)
+          this.thinkingParagraphMenu.open(paragraph, event);
+      },
+      { signal: this.articleLifetime.signal },
+    );
+  }
+  private async paintThinking(source: Snapshot<TFile>, generation: number): Promise<void> {
+    const runtime = this.host.thinking,
+      surface = this.surface;
+    if (!runtime || !surface) return;
+    const paint = ++this.thinkingPaint;
+    const current = () =>
+      paint === this.thinkingPaint &&
+      this.current(source, generation) &&
+      this.surface === surface &&
+      this.snapshot?.body === source.body;
+    const records: ThinkingRecord[] = [];
+    let incomplete = false;
+    for (const path of runtime.paths('notebook')) {
+      if (!current()) return;
+      try {
+        records.push(
+          ...(
+            await runtime.store.read(path, () => {
+              if (!current()) throw new Error('Thinking projection superseded.');
+            })
+          ).records,
+        );
+      } catch {
+        incomplete = true;
+      }
+    }
+    if (!current() || selectionRange(surface.body) || surface.pointerActive) return;
+    for (const element of surface.body.querySelectorAll('[data-reader-decoration="thinking"]'))
+      element.remove();
+    const paragraphs = [...surface.body.querySelectorAll<HTMLElement>('p')].filter(
+      (p) => !p.closest('[data-reader-decoration]'),
+    );
+    const spans = paragraphs.map((paragraph) => {
+      try {
+        const range = paragraph.ownerDocument.createRange();
+        range.selectNodeContents(paragraph);
+        const selection = selectedPassage(surface.body, range);
+        return selection
+          ? { paragraph, ...thinkingSelectionOffsets(source.body, selection) }
+          : undefined;
+      } catch {
+        return undefined;
+      }
+    });
+    let unplaced: HTMLElement | undefined;
+    const append = (record: ThinkingRecord, reference = record) => {
+      const context = runtime.store.context(reference, source);
+      const match =
+        context.status === 'exact' && context.from !== undefined
+          ? spans.find(
+              (span) =>
+                span &&
+                (reference.kind === 'comment'
+                  ? span.to <= context.from! && !source.body.slice(span.to, context.from).trim()
+                  : span.from <= context.from! && span.to >= context.from!),
+            )
+          : undefined;
+      const note = document.createElement('aside');
+      note.className = 'reader-thinking-inline';
+      note.dataset.readerDecoration = 'thinking';
+      note.createEl('strong', {
+        text: record.kind === 'comment' ? 'Your comment' : 'Kept passage — saved attention',
+      });
+      note.createDiv({ text: record.body, cls: 'reader-thinking-body' });
+      this.button(note, 'Open saved entry', () =>
+        this.host.openSavedMaterial?.(runtime.target(record)),
+      );
+      if (record.kind === 'comment' && !record.readOnly)
+        this.button(note, 'Edit comment', () =>
+          editThinkingMarkdown(this.app, {
+            title: 'Edit comment',
+            body: record.body,
+            signal: this.articleLifetime.signal,
+            save: async (body, signal) => {
+              const result = await runtime.store.editComment({
+                record,
+                body,
+                guard: () => {
+                  if (signal.aborted || !current())
+                    throw new Error('The article changed. Reopen the comment.');
+                },
+              });
+              if (current()) {
+                this.thinkingFeedback(thinkingSaveMessage(result), record.path);
+                void this.paintThinking(source, generation);
+              }
+              return { status: result.status, message: thinkingSaveMessage(result) };
+            },
+          }),
+        );
+      if (match) match.paragraph.after(note);
+      else {
+        if (!unplaced) {
+          unplaced = surface.body.createEl('section', {
+            cls: 'reader-thinking-unplaced',
+            attr: { 'data-reader-decoration': 'thinking' },
+          });
+          unplaced.createEl('h2', { text: 'Unplaced saved thinking' });
+          unplaced.createEl('p', {
+            text: 'Source context could not be placed uniquely. Your saved words have not changed.',
+          });
+        }
+        unplaced.append(note);
+      }
+    };
+    for (const record of records) {
+      if (record.source && runtime.resolveSource(record) === source.file) append(record);
+      else if (record.kind === 'comment' && record.about) {
+        const target = runtime.vault.resolveLink(record.about.path, record.path);
+        const about = records.find(
+          (candidate) =>
+            candidate.blockId === record.about?.blockId &&
+            runtime.vault.file(candidate.path) === target,
+        );
+        if (about && runtime.resolveSource(about) === source.file) append(record, about);
+      }
+    }
+    if (incomplete)
+      this.thinkingFeedback(
+        'Some saved thinking could not be read. Open saved material or the notebook to inspect it.',
+      );
+    surface.refresh();
   }
   private updateStatus(): void {
     if (!this.snapshot || !this.status) return;
     const article = articleInfo(this.snapshot.path, this.snapshot.properties)!;
+    if (this.thinkingMessage && !article.error) return;
+    this.thinkingMessage = undefined;
     const message =
       article.error ||
       (!this.snapshot.body.trim()
@@ -1432,6 +1885,14 @@ export class ReaderView extends ItemView {
   }
   private selectionChanged(): void {
     if (this.stopping || this.host.signal.aborted || this.dialog) return;
+    if (this.host.thinking) {
+      this.invalidateSelection();
+      if (this.surface && this.snapshot && !selectionRange(this.surface.body)) {
+        this.surface.refresh();
+        void this.paintThinking(this.snapshot, this.generation);
+      }
+      return;
+    }
     const revision = this.invalidateSelection();
     if (this.tapMode) return;
     const range = this.surface && selectionRange(this.surface.body);
@@ -1522,6 +1983,7 @@ export class ReaderView extends ItemView {
     valid: (hosted?: boolean) => boolean = () => true,
     leaving = false,
   ): Promise<void> {
+    if (this.host.thinking) return; // Thinking captures are explicit, never selection/close side effects.
     await this.positionWrite;
     const closing = leaving && this.stopping && !!pending && !this.host.signal.aborted;
     if (
@@ -3303,6 +3765,8 @@ export class ReaderView extends ItemView {
     }
     if (this.snapshot.file.path !== change.path) {
       this.refreshArticleTopics();
+      if (this.host.thinking && !this.writing)
+        void this.paintThinking(this.snapshot, this.generation);
       return;
     }
     if (this.operating || this.writing) {

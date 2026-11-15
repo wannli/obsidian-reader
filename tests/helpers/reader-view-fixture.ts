@@ -8,6 +8,7 @@ import { changePassage, passages } from '../../src/core/annotations';
 import { hostPassage, paragraphAnchors } from '../../src/core/hosted-highlights';
 import { articleTopicPill, type ArticleTopic } from '../../src/reader/topic-pills';
 import { ArticleAnalysis } from '../../src/reader/article-analysis';
+import { renderBody as renderArticleBody } from '../../src/reader/render';
 import { ReaderView } from '../../src/reader/view';
 import ReaderPlugin from '../../src/main';
 import { bindNodesApi, type NodesApi, type NodeResult } from '../../src/host/nodes';
@@ -35,6 +36,7 @@ const mocks = vi.hoisted(() => ({
   commands: new Map<string, Command>(),
   protocols: new Map<string, (params: Record<string, string>) => unknown>(),
   renderError: undefined as Error | undefined,
+  renderRealArticles: false,
 }));
 
 vi.mock('obsidian', () => {
@@ -121,6 +123,21 @@ vi.mock('obsidian', () => {
     }
   }
   return {
+    Modal: class {
+      contentEl = document.createElement('div');
+      constructor(public app: any) {}
+      setTitle(title: string) {
+        this.contentEl.setAttribute('aria-label', title);
+      }
+      open() {
+        document.body.append(this.contentEl);
+        (this as any).onOpen?.();
+      }
+      close() {
+        (this as any).onClose?.();
+        this.contentEl.remove();
+      }
+    },
     FileView,
     MarkdownView,
     TFile,
@@ -169,7 +186,10 @@ vi.mock('../../src/host/settings', () => ({ ReaderSettings: class {}, showFeeds:
 vi.mock('../../src/host/vault', () => ({
   ObsidianVault: class {
     constructor(app: any) {
-      return app.__vault;
+      return Object.assign(app.__vault, {
+        resolveLink: (path: string) => app.__vault.file(path) ?? app.__vault.file(path + '.md'),
+        drain: async () => {},
+      });
     }
   },
   watchLibrary: () => () => {},
@@ -218,7 +238,8 @@ vi.mock('../../src/reader/surface', () => ({
         return;
       }
       this.displayedBody = body;
-      this.body.textContent = body;
+      if (mocks.renderRealArticles) renderArticleBody(body, this.body, '');
+      else this.body.textContent = body;
       this.deferred = undefined;
     });
     selection = () => this.selectionValue;
@@ -231,6 +252,16 @@ vi.mock('../../src/reader/surface', () => ({
     moveByPage = vi.fn();
     jumpTo = vi.fn();
     reveal = vi.fn();
+    isInspectingContext = false;
+    inspectContext = vi.fn(() => {
+      this.isInspectingContext = true;
+    });
+    continueReading = vi.fn(() => {
+      this.isInspectingContext = false;
+    });
+    readFromHere = vi.fn(() => {
+      this.isInspectingContext = false;
+    });
     highlightFeedback = vi.fn(() => vi.fn());
     dispose = vi.fn(() => this.analysis.clear());
     constructor(
@@ -268,6 +299,7 @@ beforeAll(() => {
       for (const [key, value] of Object.entries(options.attr ?? {}))
         element.setAttribute(key, String(value));
       if (options.type) element.setAttribute('type', options.type);
+      if (options.value !== undefined) (element as HTMLInputElement).value = options.value;
       if (options.placeholder) element.setAttribute('placeholder', options.placeholder);
       this.append(element);
       return element;
@@ -287,6 +319,7 @@ beforeEach(() => {
   mocks.commands.clear();
   mocks.protocols.clear();
   mocks.renderError = undefined;
+  mocks.renderRealArticles = false;
   Platform.isMobile = false;
   mocks.choose.mockReset().mockResolvedValue(null);
   mocks.highlightPicker.mockReset().mockResolvedValue(null);
@@ -305,6 +338,7 @@ afterEach(() => {
 
 function hostFixture(folders: ReaderFolders = defaultFolders) {
   const vault = new MemoryVault();
+  const vaultEvents = new Map<string, ((...args: any[]) => void)[]>();
   const workspaceEvents = new Map<string, ((...args: any[]) => void)[]>(),
     metadataEvents = new Map<string, ((...args: any[]) => void)[]>();
   const layouts: (() => void)[] = [],
@@ -322,6 +356,7 @@ function hostFixture(folders: ReaderFolders = defaultFolders) {
   const app: any = {
     __vault: vault,
     vault: {
+      on: listen(vaultEvents),
       getName: vi.fn(() => 'Device-local Reader vault'),
       getMarkdownFiles: () => [...vault.files.values()],
       getAbstractFileByPath: (path: string) => vault.file(path),
@@ -395,6 +430,7 @@ function hostFixture(folders: ReaderFolders = defaultFolders) {
     opened,
     workspace: (name: string, ...args: any[]) => emit(workspaceEvents, name, ...args),
     metadata: (name: string, ...args: any[]) => emit(metadataEvents, name, ...args),
+    vaultEvent: (name: string, ...args: any[]) => emit(vaultEvents, name, ...args),
   };
 }
 
