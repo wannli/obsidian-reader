@@ -242,11 +242,10 @@ export class Ingestion {
         .slice(0, 20);
       for (const item of latest20) {
         guard.check();
-        if (
-          this.store.catalog.findUrl(item.url) ||
-          (timestamp(item.published) ?? Infinity) < monthCutoff(new Date())
-        )
-          continue;
+        if ((timestamp(item.published) ?? Infinity) < monthCutoff(new Date())) continue;
+        // Metadata alone cannot authorize reuse or hide an ambiguous group. The
+        // shared capture lane refreshes candidate bytes, also for native captures.
+        if (await this.store.resolveCaptureUrl(item.url, guard.validate)) continue;
         await guard.validate();
         const body = await feedMarkdown(item);
         await guard.validate();

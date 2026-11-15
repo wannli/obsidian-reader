@@ -1,4 +1,5 @@
-import { Catalog } from './catalog';
+import { Catalog, DuplicateArticleUrlError } from './catalog';
+import { ReaderAuditor, type ReaderAudit, type ReaderAuditOptions } from './audit';
 import {
   acquireBody,
   ChangedNote,
@@ -140,6 +141,7 @@ export class PartialCollectionError<File extends NoteFile> extends Error {
 /** The only route to article mutations: one per-file queue, fresh bytes, then guarded commit. */
 export class ArticleStore<File extends NoteFile> {
   readonly catalog: Catalog;
+  private auditor: ReaderAuditor<File>;
   private writes = new SerialWrites<File>();
   // Enter before any file lane; never hold one file lane while acquiring another.
   private collections = new SerialWrites<string>();
@@ -168,9 +170,17 @@ export class ArticleStore<File extends NoteFile> {
   ) {
     this.catalog = new Catalog(folders);
     this.folders = this.catalog.folders;
+    this.auditor = new ReaderAuditor(vault, this.catalog, () => {
+      if (!this.active) throw new Error('Reader has stopped.');
+    });
+  }
+  /** Explicit bounded read-only integrity report; no repair or source writes. */
+  audit(options: ReaderAuditOptions = {}): Promise<ReaderAudit> {
+    return this.auditor.audit(options);
   }
   dispose(): void {
     this.active = false;
+    this.auditor.stop();
     this.captures = new WeakMap();
   }
   /** Host path changes revoke ownership even if the file later returns to its original path. */
@@ -238,13 +248,17 @@ export class ArticleStore<File extends NoteFile> {
     }
     throw new Error('Too many articles share this filename.');
   }
-  /** Verify the indexed URL against current bytes; a stale first hit must not hide another match. */
-  private async existingArticle(url: string): Promise<File | undefined> {
-    const checked = new Set<string>();
+  /** Refresh every candidate, including observations arriving during reads. A stale hit
+   * must neither hide a duplicate nor cause a false conflict. No body is ever rewritten. */
+  private async existingArticle(
+    url: string,
+    reuseGuard: () => void | Promise<void> = () => {},
+  ): Promise<File | undefined> {
+    const checked = new Map<string, { file: File; raw: string }>();
     while (true) {
-      const indexed = this.catalog.findUrl(url, checked);
-      if (!indexed) return;
-      checked.add(indexed.path);
+      if (!this.active) throw new Error('Reader has stopped.');
+      const indexed = this.catalog.urlMatches(url).find((article) => !checked.has(article.path));
+      if (!indexed) break;
       const file = this.vault.file(indexed.path);
       if (!file) {
         this.catalog.remove(indexed.path);
@@ -253,10 +267,65 @@ export class ArticleStore<File extends NoteFile> {
       const raw = await this.vault.read(file);
       if (this.vault.file(indexed.path) !== file || file.path !== indexed.path)
         throw new ChangedNote('An article moved during capture. Retry after the vault settles.');
-      const properties = readDocument(raw).properties;
-      this.catalog.update(indexed.path, properties);
-      if (this.catalog.article(indexed.path)?.url === url) return file;
+      this.catalog.update(indexed.path, readDocument(raw).properties);
+      checked.set(indexed.path, { file, raw });
     }
+    const matches = this.catalog.urlMatches(url);
+    if (matches.length > 1)
+      throw new DuplicateArticleUrlError(
+        url,
+        matches.map((article) => article.path),
+      );
+    const candidate = matches[0] && checked.get(matches[0].path);
+    if (!candidate) return;
+    const path = matches[0].path;
+    await reuseGuard();
+    // Never reuse a replaced/edited file on the authority of an earlier read.
+    if (
+      (await this.vault.read(candidate.file)) !== candidate.raw ||
+      this.vault.file(path) !== candidate.file ||
+      candidate.file.path !== path
+    )
+      throw new ChangedNote();
+    if (!this.active) throw new Error('Reader has stopped.');
+    const current = this.catalog.urlMatches(url);
+    if (current.length > 1)
+      throw new DuplicateArticleUrlError(
+        url,
+        current.map((article) => article.path),
+      );
+    if (current.length !== 1 || current[0].path !== path) throw new ChangedNote();
+    return candidate.file;
+  }
+  private assertUrlReuse(url: string, file: File): void {
+    const matches = this.catalog.urlMatches(url);
+    if (matches.length > 1)
+      throw new DuplicateArticleUrlError(
+        url,
+        matches.map((article) => article.path),
+      );
+    if (
+      matches.length !== 1 ||
+      matches[0].path !== file.path ||
+      this.vault.file(file.path) !== file
+    )
+      throw new ChangedNote();
+  }
+  /** Read-only, fresh URL lookup for adapters before expensive conversion. Capture
+   * still rechecks in its create lane; this is not a cross-device reservation. */
+  async resolveCaptureUrl(
+    input: string,
+    guard: () => void | Promise<void> = () => {},
+  ): Promise<File | undefined> {
+    const url = webUrl(input);
+    // No create-lane acquisition here: adapters must still be able to enqueue a
+    // cancellable capture while an unrelated native create awaits settlement.
+    await guard();
+    const file = await this.existingArticle(url);
+    await guard();
+    if (!this.active) throw new Error('Reader has stopped.');
+    if (file) this.assertUrlReuse(url, file);
+    return file;
   }
   capture(
     input: {
@@ -275,8 +344,12 @@ export class ArticleStore<File extends NoteFile> {
     now = new Date(now.getTime()); // Freeze caller-owned capture time before queued work.
     return this.creates.run('articles', async () => {
       if (!this.active) throw new Error('Reader has stopped.');
-      const existing = await this.existingArticle(url);
+      const existing = await this.existingArticle(url, guard);
+      if (!this.active) throw new Error('Reader has stopped.');
       if (existing) {
+        await guard();
+        if (!this.active) throw new Error('Reader has stopped.');
+        this.assertUrlReuse(url, existing);
         this.captures.delete(existing);
         return existing;
       }

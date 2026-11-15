@@ -181,6 +181,53 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+describe('URL uniqueness during feed refresh', () => {
+  it('surfaces native duplicate groups as a feed error without overwriting either body', async () => {
+    const h = host();
+    const feed = await seedFeed(h);
+    const first = await h.store.capture({ url: item(1).url, body: 'First authored body.' });
+    const second = await h.vault.create(
+      'Native/Duplicate.md',
+      createDocument(
+        { type: 'article', url: `${item(1).url}#native` },
+        '\nSecond authored body.\n',
+      ),
+    );
+    h.store.catalog.update(second.path, { type: 'article', url: item(1).url });
+    const before = [await h.vault.read(first), await h.vault.read(second)];
+    serve(() => response(xml([item(1)])));
+    await h.ingestion.refreshAll();
+    expect(h.notify).toHaveBeenCalledWith(
+      expect.stringContaining('Multiple articles share this URL'),
+    );
+    expect(h.store.catalog.feed(feed.path)?.error).toContain('Multiple articles share this URL');
+    expect([await h.vault.read(first), await h.vault.read(second)]).toEqual(before);
+    expect(h.vault.files.size).toBe(3);
+  });
+  it('refreshes stale duplicate metadata before deciding whether an import conflicts', async () => {
+    const h = host();
+    await seedFeed(h);
+    const first = await h.store.capture({ url: item(1).url, body: 'First authored body.' });
+    const second = await h.vault.create(
+      'Elsewhere/Native.md',
+      createDocument({ type: 'article', url: item(1).url }, '\nSecond authored body.\n'),
+    );
+    h.store.catalog.update(second.path, { type: 'article', url: item(1).url });
+    // Native bytes changed ahead of metadata delivery: this is no longer a duplicate.
+    const nativeRaw = createDocument(
+      { type: 'article', url: item(2).url },
+      '\nSecond authored body.\n',
+    );
+    h.vault.bytes.set(second, nativeRaw);
+    serve(() => response(xml([item(1)])));
+    await h.ingestion.refreshAll();
+    expect(h.notify).not.toHaveBeenCalled();
+    expect(h.store.catalog.findUrl(item(1).url)?.path).toBe(first.path);
+    expect(await h.vault.read(second)).toBe(nativeRaw);
+    expect(h.vault.files.size).toBe(3);
+  });
+});
+
 describe('subscription import contracts', () => {
   it('adds a subscription offline with editable hostname defaults and no network or imports', async () => {
     const h = host();

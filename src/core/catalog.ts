@@ -5,6 +5,7 @@ import {
   type Properties,
   type Queue,
   type Subscription,
+  webUrl,
 } from './model';
 import { defaultFolders, validateFolders, type ReaderFolders } from './folders';
 import {
@@ -14,6 +15,23 @@ import {
   type StatusFolders,
   type ResolvedStatusFolders,
 } from './status-folders';
+
+export interface DuplicateArticleUrl {
+  url: string;
+  paths: readonly string[];
+}
+/** No canonical file is implied by path order. Reconciliation requires explicit permission. */
+export class DuplicateArticleUrlError extends Error {
+  readonly paths: readonly string[];
+  constructor(
+    readonly url: string,
+    paths: readonly string[],
+  ) {
+    super('Multiple articles share this URL. Open the read-only audit and reconcile explicitly.');
+    this.name = 'DuplicateArticleUrlError';
+    this.paths = Object.freeze([...paths].sort());
+  }
+}
 
 /** Metadata only. Bodies, rendered HTML, selections and acquisition state do not live here. */
 export class Catalog {
@@ -77,9 +95,25 @@ export class Catalog {
   feed(path: string): Subscription | undefined {
     return this.subscriptions.get(path);
   }
+  /** All observed candidates; callers that reuse files must validate fresh source bytes. */
+  urlMatches(url: string): readonly ArticleInfo[] {
+    return [...(this.urls.get(webUrl(url)) ?? [])].map((path) => this.articles.get(path)!);
+  }
+  /** Live native/offline observation, metadata only; never repairs or chooses a file. */
+  duplicateUrls(): readonly DuplicateArticleUrl[] {
+    return [...this.urls]
+      .filter(([, paths]) => paths.size > 1)
+      .map(([url, paths]) => ({ url, paths: [...paths].sort() }))
+      .sort((a, b) => a.url.localeCompare(b.url));
+  }
   findUrl(url: string, exclude: ReadonlySet<string> = new Set()): ArticleInfo | undefined {
-    const path = [...(this.urls.get(url) ?? [])].find((path) => !exclude.has(path));
-    return path ? this.articles.get(path) : undefined;
+    const matches = this.urlMatches(url);
+    if (matches.length > 1)
+      throw new DuplicateArticleUrlError(
+        webUrl(url),
+        matches.map((article) => article.path),
+      );
+    return matches.find((article) => !exclude.has(article.path));
   }
   feeds(): readonly Subscription[] {
     return [...this.subscriptions.values()];

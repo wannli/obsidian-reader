@@ -979,6 +979,34 @@ it('revokes auto-title ownership before reindexing every native file rename, inc
   expect(store.noteRenamed).toHaveBeenCalledTimes(2);
 });
 
+describe('native URL duplicate observation', () => {
+  it('reports normalized duplicates through live metadata events without source writes and clears them on native removal', async () => {
+    const f = libraryFixture();
+    const first = f.add('Reading/Inbox/First.md', {
+      type: 'article',
+      url: 'https://example.com/native#one',
+    });
+    const properties = { type: 'article', url: 'https://EXAMPLE.com:443/native#two' };
+    const second = f.note(
+      'Elsewhere/Offline.md',
+      createDocument(properties, 'Native authored body.'),
+    );
+    const before = [f.bytes.get(first), f.bytes.get(second)];
+    f.caches.set(second, { frontmatter: properties });
+    f.events.get('changed')!(second, f.bytes.get(second), f.caches.get(second));
+    expect(f.store.catalog.duplicateUrls()).toEqual([
+      { url: 'https://example.com/native', paths: [second.path, first.path] },
+    ]);
+    await expect(f.store.capture({ url: 'https://example.com/native' })).rejects.toMatchObject({
+      name: 'DuplicateArticleUrlError',
+    });
+    expect([f.bytes.get(first), f.bytes.get(second)]).toEqual(before);
+    f.events.get('delete')!(second);
+    expect(f.store.catalog.duplicateUrls()).toEqual([]);
+    expect(f.store.catalog.findUrl('https://example.com/native#ignored')?.path).toBe(first.path);
+  });
+});
+
 describe('native YAML-link annotation events', () => {
   it.each([
     { related: '[[Topics/X.md]]' },
