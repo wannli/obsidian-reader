@@ -1,5 +1,6 @@
 import { Modal, type App } from 'obsidian';
 import { renderBody } from '../reader/render';
+import { readDocument } from '../core/document';
 import type { NoteFile, Snapshot } from '../core/store';
 import type {
   ThinkingStore,
@@ -442,6 +443,23 @@ class ThinkingBrowser<File extends NoteFile> extends Modal {
     void this.load();
   }
   private showItem(target: ThinkingTarget): void {
+    target = this.resolveTarget(target);
+    if (!target.blockId) {
+      const exploration = this.explorationPaths().find((path) => same({ path }, target));
+      const notebook = this.host.notebookPaths().find((path) => same({ path }, target));
+      if (exploration || notebook) {
+        const path = exploration ?? notebook!;
+        if (
+          !this.documents.some((document) => document.path === path) &&
+          !this.failures.includes(path)
+        ) {
+          this.selected = { path };
+          void this.load();
+        } else if (exploration) this.showExploration(path);
+        else this.showNotebook(path);
+        return;
+      }
+    }
     this.inspectionTarget = target;
     this.leaveList();
     this.clearBody();
@@ -565,6 +583,30 @@ class ThinkingBrowser<File extends NoteFile> extends Modal {
     this.button(this.body, 'Open Markdown', () => this.openNative(target));
     if (!target.blockId || (record && !record.readOnly))
       this.button(this.body, 'Add to exploration', () => this.showInclusion(target));
+  }
+  private showNotebook(path: string): void {
+    this.inspectionTarget = { path };
+    this.leaveList();
+    this.clearBody();
+    this.button(this.body, 'Back', () => this.back());
+    this.element('h3', this.body, path);
+    this.button(this.body, 'Open notebook Markdown', () => this.openNative({ path }));
+    const document = this.documents.find((document) => document.path === path);
+    if (!document) {
+      this.element(
+        'p',
+        this.body,
+        'Notebook unavailable. Open native Markdown to inspect the original.',
+      );
+      return;
+    }
+    this.element(
+      'p',
+      this.body,
+      'Saved notebook writing. Entries and authored prose remain in this ordinary Markdown file.',
+      'reader-thinking-evidence',
+    );
+    this.markdown(this.body, readDocument(document.raw).body, path);
   }
   private editor(
     label: string,

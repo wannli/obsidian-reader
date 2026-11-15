@@ -54,6 +54,13 @@ function button(text: string): HTMLButtonElement {
   if (!found) throw new Error(`Missing button: ${text}`);
   return found;
 }
+function resultButton(text: string): HTMLButtonElement {
+  const found = [
+    ...document.querySelectorAll<HTMLButtonElement>('.reader-thinking-item button'),
+  ].find((button) => button.textContent === text);
+  if (!found) throw new Error(`Missing saved-material result: ${text}`);
+  return found;
+}
 function fixture(vault = new MemoryVault()) {
   const lifetime = new AbortController();
   const host: ThinkingBrowserHost<{ path: string }> = {
@@ -627,6 +634,71 @@ describe('saved material browser public UI', () => {
       path: 'Notes/Notebook.md',
       blockId: 'comment-one',
     });
+  });
+  it('exploration prose search opens its writing and membership controls and Back retains the search', async () => {
+    const { host, vault } = await populated();
+    await vault.create(
+      'Explore.md',
+      '---\nfileClass: Exploration\n---\n\nZephyr open questions.\n\n- [[Notebook.md#^comment-one]]\n',
+    );
+    host.explorationPaths = () => ['Explore.md'];
+    openThinkingBrowser({} as App, host);
+    await settle();
+    button('Search').click();
+    const field = document.querySelector('input')!;
+    field.value = 'Zephyr';
+    field.dispatchEvent(new Event('input'));
+    await settle();
+    resultButton('Explore.md').click();
+    expect(document.querySelector('.reader-thinking-body')?.textContent).toContain(
+      'Zephyr open questions.',
+    );
+    expect(button('Edit prose')).toBeDefined();
+    expect(button('Remove inclusion')).toBeDefined();
+    expect(
+      [...document.querySelectorAll('button')].some(
+        (button) => button.textContent === 'Open source',
+      ),
+    ).toBe(false);
+    button('Back').click();
+    await settle();
+    expect(document.querySelector('input')?.value).toBe('Zephyr');
+    resultButton('Explore.md').click();
+    button('Open exploration Markdown').click();
+    expect(host.openNative).toHaveBeenCalledWith({ path: 'Explore.md' });
+    expect(host.openSource).not.toHaveBeenCalled();
+    expect(document.querySelector('.reader-thinking-browser')).toBeNull();
+  });
+  it('ordinary notebook prose search opens a readable notebook with native escape, never an article route', async () => {
+    const { host, vault } = fixture();
+    await vault.create(
+      'Notebook.md',
+      '---\nfileClass: Notebook\n---\n\nOsprey personal questions.\n',
+    );
+    host.notebookPaths = () => ['Notebook.md'];
+    openThinkingBrowser({} as App, host);
+    await settle();
+    button('Search').click();
+    const field = document.querySelector('input')!;
+    field.value = 'Osprey';
+    field.dispatchEvent(new Event('input'));
+    await settle();
+    resultButton('Notebook.md').click();
+    expect(document.querySelector('.reader-thinking-body')?.textContent).toContain(
+      'Osprey personal questions.',
+    );
+    expect(
+      [...document.querySelectorAll('button')].some(
+        (button) => button.textContent === 'Open source',
+      ),
+    ).toBe(false);
+    button('Back').click();
+    await settle();
+    expect(document.querySelector('input')?.value).toBe('Osprey');
+    resultButton('Notebook.md').click();
+    button('Open notebook Markdown').click();
+    expect(host.openNative).toHaveBeenCalledWith({ path: 'Notebook.md' });
+    expect(host.openSource).not.toHaveBeenCalled();
   });
   it('a superseded search cannot paint old literal evidence after the new query settles', async () => {
     const { host, vault } = fixture();
