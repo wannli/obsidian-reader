@@ -41,3 +41,17 @@ Start with [README](README.md), `src/main.ts`, `src/core/model.ts`, and `src/cor
 - Use `src/core/model.ts` and `src/core/document.ts` for storage behavior. New notes must not persist IDs, cursor/history state, or acquisition metadata; unknown nonempty text remains protected unless ownership is proven from its current bytes.
 - Limit each feed refresh to the latest 20 entries before deduplication or age filtering. Do not revive old implementations, migrations, QuickAdd assets, or settings.
 - Runtime must work on Obsidian mobile and avoid Node/Electron-only imports in plugin code.
+
+## Agent skills
+
+### Issue tracker
+
+Issues are tracked in GitHub Issues for `wannli/obsidian-reader`. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Use the five default canonical triage labels. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: root `GLOSSARY.md` and `docs/adr/`. See `docs/agents/domain.md`.
