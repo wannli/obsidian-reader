@@ -1,12 +1,12 @@
 ---
 created: 2026-11-15
 updated: 2026-11-15
-status: proposed-requires-approval
+status: approved-for-implementation
 ---
 
 # Persistence proposal: native notebooks, entries and explorations
 
-This companion to the [workflow spec](reader-thinking-workflow.md) is a **proposal**, not a decided schema. No implementation may create these structures until Wannes approves their concrete format. No existing article, highlight, quotation or companion setting may be migrated implicitly.
+This companion to the [workflow spec](reader-thinking-workflow.md) is approved by [Wannes's implementation mandate](https://github.com/wannli/obsidian-reader/issues/107#issuecomment-6899314991). That mandate satisfies the original proposal's approval gate, including the record grammar, origin convention and provider rule; later deviations still require approval. No existing article, highlight, quotation or companion setting may be migrated implicitly.
 
 ## Approved invariants
 

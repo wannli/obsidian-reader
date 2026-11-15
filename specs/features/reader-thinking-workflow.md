@@ -1,7 +1,7 @@
 ---
 created: 2026-11-15
 updated: 2026-11-15
-status: proposed
+status: approved-for-implementation
 ---
 
 # Reader: passages, comments, connections and explorations
@@ -14,7 +14,9 @@ Reader currently couples new highlights to Fileclass-typed destinations and quot
 
 Extend Reader's existing reading experience into **read → keep passage → comment/connect → explore/revisit**. A kept passage is a quotation snapshot with source context, not a separate highlight entity. Comments and explorations are first-class parts of this implementation scope. Meaningful work lives in ordinary Obsidian Markdown and native links; Obsidian alone owns Sync.
 
-This is a full specification **draft**, tracked in [Specify Reader’s passage, comment and exploration workflow](https://github.com/wannli/obsidian-reader/issues/107), not permission to implement proposed persisted formats. The human direction is settled; the companion [persistence proposal](reader-thinking-persistence.md) requires approval. The [acceptance plan](reader-thinking-acceptance.md) defines observable completion gates. No migration, personal-vault access, installation or release is authorised.
+**Implementation approval:** Wannes approved proceeding independently on a worktree/feature branch in [the implementation mandate](https://github.com/wannli/obsidian-reader/issues/107#issuecomment-6899314991). This satisfies the persistence/record grammar and test-seam gate below; later schema deviations, existing-content repair, installation and release remain outside that approval.
+
+This is the reviewed specification, tracked in [Specify Reader’s passage, comment and exploration workflow](https://github.com/wannli/obsidian-reader/issues/107), with the companion [persistence contract](reader-thinking-persistence.md) approved for this implementation. Further persisted-format changes still require approval. The [acceptance plan](reader-thinking-acceptance.md) defines observable completion gates. No migration, personal-vault access, installation or release is authorised.
 
 ## User Stories
 
@@ -65,7 +67,7 @@ This is a full specification **draft**, tracked in [Specify Reader’s passage, 
 - Article URLs must not silently produce duplicate saved articles. General file-independent knowledge identity remains deferred.
 - No automatic activity history. Debugging is opt-in. Personal writing, endorsements, publisher authorship and later AI suggestions remain distinguishable.
 
-### Proposed module design
+### Approved module design
 
 - Add a deep **Thinking module** at the existing guarded vault seam. Its small interface supports keep, save comment, connect, edit exploration, read context and search. Callers supply source snapshots and lifetime guards; the module owns parsing, preservation, validation and local operation results.
 - Reuse the existing vault adapter, serial-write lanes, Markdown snapshot transforms, source selection projection and catalog observation. Do not call legacy hosted-highlight mutation to keep a new passage: that path writes source markup and files quotations.
@@ -73,7 +75,7 @@ This is a full specification **draft**, tracked in [Specify Reader’s passage, 
 - Use one read-only Thinking projection for direct reading, exploration entry, contextual return and overview. Rendering adds passage/comment decorations without serializing them into article Markdown.
 - Extend the existing Reader view rather than introduce a second article reader. Views remain leaf-owned and generation-bound. Cancelled/stale work cannot paint or publish into a new runtime.
 - Reuse the Fileclass adapter for explicit notebook/exploration or structured-note creation. Keep provider validation and cancellation behavior; never delete a note merely because a provider operation was cancelled.
-- The persistence companion recommends ordinary notebooks containing unclassified entries, not one new typed entity per passage. This recommendation is not an approved note schema.
+- The persistence companion recommends ordinary notebooks containing unclassified entries, not one new typed entity per passage. The notebook and record schema below is covered by the implementation mandate; changes beyond it need review.
 
 ### Interaction contract
 
@@ -128,7 +130,7 @@ This is a full specification **draft**, tracked in [Specify Reader’s passage, 
 
 ## Out of Scope
 
-- Implementation before durable-format approval; automatic schema migration, personal-vault cleanup, plugin installation, deployment or release.
+- Deviation from the approved durable format; automatic schema migration, personal-vault cleanup, plugin installation, deployment or release.
 - A separate highlight entity, mandatory classification, untyped standalone structured-note destinations or replacing Fileclass's authority.
 - General graph identities, RDF/SQL engines, sidecars, parallel Sync, activity/location histories, automated source retargeting or a recurring repair product.
 - General journals/calendar/Contacts/Kindle/PDF/YouTube/reMarkable integrations, semantic inference and formal argument tooling. Revisit individually for a justified journey.
@@ -139,4 +141,4 @@ This is a full specification **draft**, tracked in [Specify Reader’s passage, 
 - Authority: [assessment map](https://github.com/wannli/obsidian-reader/issues/94), [human decisions and 42-theme assessment](https://github.com/wannli/obsidian-reader/issues/97#issuecomment-6898421671), and the reports they link. Human amendments outrank W prototypes and advisory matrix mechanisms.
 - Source check: Reader `bb5b92a`; runtime baseline remains `92b5d75`, with only the MCP planning questionnaire added afterward. No root glossary or ADR directory exists at this snapshot; terminology here is scoped to this draft, not a new approved domain model.
 - Proposed refinements requiring review are explicitly called out in the persistence companion and acceptance plan. Approve them as a concrete spec review, not another broad product interview.
-- After approval, split work into vertical tickets: durable keep/readback and retention; comments; connections/explorations; contextual return/search/overview; uniqueness/read-only audit; diagnostics and device acceptance. Each ticket states native blockers and preserves the complete end-to-end goal.
+- Implementation is split into vertical tickets: durable keep/readback and retention; comments; connections/explorations; contextual return/search/overview; uniqueness/read-only audit; diagnostics and device acceptance. Each ticket states native blockers and preserves the complete end-to-end goal.

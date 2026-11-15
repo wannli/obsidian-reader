@@ -1,12 +1,12 @@
 ---
 created: 2026-11-15
 updated: 2026-11-15
-status: proposed-requires-approval
+status: approved-for-implementation
 ---
 
 # Proposed native entry grammar
 
-This is the exact record-format companion to the [persistence proposal](reader-thinking-persistence.md). **No persisted field, native anchor allocation or format convention below is approved yet.** All specimens are ordinary Obsidian callouts and block references, not runtime fixtures to install in a vault.
+This is the exact record-format companion to the [persistence proposal](reader-thinking-persistence.md). **Wannes approved this exact format through [the implementation mandate](https://github.com/wannli/obsidian-reader/issues/107#issuecomment-6899314991).** Later format deviations or legacy-content migrations are not implied. All specimens are ordinary Obsidian callouts and block references, not runtime fixtures to install in a vault.
 
 ## Passage with a connection
 

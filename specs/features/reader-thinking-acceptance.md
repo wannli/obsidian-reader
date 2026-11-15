@@ -1,12 +1,12 @@
 ---
 created: 2026-11-15
 updated: 2026-11-15
-status: proposed
+status: approved-for-implementation
 ---
 
 # Acceptance and delivery: Reader thinking workflow
 
-This companion defines completion for the [workflow spec](reader-thinking-workflow.md). Concrete persisted-output assertions depend on approval of the [persistence proposal](reader-thinking-persistence.md). No test fixture may quietly become an approved production schema.
+This companion defines completion for the [workflow spec](reader-thinking-workflow.md). The [persistence contract](reader-thinking-persistence.md), record grammar and test seams were approved in [the implementation mandate](https://github.com/wannli/obsidian-reader/issues/107#issuecomment-6899314991). No changed test fixture may quietly introduce a different production schema.
 
 ## Proposed test seams
 
