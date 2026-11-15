@@ -62,13 +62,29 @@ interface Located {
   from: number;
   to: number;
 }
+function normalizedMap(raw: string): { text: string; offsets: number[] } {
+  let text = '';
+  const offsets: number[] = [];
+  for (let at = 0; at < raw.length; at++) {
+    offsets.push(at);
+    if (raw[at] === '\r' && raw[at + 1] === '\n') at++;
+    text += raw[at];
+  }
+  offsets.push(raw.length);
+  return { text, offsets };
+}
 function located(raw: string): Located[] {
+  const { text, offsets } = normalizedMap(raw);
   let at = 0;
-  return lex(raw).map((token) => {
-    const from = raw.indexOf(token.raw, at);
+  return lex(text).map((token) => {
+    const from = text.indexOf(token.raw, at);
     if (from < 0) throw new Error('Unsupported Markdown mapping.');
     at = from + token.raw.length;
-    return { token, from, to: at };
+    return {
+      token: { ...token, raw: raw.slice(offsets[from], offsets[at]) } as Token,
+      from: offsets[from],
+      to: offsets[at],
+    };
   });
 }
 /** Conservative collision scan includes anchors in unknown/fenced content. */
@@ -140,8 +156,13 @@ function record(
   if (
     [before, after].some(
       (value) =>
-        value !== undefined && (Array.from(value).length > 160 || /[\x00-\x1f<>]/u.test(value)),
+        value !== undefined && (Array.from(value).length > 160 || /[\x00-\x1f]/u.test(value)),
     )
+  )
+    return;
+  if (
+    (before !== undefined && escapeText(before) !== values.Before) ||
+    (after !== undefined && escapeText(after) !== values.After)
   )
     return;
   // Structural rules/headings are found only among lexer-proven top-level blocks.
@@ -237,7 +258,7 @@ export function parseThinking<File extends NoteFile>(
             doc.headerEnd + block.from,
             block.token.raw,
             id,
-            doc.headerEnd + anchor.to,
+            doc.headerEnd + anchor.from + anchor.token.raw.trimEnd().length,
           )
         : undefined;
       if (!parsed)
@@ -250,18 +271,23 @@ export function parseThinking<File extends NoteFile>(
       }
     }
     if (block.token.type === 'list') {
-      let cursor = block.from;
+      let cursor = 0;
+      const mapped = normalizedMap(block.token.raw);
       for (const item of block.token.items) {
-        const at = doc.body.indexOf(item.raw, cursor);
-        cursor = at + item.raw.length;
-        const match = /^- (\[\[[^\r\n]+\]\])(?:\r?\n)?$/.exec(item.raw);
+        const local = mapped.text.indexOf(item.raw, cursor);
+        if (local < 0) throw new Error('Unsupported native list mapping.');
+        cursor = local + item.raw.length;
+        const at = block.from + mapped.offsets[local];
+        const end = block.from + mapped.offsets[cursor];
+        const nativeRaw = doc.body.slice(at, end);
+        const match = /^- (\[\[[^\r\n]+\]\])(?:\r?\n)?$/.exec(nativeRaw);
         const target = match && parseTarget(match[1]);
         if (target)
           result.memberships.push({
             target,
-            raw: item.raw,
+            raw: nativeRaw,
             from: doc.headerEnd + at,
-            to: doc.headerEnd + cursor,
+            to: doc.headerEnd + end,
           });
       }
     }

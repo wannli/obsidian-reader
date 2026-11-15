@@ -1,4 +1,5 @@
 import { ChangedNote, readDocument, requireArticle } from './document';
+import { bounded } from '../content/bounds';
 import { excludedReaderPath } from './model';
 import type { NoteFile, Snapshot, VaultPort } from './store';
 import { SerialWrites } from './work';
@@ -34,6 +35,7 @@ export class ThinkingStore<File extends NoteFile> {
   private writes = new SerialWrites<File>();
   private actions = new SerialWrites<string>();
   private pending = new Set<Promise<unknown>>();
+  private inFlight = new Map<string, Promise<ThinkingResult<File>>>();
   constructor(
     readonly vault: VaultPort<File>,
     private readonly options: ThinkingOptions<File> = {},
@@ -65,6 +67,7 @@ export class ThinkingStore<File extends NoteFile> {
     if (!file) throw new Error('The notebook no longer exists. Configure an existing notebook.');
     this.identity(file, path);
     const raw = await this.vault.read(file);
+    bounded(raw);
     this.guard();
     this.identity(file, path);
     return parseThinking(file, raw);
@@ -220,7 +223,35 @@ export class ThinkingStore<File extends NoteFile> {
     }
     return next;
   }
+  private coalesce(
+    key: string,
+    operation: () => Promise<ThinkingResult<File>>,
+  ): Promise<ThinkingResult<File>> {
+    const existing = this.inFlight.get(key);
+    if (existing) return existing;
+    const result = operation();
+    this.inFlight.set(key, result);
+    const done = () => {
+      if (this.inFlight.get(key) === result) this.inFlight.delete(key);
+    };
+    void result.then(done, done);
+    return result;
+  }
   keep(input: ThinkingKeep<File>): Promise<ThinkingResult<File>> {
+    return this.coalesce(
+      JSON.stringify([
+        'keep',
+        input.notebookPath,
+        input.source.path,
+        input.source.raw,
+        input.from,
+        input.to,
+        input.comment,
+      ]),
+      () => this.keepNow(input),
+    );
+  }
+  private keepNow(input: ThinkingKeep<File>): Promise<ThinkingResult<File>> {
     const request = { ...input, source: { ...input.source } };
     return this.track(
       this.actions.run('capture', async () => {
@@ -228,6 +259,14 @@ export class ThinkingStore<File extends NoteFile> {
         try {
           this.guard(request.guard);
           const selected = selectedSource(request.source.body, request.from, request.to);
+          const occurrence = lookupContext(
+            { kind: 'passage', ...selected, source: { path: request.source.path } },
+            request.source.body,
+          );
+          if (occurrence.status !== 'exact')
+            throw new Error(
+              'The selected occurrence has ambiguous context. Open the source to inspect it.',
+            );
           const document = await this.read(request.notebookPath);
           this.vault.assertWritable(document.file, document.raw);
           this.options.validateContainer?.('notebook', document.path, document.raw);
@@ -305,6 +344,20 @@ export class ThinkingStore<File extends NoteFile> {
     );
   }
   comment(input: ThinkingComment<File>): Promise<ThinkingResult<File>> {
+    return this.coalesce(
+      JSON.stringify([
+        'comment',
+        input.notebookPath,
+        input.body,
+        input.about,
+        input.source?.path,
+        input.source?.raw,
+        input.gap,
+      ]),
+      () => this.commentNow(input),
+    );
+  }
+  private commentNow(input: ThinkingComment<File>): Promise<ThinkingResult<File>> {
     const request = {
       ...input,
       source: input.source && { ...input.source },
@@ -430,6 +483,8 @@ export class ThinkingStore<File extends NoteFile> {
     record: ThinkingRecord;
     target: ThinkingTarget;
     label?: string;
+    /** Explicit structured-note creation flow only; ordinary Connect stays entry-only. */
+    allowFileTarget?: boolean;
     guard?: () => void;
   }): Promise<ThinkingResult<File>> {
     const original = { ...input.record },
@@ -448,7 +503,7 @@ export class ThinkingStore<File extends NoteFile> {
             this.sameTarget({ path: current.path, blockId: current.blockId }, target, current.path)
           )
             throw new Error('Choose another saved entry.');
-          if (!target.blockId)
+          if (!target.blockId && !input.allowFileTarget)
             throw new Error('Explicit Thinking connections require a saved passage or comment.');
           await this.validateTarget(target, document.path);
           if (
@@ -468,6 +523,65 @@ export class ThinkingStore<File extends NoteFile> {
           const newline = document.raw.includes('\r\n') ? '\r\n' : '\n';
           const replacement = quoteLines(
             [...current.connections, connection].map(connectionLine).join('\n'),
+            newline,
+          ).slice(2);
+          const next =
+            document.raw.slice(0, current.connectionsFrom) +
+            replacement +
+            document.raw.slice(current.connectionsTo);
+          return await this.commit(document, next, 'notebook', guard, undefined, [original]);
+        } catch (error) {
+          return this.failure(error);
+        }
+      }),
+    );
+  }
+  editConnection(input: {
+    record: ThinkingRecord;
+    connection: ThinkingConnection;
+    label?: string;
+    remove?: boolean;
+    guard?: () => void;
+  }): Promise<ThinkingResult<File>> {
+    const original = { ...input.record },
+      connection = { ...input.connection, target: { ...input.connection.target } };
+    const label = input.label?.trim(),
+      remove = input.remove,
+      guard = input.guard;
+    return this.track(
+      this.actions.run('edit', async () => {
+        try {
+          this.guard(guard);
+          const document = await this.read(original.path),
+            current = this.freshRecord(document, original);
+          const matches = current.connections
+            .map((item, index) => ({ item, index }))
+            .filter(
+              ({ item }) =>
+                this.sameTarget(item.target, connection.target, document.path) &&
+                item.label === connection.label,
+            );
+          if (matches.length !== 1)
+            throw new ChangedNote('The connection changed or is ambiguous.');
+          const nextConnections = [...current.connections];
+          if (remove) nextConnections.splice(matches[0].index, 1);
+          else {
+            const edited = { target: matches[0].item.target, ...(label ? { label } : {}) };
+            connectionLine(edited);
+            if (
+              nextConnections.some(
+                (item, index) =>
+                  index !== matches[0].index &&
+                  this.sameTarget(item.target, edited.target, document.path) &&
+                  (item.label ?? '') === (label ?? ''),
+              )
+            )
+              throw new Error('That connection already exists.');
+            nextConnections[matches[0].index] = edited;
+          }
+          const newline = document.raw.includes('\r\n') ? '\r\n' : '\n';
+          const replacement = quoteLines(
+            nextConnections.length ? nextConnections.map(connectionLine).join('\n') : '_None._',
             newline,
           ).slice(2);
           const next =

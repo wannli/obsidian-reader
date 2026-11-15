@@ -67,8 +67,8 @@ export function selectedSource(body: string, from: number, to: number) {
       last = at + 1;
     }
   if (first < 0) throw new Error('This selection cannot be mapped to source text.');
-  const before = Array.from(projection.text.slice(0, first)).slice(-160).join('');
-  const after = Array.from(projection.text.slice(last)).slice(0, 160).join('');
+  const before = Array.from(projection.text.slice(0, first).trimEnd()).slice(-160).join('');
+  const after = Array.from(projection.text.slice(last).trimStart()).slice(0, 160).join('');
   assertSafeExternalText(before);
   assertSafeExternalText(after);
   return { body: quote, before, after };
@@ -90,7 +90,10 @@ export function sourceGap(body: string, gap: number) {
   assertSafeExternalText(after);
   return { before, after };
 }
-export function lookupContext(record: ThinkingRecord, body: string): ThinkingContext {
+export function lookupContext(
+  record: Pick<ThinkingRecord, 'body' | 'kind' | 'source' | 'before' | 'after'>,
+  body: string,
+): ThinkingContext {
   const fallback = { snapshot: record.body, source: record.source };
   if (!record.source || record.before === undefined || record.after === undefined)
     return { ...fallback, status: 'unplaced' };
@@ -121,8 +124,8 @@ export function lookupContext(record: ThinkingRecord, body: string): ThinkingCon
     ) {
       const end = at + quote.length;
       if (
-        projection.text.slice(0, at).endsWith(record.before) &&
-        projection.text.slice(end).startsWith(record.after) &&
+        projection.text.slice(0, at).trimEnd().endsWith(record.before) &&
+        projection.text.slice(end).trimStart().startsWith(record.after) &&
         (record.before !== '' || at === 0) &&
         (record.after !== '' || end === projection.text.length)
       )
