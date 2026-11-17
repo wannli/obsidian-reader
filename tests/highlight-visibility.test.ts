@@ -110,11 +110,14 @@ it('retains the existing theme fill, foreground and link color contracts without
     rule('.reader-document.reader-highlight-fallback mark').getPropertyValue('background'),
   ).toBe('rgba(var(--color-yellow-rgb, 224, 172, 0), 0.4)');
   expect(rule('.reader-document mark a').getPropertyValue('color')).toBe('inherit');
+  // CSSOM may enumerate background shorthand as its longhand properties.
+  const background = document.createElement('span').style;
+  background.setProperty('background', mark.getPropertyValue('background'));
   // Decoration only: no padding/borders/line-height/opacity, generated content or transforms.
   expect(Array.from({ length: mark.length }, (_, index) => mark[index]).sort()).toEqual(
     [
       'color',
-      'background',
+      ...Array.from({ length: background.length }, (_, index) => background[index]),
       'text-decoration-line',
       'text-decoration-style',
       'text-decoration-color',
