@@ -13,6 +13,7 @@
     "format:check": "prettier --check src tests scripts '*.json' '*.ts' '*.md' '.github/workflows/*.yml'",
     "test": "vitest run",
     "test:tooling": "node --test scripts/*.test.mjs",
+    "mcp": "node scripts/reader-mcp.mjs",
     "benchmark:scale": "node scripts/benchmark-scale.mjs",
     "benchmark:analysis": "node scripts/benchmark-analysis.mjs",
     "validate:metadata": "node scripts/validate-release.mjs",

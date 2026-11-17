@@ -188,3 +188,5 @@ mise exec -- npm run benchmark:scale           # opt-in: 10k articles / 100 feed
 ```
 
 There is no automated E2E suite. Test native touch, e-ink, and cross-device sync manually. The scale benchmark retains synthetic files and measurements in the marked dummy vault.
+
+For the standalone, synthetic-only stdio MCP server, see [Minimal Reader MCP prototype](docs/reader-mcp-prototype.md).
