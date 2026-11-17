@@ -109,7 +109,7 @@ While reading, clicking a web link offers **Save to Inbox**, **Open link**, or *
 
 For native iOS/QuickAdd capture, configure the destination as `Reading/Inbox` (or your configured Inbox folder), along with templates and shortcuts, directly in [Obsidian](https://help.obsidian.md/mobile/ios). Give captured notes `type: article`, `status: inbox`, and a `url` property. Reader can fetch the article while active and online when the body is empty or contains only a Markdown source link matching that URL. A plain URL body is not a supported placeholder.
 
-Reader leaves extra text, annotations, and native Full Text captures intact. Native captures keep their own filenames and do not use Reader’s URL deduplication; use **Add URL** when you want that behavior. Reader does not install templates or change your capture setup.
+Reader leaves extra text, annotations, and native Full Text captures intact. Native captures keep their own filenames and can create duplicates. Reader capture and feed refresh check observed URL matches against current note contents. If several articles share a normalized URL, Reader reports a conflict rather than choosing or overwriting one; reconcile the notes explicitly before retrying. These checks are local, not a cross-device reservation. Reader does not install templates or change your capture setup.
 
 Reader sanitizes imported content, but is not a sandbox for third-party Markdown processors. Detected default Dataview/Templater expressions can block capture; custom processor configurations are outside that protection.
 

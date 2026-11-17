@@ -181,6 +181,48 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+describe('URL uniqueness during feed refresh', () => {
+  it('reports native duplicates without overwriting either article', async () => {
+    const h = host();
+    const feed = await seedFeed(h);
+    const first = await h.store.capture({ url: item(1).url, body: 'First authored body.' });
+    const second = await h.vault.create(
+      'Native/Duplicate.md',
+      createDocument(
+        { type: 'article', url: `${item(1).url}#native` },
+        '\nSecond authored body.\n',
+      ),
+    );
+    h.store.catalog.update(second.path, { type: 'article', url: item(1).url });
+    const before = [await h.vault.read(first), await h.vault.read(second)];
+    serve(() => response(xml([item(1)])));
+    await h.ingestion.refreshAll();
+    expect(h.notify).toHaveBeenCalledWith(
+      expect.stringContaining('Multiple articles share this URL'),
+    );
+    expect(h.store.catalog.feed(feed.path)?.error).toContain('Multiple articles share this URL');
+    expect([await h.vault.read(first), await h.vault.read(second)]).toEqual(before);
+    expect(h.vault.files.size).toBe(3);
+  });
+  it('refreshes stale duplicate metadata before skipping an existing import', async () => {
+    const h = host();
+    await seedFeed(h);
+    const first = await h.store.capture({ url: item(1).url });
+    const second = await h.vault.create(
+      'Native/Other.md',
+      createDocument({ type: 'article', url: item(2).url }, '\nNative authored body.\n'),
+    );
+    h.store.catalog.update(second.path, { type: 'article', url: item(1).url });
+    const before = await h.vault.read(second);
+    serve(() => response(xml([item(1)])));
+    await h.ingestion.refreshAll();
+    expect(h.notify).not.toHaveBeenCalled();
+    expect(h.store.catalog.findUrl(item(1).url)?.path).toBe(first.path);
+    expect(await h.vault.read(second)).toBe(before);
+    expect(h.vault.files.size).toBe(3);
+  });
+});
+
 describe('subscription import contracts', () => {
   it('adds a subscription offline with editable hostname defaults and no network or imports', async () => {
     const h = host();
