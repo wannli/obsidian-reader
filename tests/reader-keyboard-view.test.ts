@@ -45,20 +45,25 @@ describe('desktop button shortcuts', () => {
       ['n', 'Create node'],
       ['r', 'Related notes'],
     ] as const;
-    const buttons = actions.map(([key, label]) => {
+    for (const [key, label] of actions) {
       const button = f.view.contentEl.querySelector<HTMLButtonElement>(
         `.reader-actions button[data-reader-key="${key}"]`,
-      )!;
-      expect(button.getAttribute('aria-label')).toBe(label);
-      expect(button.getAttribute('aria-keyshortcuts')).toBe(key.toUpperCase());
-      expect(setTooltip).toHaveBeenCalledWith(button, `${label} (${key.toUpperCase()})`);
-      return button;
-    });
+      );
+      if (button) {
+        expect(button.getAttribute('aria-label')).toBe(label);
+        expect(button.getAttribute('aria-keyshortcuts')).toBe(key.toUpperCase());
+        expect(setTooltip).toHaveBeenCalledWith(button, `${label} (${key.toUpperCase()})`);
+      } else {
+        expect(f.probe.articleCommands.find((action: any) => action.key === key)?.label).toBe(
+          label,
+        );
+      }
+    }
     for (const key of ['t', 'r', 'n']) {
-      const button = buttons[actions.findIndex(([shortcut]) => shortcut === key)];
-      const click = vi.spyOn(button, 'click').mockImplementation(() => {});
+      const action = f.probe.articleCommands.find((action: any) => action.key === key);
+      const run = vi.spyOn(action, 'run').mockImplementation(() => {});
       expect(press(f.view, key).defaultPrevented).toBe(true);
-      expect(click).toHaveBeenCalledOnce();
+      expect(run).toHaveBeenCalledOnce();
     }
     expect(press(f.view, '?', { shiftKey: true }).defaultPrevented).toBe(true);
     const sheet = f.view.contentEl.querySelector('.reader-shortcut-help')!;
@@ -456,12 +461,8 @@ describe('article keyboard boundaries', () => {
       'Back to list',
       'Previous page',
       'Next page',
-      'Save to Later and advance',
-      'Archive and advance',
-      'Delete',
       'Highlight mode',
-      'Create node',
-      'Related notes',
+      'More article actions',
     ]);
     expect(column.classList.contains('reader-has-page-actions')).toBe(true);
     expect(actions.classList.contains('reader-paged-actions')).toBe(true);
@@ -474,7 +475,7 @@ describe('article keyboard boundaries', () => {
     expect(actions.classList.contains('reader-paged-actions')).toBe(true);
     expect(f.probe.surface).toBe(surface);
     f.view.refreshArticleControls();
-    expect(names()).toHaveLength(9);
+    expect(names()).toHaveLength(5);
     expect(f.view.file).toBe(a);
     expect(f.probe.surface).toBe(surface);
   });

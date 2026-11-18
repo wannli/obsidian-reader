@@ -1,5 +1,6 @@
 import {
   ItemView,
+  Menu,
   Notice,
   Platform,
   parseLinktext,
@@ -56,6 +57,7 @@ import type { LibraryChange } from '../host/vault';
 import { ReadingSurface } from './surface';
 import { selectedPassage, selectionRange } from './render';
 import { TapHighlighter, type TapToolbarAction } from './tap-highlighter';
+import { articleActionKeys, type ArticleAction } from './article-actions';
 
 export const READER_VIEW = 'obsidian-reader';
 type PendingSelection = {
@@ -102,6 +104,8 @@ export class ReaderView extends ItemView {
   private fallbackFile?: TFile;
   private surface?: ReadingSurface;
   private tapHighlighter?: TapHighlighter;
+  private articleCommands: ArticleAction[] = [];
+  private articleMenu?: Menu;
   private passageActions?: readonly TapToolbarAction[];
   private selectedPassage?: { snapshot: Snapshot<TFile>; from: number; to: number };
   private passageIntent = 0;
@@ -424,6 +428,8 @@ export class ReaderView extends ItemView {
     return button;
   }
   private clear(): void {
+    this.articleMenu?.hide();
+    this.articleCommands = [];
     this.rowIndicators?.dispose();
     this.rowIndicators = undefined;
     this.mountedListRows = undefined;
@@ -849,6 +855,12 @@ export class ReaderView extends ItemView {
             button.getAttribute('aria-label') ?? button.textContent ?? '',
           ] as const,
       );
+    if (this.snapshot && !this.tapMode) {
+      for (const action of this.articleCommands) {
+        if (!action.disabled && !actions.some(([key]) => key === action.key.toUpperCase()))
+          actions.push([action.key.toUpperCase(), action.label]);
+      }
+    }
     for (const [keys, label] of [...navigation, ...actions, ['?', 'Close shortcuts']]) {
       list.createEl('dt', { text: keys });
       list.createEl('dd', { text: label });
@@ -1286,49 +1298,78 @@ export class ReaderView extends ItemView {
       this.updateStatus();
       return;
     }
+    this.articleMenu?.hide();
     this.tapHighlighter?.dispose();
     this.tapHighlighter = undefined;
     this.actions.empty();
-    this.button(this.actions, 'Back to list', () => this.readingList(), 'arrow-left', 'b');
+    const commands: ArticleAction[] = [
+      {
+        key: 'b',
+        label: 'Back to list',
+        icon: 'arrow-left',
+        group: 'navigation',
+        run: () => this.readingList(),
+      },
+      {
+        key: 'h',
+        label: 'Highlight mode',
+        icon: 'highlighter',
+        group: 'reading',
+        run: () => this.startTapMode('highlight'),
+      },
+      {
+        key: 'n',
+        label: 'Create node',
+        icon: 'file-plus-2',
+        group: 'reading',
+        run: () => this.startTapMode('node'),
+      },
+      {
+        key: 'r',
+        label: 'Related notes',
+        icon: 'tags',
+        group: 'reading',
+        run: () => this.topics(),
+      },
+      {
+        key: 'l',
+        label: 'Save to Later and advance',
+        icon: 'clock',
+        group: 'disposition',
+        run: () => this.changeStatus('Later'),
+      },
+      {
+        key: 'a',
+        label: 'Archive and advance',
+        icon: 'archive',
+        group: 'disposition',
+        run: () => this.changeStatus('Archive'),
+      },
+      {
+        key: 't',
+        label: 'Trash article and advance',
+        icon: 'trash-2',
+        group: 'trash',
+        run: () => this.finish('delete'),
+      },
+    ];
     if (this.surface.paged) {
-      for (const [label, direction] of [
-        ['Previous page', -1],
-        ['Next page', 1],
-      ] as const) {
-        const button = this.button(
-          this.actions,
+      for (const [key, label, direction] of [
+        ['z', 'Previous page', -1],
+        ['x', 'Next page', 1],
+      ] as const)
+        commands.push({
+          key,
           label,
-          () => {
+          icon: direction === -1 ? 'chevron-up' : 'chevron-down',
+          group: 'navigation',
+          disabled: this.surface.atBoundary(direction),
+          run: () => {
             this.surface?.page(direction);
-            this.controls();
+            this.updatePagingControls();
           },
-          direction === -1 ? 'chevron-up' : 'chevron-down',
-          direction === -1 ? 'z' : 'x',
-        );
-        button.disabled = this.surface.atBoundary(direction);
-      }
+        });
     }
-    this.button(
-      this.actions,
-      'Save to Later and advance',
-      () => this.changeStatus('Later'),
-      'clock',
-      'l',
-    );
-    this.button(
-      this.actions,
-      'Archive and advance',
-      () => this.changeStatus('Archive'),
-      'archive',
-      'a',
-    );
-    this.button(
-      this.actions,
-      'Trash article and advance',
-      () => this.finish('delete'),
-      'trash-2',
-      't',
-    );
     if (
       nodesApi(this.app)?.relations &&
       new Set(
@@ -1337,17 +1378,102 @@ export class ReaderView extends ItemView {
         ),
       ).size > 1
     )
-      this.button(
+      commands.splice(4, 0, {
+        key: 'c',
+        label: 'Connect typed notes',
+        icon: 'git-merge',
+        group: 'reading',
+        run: () => this.connectFromArticle(),
+      });
+    this.articleCommands = commands;
+    const feed = this.host.store.catalog.article(this.snapshot.path)?.queue === 'Feed';
+    const primary = articleActionKeys(feed, this.surface.paged);
+    for (const key of primary) {
+      const action = commands.find((candidate) => candidate.key === key)!;
+      const button = this.button(
         this.actions,
-        'Connect typed notes',
-        () => this.connectFromArticle(),
-        'git-merge',
-        'c',
+        action.label,
+        () => this.runArticleAction(action),
+        action.icon,
+        key,
       );
-    const related = this.button(this.actions, 'Related notes', () => this.topics(), 'tags', 'r');
-    related.classList.add('reader-related-notes');
+      button.disabled = !!action.disabled;
+      if (key === 'h') button.classList.add('reader-tap-highlight-trigger');
+      if (key === 'r') button.classList.add('reader-related-notes');
+    }
+    const more = this.button(
+      this.actions,
+      'More article actions',
+      () => this.moreArticleActions(more, primary),
+      'ellipsis',
+    );
+    more.setAttribute('aria-haspopup', 'menu');
+    more.setAttribute('aria-expanded', 'false');
     this.setupTapHighlighter();
     this.updateStatus();
+  }
+  private startTapMode(mode: 'highlight' | 'node'): void {
+    const highlighter = this.tapHighlighter;
+    highlighter?.setActive(true, true, mode);
+    queueMicrotask(() => {
+      if (this.tapHighlighter === highlighter && this.tapMode && !this.stopping)
+        this.actions?.querySelector<HTMLButtonElement>('[aria-label="Done"]')?.focus();
+    });
+  }
+  private runArticleAction(action: ArticleAction): void | Promise<void> {
+    if (
+      !this.snapshot ||
+      !this.surface ||
+      this.tapMode ||
+      this.stopping ||
+      this.articleLifetime.signal.aborted ||
+      !this.articleCommands.includes(action) ||
+      action.disabled
+    )
+      return;
+    return action.run();
+  }
+  private moreArticleActions(button: HTMLButtonElement, primary: readonly string[]): void {
+    this.articleMenu?.hide();
+    const menu = new Menu();
+    this.articleMenu = menu;
+    button.setAttribute('aria-expanded', 'true');
+    let previous: ArticleAction['group'] | undefined;
+    for (const action of this.articleCommands.filter((action) => !primary.includes(action.key))) {
+      if (previous && previous !== action.group) menu.addSeparator();
+      previous = action.group;
+      menu.addItem((item) =>
+        item
+          .setTitle(action.label)
+          .setIcon(action.icon)
+          .setDisabled(!!action.disabled)
+          .onClick(() => {
+            try {
+              void Promise.resolve(this.runArticleAction(action)).catch((error) =>
+                this.error(error),
+              );
+            } catch (error) {
+              this.error(error);
+            }
+          }),
+      );
+    }
+    menu.onHide(() => {
+      if (this.articleMenu === menu) this.articleMenu = undefined;
+      button.setAttribute('aria-expanded', 'false');
+      queueMicrotask(() => {
+        const doc = button.ownerDocument;
+        if (
+          button.isConnected &&
+          !this.tapMode &&
+          !this.stopping &&
+          (doc.activeElement === doc.body || doc.activeElement?.closest('.menu'))
+        )
+          button.focus();
+      });
+    });
+    const rect = button.getBoundingClientRect();
+    menu.showAtPosition({ x: rect.left, y: rect.top }, button.ownerDocument);
   }
   private updatePagingControls(): void {
     if (!this.surface?.paged) return;
@@ -1358,7 +1484,10 @@ export class ReaderView extends ItemView {
       const button = this.actions?.querySelector<HTMLButtonElement>(
         `button[data-reader-key="${key}"]`,
       );
-      if (button) button.disabled = this.surface.atBoundary(direction);
+      const disabled = this.surface.atBoundary(direction);
+      if (button) button.disabled = disabled;
+      const action = this.articleCommands.find((action) => action.key === key);
+      if (action) action.disabled = disabled;
     }
   }
   private setupTapHighlighter(): void {
@@ -1366,7 +1495,7 @@ export class ReaderView extends ItemView {
     const surface = this.surface;
     this.tapHighlighter = new TapHighlighter(surface.viewport, surface.body, this.actions, {
       active: this.tapMode,
-      normalTail: this.actions.querySelector<HTMLElement>('.reader-related-notes') ?? undefined,
+      normalTriggers: false,
       mode: this.tapKind,
       canUndo: !!this.tapUndo && Date.now() <= this.tapUndoUntil,
       modeChanged: (active, mode) => {
@@ -1378,7 +1507,17 @@ export class ReaderView extends ItemView {
         this.lastSelection = '';
         surface.body.ownerDocument.getSelection()?.removeAllRanges();
         surface.refresh();
-        if (!active) this.controls();
+        if (!active) {
+          this.controls();
+          const trigger =
+            this.actions?.querySelector<HTMLButtonElement>(
+              this.tapKind === 'node'
+                ? '[aria-label="More article actions"]'
+                : '[data-reader-key="h"]',
+            ) ??
+            this.actions?.querySelector<HTMLButtonElement>('[aria-label="More article actions"]');
+          trigger?.focus();
+        }
       },
       passageActions: () => this.passageActions,
       onTarget: (event) => this.targetClicked(event),
@@ -3492,6 +3631,20 @@ export class ReaderView extends ItemView {
       if (button) {
         event.preventDefault();
         button.click();
+        return;
+      }
+    }
+    if (!Platform.isMobile && !event.repeat && !this.tapMode && this.snapshot && this.surface) {
+      const action = this.articleCommands.find(
+        (action) => action.key === event.key && !action.disabled,
+      );
+      if (action) {
+        event.preventDefault();
+        try {
+          void Promise.resolve(this.runArticleAction(action)).catch((error) => this.error(error));
+        } catch (error) {
+          this.error(error);
+        }
         return;
       }
     }

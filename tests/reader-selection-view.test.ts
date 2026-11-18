@@ -7,6 +7,7 @@ import {
   enableTypedTopics,
   pluginFixture,
   actionName,
+  articleAction,
   passageButton,
   passageLabels,
   expectNoPassagePopup,
@@ -117,17 +118,15 @@ describe('automatic selection event ownership', () => {
     expect((await f.store.read(f.article.path)).body).toBe(f.body);
   });
 
-  it('mounts one aligned article column with seven persistent actions outside the scroller', () => {
+  it('mounts one aligned article column with five persistent actions outside the scroller', () => {
     const column = f.view.contentEl.querySelector('.reader-article')!;
     const actions = column.querySelector('.reader-actions')!;
     expect([...actions.querySelectorAll('button')].map(actionName)).toEqual([
       'Back to list',
-      'Save to Later and advance',
-      'Archive and advance',
-      'Delete',
       'Highlight mode',
-      'Create node',
       'Related notes',
+      'Archive and advance',
+      'More article actions',
     ]);
     expect(actions.parentElement).toBe(f.surface.viewport.parentElement);
     expect(f.surface.viewport.contains(actions)).toBe(false);
@@ -141,7 +140,7 @@ describe('automatic selection event ownership', () => {
   });
 
   function armTapHighlight() {
-    f.view.contentEl.querySelector<HTMLButtonElement>('[aria-label="Highlight mode"]')!.click();
+    articleAction(f.view, 'Highlight mode');
   }
   function tapAction(label: string) {
     return [
@@ -291,7 +290,7 @@ describe('automatic selection event ownership', () => {
       expectedHosted('==Alpha== phrase.\n\nBeta phrase.'),
     );
     tapAction('Done').click();
-    expect(f.view.contentEl.querySelectorAll('.reader-actions > button')).toHaveLength(7);
+    expect(f.view.contentEl.querySelectorAll('.reader-actions > button')).toHaveLength(5);
     expect(f.view.contentEl.querySelector('.reader-tap-highlight-actions')).toBeNull();
     expect(f.probe.tapMode).toBe(false);
     expect(f.surface.body.classList.contains('reader-tap-highlight-mode')).toBe(false);
@@ -1057,10 +1056,7 @@ describe('automatic selection event ownership', () => {
       await f.view.openArticle(f.article.path, true);
       const original = await f.vault.read(f.article),
         originalPath = f.article.path;
-      const click = (name: string) =>
-        [...f.view.contentEl.querySelectorAll<HTMLButtonElement>('.reader-actions button')]
-          .find((button) => actionName(button) === name)!
-          .click();
+      const click = (name: string) => articleAction(f.view, name);
       if (label === 'Archive') {
         click('Archive and advance');
       } else if (label === 'Next') {
@@ -1093,9 +1089,7 @@ describe('automatic selection event ownership', () => {
     const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
     const external = createDocument({ type: 'article' }, 'Externally edited words.');
     f.vault.bytes.set(f.article, external);
-    [...f.view.contentEl.querySelectorAll<HTMLButtonElement>('.reader-actions button')]
-      .find((button) => actionName(button) === 'Delete')!
-      .click();
+    articleAction(f.view, 'Delete');
     await expect(f.probe.operations).rejects.toThrow();
     expect(f.view.file).toBe(f.article);
     expect(f.vault.trashed).toEqual([]);

@@ -4,6 +4,7 @@ import {
   hostFixture,
   pluginFixture,
   actionName,
+  articleAction,
   passageButton,
   passageLabels,
   expectNoPassagePopup,
@@ -129,8 +130,19 @@ describe('Nodes v2 linked creation', () => {
             ctrlKey: label === 'new-leaf',
           }),
         );
+      } else if (route === 'footer') {
+        articleAction(
+          f.view,
+          label === 'Read later'
+            ? 'Save to Later and advance'
+            : label === 'Archive'
+              ? 'Archive and advance'
+              : label === 'List'
+                ? 'Back to list'
+                : label,
+        );
       } else {
-        const parent: HTMLElement = route === 'fallback' ? f.view.contentEl : f.probe.actions;
+        const parent: HTMLElement = f.view.contentEl;
         const button = [...parent.querySelectorAll('button')].find(
           (button) =>
             actionName(button) ===
@@ -535,9 +547,8 @@ describe('Nodes v2 linked creation', () => {
         expect(requestSignal.aborted).toBe(true); // No queue or microtask may precede abort.
         expect(f.probe.tapMode).toBe(false);
         expect(f.view.contentEl.querySelector('[aria-label="Done"]')).toBeNull();
-        expect(passageLabels(f.view).some((label) => label === 'Save to Later and advance')).toBe(
-          true,
-        );
+        expect(passageLabels(f.view)).toHaveLength(5);
+        expect(passageLabels(f.view)).toContain('More article actions');
         await creation;
         await f.probe.operations;
         await expect(late(f.node)).rejects.toThrow('request has finished');

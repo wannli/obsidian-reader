@@ -172,7 +172,7 @@ describe('bounded Reader UI', () => {
     },
   );
 
-  it('shares the library action treatment with eight uniform article icons, without hiding authored hr or modal controls', async () => {
+  it('shares the library action treatment with five article icons, without hiding authored hr or modal controls', async () => {
     const f = hostFixture();
     const style = document.head.appendChild(document.createElement('style'));
     style.textContent = readFileSync(new URL('../src/reader/styles.css', import.meta.url), 'utf8');
@@ -195,32 +195,20 @@ describe('bounded Reader UI', () => {
       ];
       expect(
         buttons.map((button) => button.querySelector('svg')?.getAttribute('data-icon')),
-      ).toEqual([
-        'arrow-left',
-        'clock',
-        'archive',
-        'trash-2',
-        'highlighter',
-        'file-plus-2',
-        'tags',
-      ]);
+      ).toEqual(['arrow-left', 'highlighter', 'tags', 'archive', 'ellipsis']);
       expect(buttons.map((button) => button.getAttribute('aria-label'))).toEqual([
         'Back to list',
-        'Save to Later and advance',
-        'Archive and advance',
-        'Trash article and advance',
         'Highlight mode',
-        'Create node',
         'Related notes',
+        'Archive and advance',
+        'More article actions',
       ]);
       expect(setTooltip).toHaveBeenCalledWith(buttons[0], 'Back to list (B)');
-      expect(setTooltip).toHaveBeenCalledWith(buttons[3], 'Trash article and advance (T)');
-      expect(setTooltip).toHaveBeenCalledWith(buttons[6], 'Related notes (R)');
-      expect(setTooltip).toHaveBeenCalledWith(buttons[1], 'Save to Later and advance (L)');
-      expect(setTooltip).toHaveBeenCalledWith(buttons[2], 'Archive and advance (A)');
+      expect(setTooltip).toHaveBeenCalledWith(buttons[1], 'Highlight mode (H)');
+      expect(setTooltip).toHaveBeenCalledWith(buttons[2], 'Related notes (R)');
+      expect(setTooltip).toHaveBeenCalledWith(buttons[3], 'Archive and advance (A)');
       expect(buttons.every((button) => !button.hasAttribute('title'))).toBe(true);
-      expect(setTooltip).toHaveBeenCalledWith(buttons[4], 'Highlight mode (H)');
-      expect(setTooltip).toHaveBeenCalledWith(buttons[5], 'Create node (N)');
+      expect(setTooltip).toHaveBeenCalledWith(buttons[4], 'More article actions');
       expect(setTooltip).toHaveBeenCalledWith(
         f.probe.surface.title,
         'J/K: next/previous article · Space: page · D/U: half-page · gg/G: top/bottom · B/Q: list · ?: shortcuts',
@@ -365,7 +353,7 @@ describe('Reader mobile control styling', () => {
       await f.view.openArticle(article.path, true);
       const actions =
         f.view.contentEl.querySelectorAll<HTMLButtonElement>('.reader-actions button');
-      expect(actions).toHaveLength(7);
+      expect(actions).toHaveLength(5);
       for (const button of actions) checkIcon(button, '100%');
       expect(actions[0].disabled).toBe(false);
       actions[1].focus();
@@ -393,7 +381,7 @@ describe('Reader mobile control styling', () => {
 
 describe('leaf-scoped floating Reader layout', () => {
   it.each([390, 1280].flatMap((width) => [false, true].map((paged) => ({ width, paged }))))(
-    'uses full-pane CSS with 5/7/9-action overlays (width=$width, paged=$paged)',
+    'uses full-pane CSS with five-action overlays (width=$width, paged=$paged)',
     async ({ width, paged }) => {
       const f = hostFixture();
       const file = await f.note('Reading/Inbox/Title.md');
@@ -426,7 +414,7 @@ describe('leaf-scoped floating Reader layout', () => {
         const column = f.view.contentEl.querySelector('.reader-article')!;
         const actions = column.querySelector('.reader-bottom-controls')!;
         const expanded = paged;
-        expect(actions.querySelectorAll('button')).toHaveLength(expanded ? 9 : 7);
+        expect(actions.querySelectorAll('button')).toHaveLength(5);
         expect(column.classList.contains('reader-has-page-actions')).toBe(expanded);
         expect(actions.classList.contains('reader-paged-actions')).toBe(expanded);
         expect(actions.parentElement).toBe(column);
@@ -468,14 +456,9 @@ describe('leaf-scoped floating Reader layout', () => {
           'var(--reader-controls-clearance)',
         );
         expect(rule('.reader-paged .reader-flow').getPropertyValue('height')).toBe('');
-        expect(
-          rule('.reader-article.reader-has-page-actions').getPropertyValue(
-            '--reader-controls-clearance',
-          ),
-        ).toContain('108px');
-        expect(
-          rule('.reader-actions.reader-paged-actions').getPropertyValue('grid-template-columns'),
-        ).toBe('repeat(5, 44px)');
+        expect(rule('.reader-actions').getPropertyValue('grid-template-columns')).toBe(
+          'repeat(5, 44px)',
+        );
         expect(rule('.reader-viewport').getPropertyValue('padding-inline-end')).toBe('');
         expect(rule('.reader-viewport').getPropertyValue('scrollbar-gutter')).toBe('stable');
         expect(

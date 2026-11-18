@@ -12,6 +12,8 @@ export interface TapToolbarAction {
 interface TapHighlightOptions {
   active: boolean;
   normalTail?: HTMLElement;
+  /** The owning view can supply contextual triggers instead of appending both. */
+  normalTriggers?: boolean;
   mode?: 'highlight' | 'node';
   canUndo: boolean;
   modeChanged(active: boolean, mode?: 'node'): void;
@@ -85,7 +87,7 @@ export class TapHighlighter {
     setIcon(trigger, 'highlighter');
     trigger.querySelector('svg')?.setAttribute('aria-hidden', 'true');
     trigger.addEventListener('click', () => this.setActive(true, true, 'highlight'), events);
-    toolbar.insertBefore(trigger, options.normalTail ?? null);
+    if (options.normalTriggers !== false) toolbar.insertBefore(trigger, options.normalTail ?? null);
     this.nodeTrigger = doc.createElement('button');
     this.nodeTrigger.type = 'button';
     this.nodeTrigger.className = 'reader-icon-button reader-tap-node-trigger';
@@ -95,7 +97,8 @@ export class TapHighlighter {
     setIcon(this.nodeTrigger, 'file-plus-2');
     this.nodeTrigger.querySelector('svg')?.setAttribute('aria-hidden', 'true');
     this.nodeTrigger.addEventListener('click', () => this.setActive(true, true, 'node'), events);
-    toolbar.insertBefore(this.nodeTrigger, options.normalTail ?? null);
+    if (options.normalTriggers !== false)
+      toolbar.insertBefore(this.nodeTrigger, options.normalTail ?? null);
     this.normal = [...toolbar.childNodes];
     this.normalGrid = toolbar.style.getPropertyValue('grid-template-columns');
     this.normalGridPriority = toolbar.style.getPropertyPriority('grid-template-columns');
@@ -515,7 +518,7 @@ export class TapHighlighter {
         ).length;
         const capacity = Math.max(1, Math.floor((width - 4) / 48));
         const columns = Math.ceil(count / Math.ceil(count / capacity));
-        // Balance narrow-pane rows rather than stranding one new action below seven icons.
+        // Balance narrow-pane rows without shrinking touch targets.
         this.toolbar.style.setProperty('grid-template-columns', `repeat(${columns}, 44px)`);
       }
     }

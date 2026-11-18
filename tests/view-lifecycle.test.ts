@@ -7,6 +7,7 @@ import {
   enableTypedTopics,
   pluginFixture,
   expectedHosted,
+  articleAction,
   menu,
 } from './helpers/reader-view-fixture';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -827,9 +828,7 @@ describe('folder-authoritative queue presentation', () => {
     expect(surface.setBody).not.toHaveBeenCalled();
     expect(surface.dispose).not.toHaveBeenCalled();
     expect(f.view.getState()).toEqual({ file: article.path, queue: 'Inbox' });
-    expect(
-      f.view.contentEl.querySelector('[aria-label="Save to Later and advance"]'),
-    ).not.toBeNull();
+    expect(f.probe.articleCommands.some((action: any) => action.key === 'l')).toBe(true);
   });
 
   it.each([undefined, 'words'])(
@@ -942,9 +941,7 @@ describe('browsing context and presentation', () => {
       surface.marker = 'Article A';
       const move = vi.spyOn(f.store, 'move');
       f.host.ingestion.acquire.mockClear();
-      expect(
-        f.view.contentEl.querySelector('[aria-label="Save to Later and advance"]'),
-      ).not.toBeNull();
+      expect(f.probe.articleCommands.some((action: any) => action.key === 'l')).toBe(true);
       mocks.choose.mockResolvedValueOnce('Later');
       await f.probe.move();
       expect(mocks.choose).toHaveBeenCalledWith(
@@ -982,17 +979,13 @@ describe('browsing context and presentation', () => {
     await f.view.openArticle(article.path, true);
     const external = createDocument({ type: 'article' }, 'External edit');
     f.vault.bytes.set(article, external);
-    f.view.contentEl
-      .querySelector<HTMLButtonElement>('[aria-label="Save to Later and advance"]')!
-      .click();
+    articleAction(f.view, 'Save to Later and advance');
     await Promise.resolve(); // Let the direct action queue the guarded write.
     await expect(f.probe.operations).rejects.toThrow();
     expect(article.path).toBe('Reading/Inbox/A.md');
     expect(await f.vault.read(article)).toBe(external);
     expect(f.view.file).toBe(article);
-    expect(
-      f.view.contentEl.querySelector('[aria-label="Save to Later and advance"]'),
-    ).not.toBeNull();
+    expect(f.probe.articleCommands.some((action: any) => action.key === 'l')).toBe(true);
     expect(mocks.notice).not.toHaveBeenCalledWith('Saved to Later');
   });
 
@@ -1001,16 +994,12 @@ describe('browsing context and presentation', () => {
     const article = await f.note('Reading/Inbox/A.md');
     await f.view.openArticle(article.path, true);
     f.vault.failMove = true;
-    f.view.contentEl
-      .querySelector<HTMLButtonElement>('[aria-label="Save to Later and advance"]')!
-      .click();
+    articleAction(f.view, 'Save to Later and advance');
     await Promise.resolve();
     await expect(f.probe.operations).rejects.toThrow('Move failed');
     expect((await f.store.read(article.path)).properties.status).toBe('later');
     expect(article.path).toBe('Reading/Inbox/A.md');
-    expect(
-      f.view.contentEl.querySelector('[aria-label="Save to Later and advance"]'),
-    ).not.toBeNull();
+    expect(f.probe.articleCommands.some((action: any) => action.key === 'l')).toBe(true);
     expect(mocks.notice).not.toHaveBeenCalledWith('Saved to Later');
   });
 
@@ -1020,9 +1009,7 @@ describe('browsing context and presentation', () => {
     await f.view.openArticle(article.path, true);
     const surface = f.probe.surface;
     const expectControls = () => {
-      expect(
-        f.view.contentEl.querySelector('[aria-label="Save to Later and advance"]'),
-      ).not.toBeNull();
+      expect(f.probe.articleCommands.some((action: any) => action.key === 'l')).toBe(true);
       expect(f.view.contentEl.querySelector('[aria-label="Archive and advance"]')).not.toBeNull();
       expect(f.probe.surface).toBe(surface);
     };

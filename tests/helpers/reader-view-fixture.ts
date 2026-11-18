@@ -31,6 +31,7 @@ const mocks = vi.hoisted(() => ({
   highlightPicker: vi.fn(),
   menus: [] as Map<string, () => void>[],
   menuShown: vi.fn(),
+  menuClosed: [] as (() => void)[],
   dom: new Map<string, () => void>(),
   commands: new Map<string, Command>(),
   protocols: new Map<string, (params: Record<string, string>) => unknown>(),
@@ -68,6 +69,7 @@ vi.mock('obsidian', () => {
   }
   class Menu {
     items = new Map<string, () => void>();
+    closed?: () => void;
     constructor() {
       mocks.menus.push(this.items);
     }
@@ -76,6 +78,12 @@ vi.mock('obsidian', () => {
       const item = {
         setTitle(value: string) {
           title = value;
+          return item;
+        },
+        setIcon() {
+          return item;
+        },
+        setDisabled() {
           return item;
         },
         onClick(run: () => void) {
@@ -93,6 +101,16 @@ vi.mock('obsidian', () => {
     }
     showAtMouseEvent(event: MouseEvent) {
       mocks.menuShown(event);
+    }
+    showAtPosition(position: unknown) {
+      mocks.menuShown(position);
+    }
+    onHide(callback: () => void) {
+      this.closed = callback;
+      mocks.menuClosed.push(callback);
+    }
+    hide() {
+      this.closed?.();
     }
   }
   class Plugin {
@@ -283,6 +301,7 @@ const fixtureViews = new Set<ReaderView>();
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.menus.length = 0;
+  mocks.menuClosed.length = 0;
   mocks.dom.clear();
   mocks.commands.clear();
   mocks.protocols.clear();
@@ -467,6 +486,23 @@ function actionName(button: Element): string {
   return label.replace(/ (?:page or article|article(?: and advance)?)$/, '');
 }
 
+function articleAction(view: ReaderView, label: string): void {
+  if (label === 'Delete') label = 'Trash article and advance';
+  const buttons = [
+    ...view.contentEl.querySelectorAll<HTMLButtonElement>('.reader-actions > button'),
+  ];
+  const visible = buttons.find((button) => button.getAttribute('aria-label') === label);
+  if (visible) {
+    visible.click();
+    return;
+  }
+  buttons.find((button) => button.getAttribute('aria-label') === 'More article actions')!.click();
+  const run = mocks.menus.at(-1)!.get(label);
+  expect(run, `Secondary article action: ${label}`).toBeDefined();
+  run!();
+  mocks.menuClosed.at(-1)!();
+}
+
 function passageButton(view: ReaderView, label: string): HTMLButtonElement {
   const button = [
     ...view.contentEl.querySelectorAll<HTMLButtonElement>('.reader-actions button'),
@@ -554,6 +590,7 @@ export {
   enableTypedTopics,
   pluginFixture,
   actionName,
+  articleAction,
   passageButton,
   passageLabels,
   expectNoPassagePopup,
