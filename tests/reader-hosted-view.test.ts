@@ -1314,14 +1314,33 @@ describe('hosted highlight UI integration', () => {
       expect(f.opened.openFile).toHaveBeenCalledWith(f.targets[1], { active: true });
     },
   );
+  it('does not show Saved when the tap highlight destination picker is cancelled', async () => {
+    const f = await fixture({ defaults: [] });
+    f.paint();
+    (f.view.contentEl.querySelector('.reader-tap-highlight-trigger') as HTMLButtonElement).click();
+    mocks.highlightPicker.mockResolvedValueOnce(null);
+    const before = (await f.store.read(f.article.path)).raw;
+    const range = document.createRange();
+    range.selectNodeContents(f.probe.surface.body.querySelector('p'));
+    await f.probe.saveTapSelection(f.probe.surface.body, range);
+    expect(mocks.highlightPicker).toHaveBeenCalledOnce();
+    expect(f.view.contentEl.querySelector('.reader-tap-highlight-status')?.textContent).toBe(
+      'Tap the first word',
+    );
+    expect((await f.store.read(f.article.path)).raw).toBe(before);
+  });
   it('Undo removes only the source mark/references, retaining anchors, defaults, and user-owned destination snapshots', async () => {
     const f = await fixture({ defaults: [0] });
     f.paint();
+    (f.view.contentEl.querySelector('.reader-tap-highlight-trigger') as HTMLButtonElement).click();
     const range = document.createRange(),
       node = f.probe.surface.body.querySelector('p').firstChild;
     range.setStart(node, 7);
     range.setEnd(node, 18);
     await f.probe.saveTapSelection(f.probe.surface.body, range);
+    expect(f.view.contentEl.querySelector('.reader-tap-highlight-status')?.textContent).toBe(
+      'Saved',
+    );
     const target = await f.vault.read(f.targets[0]),
       saved = await f.store.read(f.article.path);
     const anchor = /\^reader-[a-z0-9-]+/.exec(saved.body)![0];

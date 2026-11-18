@@ -40,6 +40,9 @@ export class TapHighlighter {
   private readonly normalGridPriority: string;
   private readonly panel: HTMLDivElement;
   private readonly hint: HTMLDivElement;
+  private readonly statusIcon: HTMLSpanElement;
+  private readonly statusText: HTMLSpanElement;
+  private savedTimer?: ReturnType<typeof setTimeout>;
   private readonly preview: HTMLDivElement;
   private readonly sentence: HTMLButtonElement;
   private readonly paragraph: HTMLButtonElement;
@@ -110,10 +113,15 @@ export class TapHighlighter {
     );
     this.done = this.button('Done', 'check', () => this.setActive(false), 'd');
     this.hint = doc.createElement('div');
-    // Announce state without a visible explainer or extra space above the bar.
+    // The same compact status is visible and announced; icons are decorative.
     this.hint.className = 'reader-tap-highlight-status';
     this.hint.setAttribute('role', 'status');
     this.hint.setAttribute('aria-live', 'polite');
+    this.hint.setAttribute('aria-atomic', 'true');
+    this.statusIcon = doc.createElement('span');
+    this.statusIcon.setAttribute('aria-hidden', 'true');
+    this.statusText = doc.createElement('span');
+    this.hint.append(this.statusIcon, this.statusText);
     this.preview = doc.createElement('div');
     this.preview.className = 'reader-tap-highlight-preview';
     this.preview.setAttribute('aria-hidden', 'true');
@@ -206,6 +214,7 @@ export class TapHighlighter {
           }
           options.clearPassage?.(true);
           if (this.dead || !this.enabled) return;
+          this.clearSaved();
           this.first = word;
           this.update();
           return;
@@ -213,7 +222,7 @@ export class TapHighlighter {
         const range = this.picker.between(this.first, word);
         if (!range) {
           const message = 'Choose words in the same paragraph, or press Escape to start again.';
-          this.hint.textContent = message;
+          this.status(message, 'circle-alert');
           options.notify(new Error(message));
           return;
         }
@@ -270,11 +279,36 @@ export class TapHighlighter {
 
   reset(): void {
     if (this.dead) return;
+    this.clearSaved();
     this.first = undefined;
     this.down = undefined;
     this.moved = true; // A source update also cancels any pointer gesture already in flight.
     this.options.clearPassage?.(false);
     this.update();
+  }
+
+  /** Called by the owner only after a confirmed source and host save. */
+  saved(): void {
+    if (this.dead || !this.enabled || this.mode !== 'highlight') return;
+    this.clearSaved();
+    this.savedTimer = setTimeout(() => {
+      this.savedTimer = undefined;
+      if (!this.dead) this.update();
+    }, 1800);
+    this.update();
+  }
+
+  private clearSaved(): void {
+    clearTimeout(this.savedTimer);
+    this.savedTimer = undefined;
+  }
+
+  private status(message: string, icon: string): void {
+    if (this.statusText.textContent !== message) this.statusText.textContent = message;
+    if (this.statusIcon.dataset.icon !== icon) {
+      setIcon(this.statusIcon, icon);
+      this.statusIcon.dataset.icon = icon;
+    }
   }
 
   refreshActions(): void {
@@ -288,6 +322,7 @@ export class TapHighlighter {
 
   setActive(active: boolean, notify = true, mode: 'highlight' | 'node' = 'highlight'): void {
     if (this.dead || this.busy) return;
+    this.clearSaved();
     if (!active) this.options.clearPassage?.(notify);
     this.mode = mode;
     this.enabled = active;
@@ -359,6 +394,7 @@ export class TapHighlighter {
 
   private async run(action: () => Promise<void>): Promise<void> {
     if (this.dead || !this.enabled || this.busy) return;
+    this.clearSaved();
     this.busy = true;
     this.first = undefined;
     this.update();
@@ -428,17 +464,32 @@ export class TapHighlighter {
     this.undo.hidden = this.mode === 'node' || !this.undoAvailable;
     this.undo.disabled = this.busy;
     this.hint.hidden = !this.enabled;
-    this.hint.textContent = this.busy
-      ? this.mode === 'node'
-        ? 'Creating…'
-        : 'Saving…'
-      : this.first
-        ? 'Tap the last word, or choose below'
-        : this.actionSet
-          ? 'Highlight selected'
-          : this.mode === 'node'
-            ? 'Tap the first word to create a note'
-            : 'Tap the first word';
+    this.status(
+      this.busy
+        ? this.mode === 'node'
+          ? 'Creating…'
+          : 'Saving…'
+        : this.first
+          ? this.mode === 'node'
+            ? 'Tap the last word to create a note'
+            : 'Tap the last word to save'
+          : this.savedTimer !== undefined
+            ? 'Saved'
+            : this.actionSet
+              ? 'Highlight selected'
+              : this.mode === 'node'
+                ? 'Tap the first word to create a note'
+                : 'Tap the first word',
+      this.busy
+        ? 'hourglass'
+        : this.savedTimer !== undefined
+          ? 'check'
+          : this.first
+            ? 'text-cursor'
+            : this.mode === 'node'
+              ? 'file-plus-2'
+              : 'highlighter',
+    );
     this.paint();
   }
 
@@ -505,6 +556,7 @@ export class TapHighlighter {
       (children.length === 1 && children[0] === this.panel) ||
       (children.length === this.normal.length &&
         children.every((node, index) => node === this.normal[index]));
+    this.clearSaved();
     this.dead = true;
     this.enabled = false;
     this.events.abort();

@@ -564,16 +564,27 @@ body.is-mobile.reader-mobile-active .mobile-navbar {
   flex: 0 0 44px;
 }
 .reader-tap-highlight-status {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  padding: 0;
-  margin: -1px;
-  overflow: hidden;
-  clip-path: inset(50%);
-  white-space: nowrap;
-  border: 0;
+  order: -1;
+  flex: 0 0 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 4px 2px;
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+  line-height: 1.3;
+  text-align: center;
+  overflow-wrap: anywhere;
   pointer-events: none;
+}
+.reader-tap-highlight-status > [aria-hidden] {
+  display: flex;
+  flex: 0 0 16px;
+}
+.reader-tap-highlight-status svg {
+  width: 16px;
+  height: 16px;
 }
 .reader-document.reader-tap-highlight-mode,
 .reader-document.reader-tap-highlight-mode * {

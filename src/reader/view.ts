@@ -1795,6 +1795,7 @@ export class ReaderView extends ItemView {
         this.tapHighlighter?.setUndoAvailable(!!this.tapUndo);
         if (passage && this.surface?.displayedBody === saved.body) this.passageMenu(passage);
         this.controls();
+        this.tapHighlighter?.saved();
       } finally {
         if (this.writing === promise) this.writing = undefined;
       }

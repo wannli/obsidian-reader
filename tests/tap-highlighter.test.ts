@@ -483,7 +483,7 @@ it('clears passage intent before staging a plain word for the next normal select
   expect(f.toolbar.querySelector('[data-action]')).toBeNull();
   expect(f.preview.children).toHaveLength(1);
   expect(button(f.toolbar, 'Sentence').disabled).toBe(false);
-  expect(f.hint.textContent).toBe('Tap the last word, or choose below');
+  expect(f.hint.textContent).toBe('Tap the last word to save');
   tap(f, 80);
   expect(onPassage).toHaveBeenCalledOnce();
   expect(clearPassage).toHaveBeenCalledOnce();
@@ -770,18 +770,54 @@ it('ignores a generic picker rejection after disposal and never clears View inte
   expect([...f.toolbar.childNodes]).toEqual(f.original);
 });
 
-it('reserves only the menu bar height, never space for the screen-reader status', () => {
+it('reserves the measured toolbar height including the visible status row', () => {
   const f = fixture();
-  Object.defineProperty(f.toolbar, 'offsetHeight', { value: 52 });
-  Object.defineProperty(f.hint, 'offsetHeight', {
-    get: () => {
-      throw new Error('Status must not affect layout');
-    },
-  });
+  Object.defineProperty(f.toolbar, 'offsetHeight', { value: 84 });
   window.dispatchEvent(new window.Event('resize'));
   expect(f.viewport.parentElement?.style.getPropertyValue('--reader-controls-clearance')).toBe(
-    'calc(64px + var(--reader-controls-bottom))',
+    'calc(96px + var(--reader-controls-bottom))',
   );
+});
+
+it('shows decorative state icons and announces the visible label', async () => {
+  const f = fixture();
+  const icon = () => f.hint.querySelector<HTMLElement>('[aria-hidden="true"]')!;
+  expect(f.hint.getAttribute('aria-atomic')).toBe('true');
+  expect(icon().dataset.icon).toBe('highlighter');
+  tap(f);
+  expect(icon().dataset.icon).toBe('text-cursor');
+  tap(f, 80);
+  expect(f.hint.textContent).toBe('Saving…');
+  expect(icon().dataset.icon).toBe('hourglass');
+  await Promise.resolve();
+  // A resolved picker/write callback alone is not proof of a save.
+  expect(f.hint.textContent).toBe('Tap the first word');
+});
+
+it('briefly confirms a verified save, then returns to the current action state', () => {
+  vi.useFakeTimers();
+  try {
+    const f = fixture();
+    f.controller.saved();
+    expect(f.hint.textContent).toBe('Saved');
+    expect(f.hint.querySelector<HTMLElement>('[aria-hidden]')?.dataset.icon).toBe('check');
+    vi.advanceTimersByTime(1800);
+    expect(f.hint.textContent).toBe('Tap the first word');
+    f.controller.saved();
+    tap(f);
+    expect(f.hint.textContent).toBe('Tap the last word to save');
+    vi.advanceTimersByTime(1800);
+    expect(f.hint.textContent).toBe('Tap the last word to save');
+    f.controller.reset();
+    f.controller.saved();
+    f.controller.reset();
+    expect(f.hint.textContent).toBe('Tap the first word');
+    f.controller.saved();
+    f.controller.dispose();
+    expect(vi.getTimerCount()).toBe(0);
+  } finally {
+    vi.useRealTimers();
+  }
 });
 
 it('marks only the first word without saving or changing authored article nodes', () => {
@@ -799,7 +835,7 @@ it('marks only the first word without saving or changing authored article nodes'
   expect(f.preview.getAttribute('aria-hidden')).toBe('true');
   expect(f.preview.children).toHaveLength(1);
   expect(f.preview.firstElementChild?.getAttribute('style')).toContain('width: 45px');
-  expect(f.hint.textContent).toBe('Tap the last word, or choose below');
+  expect(f.hint.textContent).toBe('Tap the last word to save');
   expect(button(f.toolbar, 'Sentence').disabled).toBe(false);
   expect(button(f.toolbar, 'Paragraph').disabled).toBe(false);
   expect(f.body.innerHTML).toBe(html);
