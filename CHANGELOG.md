@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.28.0](https://github.com/wannli/obsidian-reader/compare/0.27.0...0.28.0) (2026-11-20)
+
+
+### Added
+
+* **mcp:** add minimal synthetic stdio server ([673674d](https://github.com/wannli/obsidian-reader/commit/673674d2c5c5c50227e8cea3c75b29a93b788c57))
+* **reader:** center prose while preserving wide content ([44cc116](https://github.com/wannli/obsidian-reader/commit/44cc1165c4a5d1dc1ea1aca767cdd11cfa37608c))
+* **reader:** clarify retention and advance outcomes ([6c33730](https://github.com/wannli/obsidian-reader/commit/6c33730e956ee35c7202e6f32f103fe2eaf22a20))
+* **reader:** limit article controls to five contextual actions ([bddb069](https://github.com/wannli/obsidian-reader/commit/bddb069cac975314378c734d272544c83f15909e))
+* **reader:** show touch highlighting state in the toolbar ([e72a398](https://github.com/wannli/obsidian-reader/commit/e72a398f17e596774587b8a14628ab1f7ebf5857))
+
+
+### Fixed
+
+* **capture:** refuse ambiguous duplicate article URLs ([e9be6bb](https://github.com/wannli/obsidian-reader/commit/e9be6bb7782aca701e49282c0b6bff61f54a0ae5))
+* **reader:** identify the current reading-list queue ([294faae](https://github.com/wannli/obsidian-reader/commit/294faaed1fe4d84905263fac35209b144a70fbc2))
+* **reader:** show local actionable failure feedback ([2abefe8](https://github.com/wannli/obsidian-reader/commit/2abefe864ff40439030be22fb4e9183eedeffdf7))
+
 ## [0.27.0](https://github.com/wannli/obsidian-reader/compare/0.26.3...0.27.0) (2026-11-15)
 
 

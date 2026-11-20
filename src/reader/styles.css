@@ -10,6 +10,9 @@ body.is-mobile.reader-mobile-active .mobile-navbar {
   --reader-controls-bottom: max(8px, env(safe-area-inset-bottom, 0px));
   --reader-controls-clearance: calc(60px + var(--reader-controls-bottom));
   --reader-scrollbar-clearance: 16px;
+  /* Roughly 70 average characters. Resolve from the body text size, not each
+     heading's larger font, so all prose shares one measure as text enlarges. */
+  --reader-prose-width: calc(var(--font-text-size) * 35);
   box-sizing: border-box;
   position: relative;
   container-type: inline-size;
@@ -502,6 +505,14 @@ body.is-mobile.reader-mobile-active .mobile-navbar {
 .reader-article-title[hidden] {
   display: none;
 }
+.reader-article-title,
+.reader-article-topics {
+  box-sizing: border-box;
+  /* Match the body's prose edges while retaining its end scrollbar clearance. */
+  max-inline-size: calc(var(--reader-prose-width) + var(--reader-scrollbar-clearance));
+  margin-inline: auto;
+  padding-inline-end: var(--reader-scrollbar-clearance);
+}
 .reader-view .reader-document.markdown-rendered {
   box-sizing: border-box;
   width: 100%;
@@ -517,6 +528,17 @@ body.is-mobile.reader-mobile-active .mobile-navbar {
   line-height: var(--line-height-normal);
   user-select: text;
   -webkit-user-select: text;
+}
+/* Bound prose blocks, never the document/flow: paged column width and stride
+   remain viewport-owned. Leave any media/code/table-bearing block wide, including
+   linked images, mixed image/text paragraphs and nested lists or quotations. */
+.reader-document
+  > :is(p, h1, h2, h3, h4, h5, h6, ul, ol, blockquote):not(
+    :has(img, video, audio, iframe, pre, table)
+  ) {
+  box-sizing: border-box;
+  max-inline-size: var(--reader-prose-width);
+  margin-inline: auto;
 }
 .reader-document > :first-child {
   margin-block-start: 0;
@@ -727,7 +749,6 @@ dialog.reader-image-viewer,
 }
 
 .reader-article-topics {
-  max-width: 100%;
   margin-block: 0.5em 1em;
   font-size: var(--font-text-size);
 }
