@@ -1,0 +1,785 @@
+<!doctype html>
+<!-- THROWAWAY #117: compare list-first, source-first, and card-first clipping interfaces.
+     Standalone simulation: no Obsidian connection, no vault writes, memory-only edits.
+     Run: python3 -m http.server 4317 --bind 0.0.0.0 --directory src/reader
+     Open /clippings.prototype.html?variant=A (or B / C). -->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Reader · Clippings mockup</title>
+    <style>
+      :root {
+        font:
+          16px/1.55 system-ui,
+          sans-serif;
+        color: #292824;
+        background: #eeede9;
+        --paper: #fffefa;
+        --line: #dfded7;
+        --muted: #727169;
+        --accent: #5d6147;
+        --wash: #eeefdf;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+      }
+      button,
+      input,
+      textarea {
+        font: inherit;
+      }
+      button,
+      a,
+      input,
+      textarea {
+        touch-action: manipulation;
+      }
+      button {
+        cursor: pointer;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: var(--paper);
+        color: inherit;
+        min-height: 44px;
+        padding: 8px 13px;
+      }
+      button:hover {
+        background: #f0efe9;
+      }
+      button:disabled {
+        opacity: 0.45;
+        cursor: default;
+      }
+      button.active,
+      button.primary {
+        background: var(--wash);
+        border-color: #b6b99c;
+      }
+      button:focus-visible,
+      a:focus-visible,
+      input:focus-visible,
+      textarea:focus-visible {
+        outline: 2px solid var(--accent);
+        outline-offset: 3px;
+      }
+      a {
+        color: var(--accent);
+      }
+      h1,
+      h2,
+      h3,
+      p {
+        margin-top: 0;
+      }
+      h1 {
+        font:
+          normal 36px/1.18 Georgia,
+          serif;
+        letter-spacing: -0.6px;
+        margin-bottom: 14px;
+      }
+      h2 {
+        font:
+          normal 27px/1.25 Georgia,
+          serif;
+      }
+      h3 {
+        font-size: 16px;
+        margin-bottom: 7px;
+      }
+      .muted {
+        color: var(--muted);
+        font-size: 14px;
+      }
+      .eyebrow {
+        text-transform: uppercase;
+        font-size: 11px;
+        letter-spacing: 1.5px;
+        color: var(--muted);
+        margin-bottom: 14px;
+      }
+      .topnote {
+        padding: 9px 20px;
+        text-align: center;
+        background: #e3e4d6;
+        font-size: 12px;
+      }
+      .shell {
+        max-width: 1400px;
+        margin: auto;
+        min-height: calc(100vh - 37px);
+        display: grid;
+        grid-template-columns: 180px minmax(0, 1fr);
+        background: var(--paper);
+        border-inline: 1px solid var(--line);
+      }
+      aside {
+        background: #f5f4ef;
+        padding: 25px 14px;
+        border-right: 1px solid var(--line);
+      }
+      .brand {
+        font:
+          23px Georgia,
+          serif;
+        padding: 0 12px 27px;
+      }
+      .nav {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+      .nav button {
+        text-align: left;
+        border-color: transparent;
+        background: none;
+      }
+      .nav button.active {
+        background: #e7e8dc;
+      }
+      .aside-note {
+        padding: 24px 12px;
+        font-size: 12px;
+        color: var(--muted);
+      }
+      .workspace {
+        min-width: 0;
+        padding-bottom: 145px;
+      }
+      header {
+        padding: 14px 28px;
+        display: flex;
+        gap: 12px;
+        align-items: center;
+        justify-content: space-between;
+        border-bottom: 1px solid var(--line);
+        min-height: 73px;
+      }
+      header .muted {
+        font-size: 13px;
+      }
+      .content {
+        padding: 38px 40px;
+        max-width: 1000px;
+        margin: auto;
+      }
+      .intro {
+        display: flex;
+        gap: 18px;
+        justify-content: space-between;
+        align-items: start;
+        margin-bottom: 25px;
+      }
+      .intro p {
+        margin-bottom: 0;
+      }
+      input[type='search'] {
+        width: 100%;
+        min-height: 46px;
+        padding: 10px 13px;
+        border: 1px solid var(--line);
+        background: transparent;
+        border-radius: 6px;
+        margin-bottom: 20px;
+      }
+      .clip {
+        padding: 22px 0;
+        border-bottom: 1px solid var(--line);
+      }
+      .clip-title {
+        border: 0;
+        padding: 0;
+        min-height: 44px;
+        background: none;
+        text-align: left;
+        display: block;
+        font-size: 18px;
+        font-weight: 600;
+      }
+      .clip p {
+        margin: 4px 0 9px;
+        max-width: 65ch;
+      }
+      .source {
+        border: 0;
+        background: none;
+        color: var(--accent);
+        padding: 4px 0;
+        text-align: left;
+        font-size: 13px;
+        min-height: 44px;
+      }
+      .clip-note {
+        font-size: 14px;
+        color: var(--muted);
+        border-left: 2px solid var(--line);
+        padding-left: 12px;
+      }
+      .empty {
+        padding: 40px 0;
+        color: var(--muted);
+      }
+      .article {
+        max-width: 680px;
+        margin: auto;
+      }
+      .article .prose {
+        font:
+          20px/1.85 Georgia,
+          serif;
+      }
+      .article .prose p {
+        margin-bottom: 25px;
+      }
+      .kept {
+        border: 0;
+        background: #f4edbb;
+        border-radius: 2px;
+        padding: 2px 4px;
+        font: inherit;
+        min-height: 44px;
+        text-align: left;
+      }
+      .capture {
+        padding: 16px;
+        border: 1px solid #d9d4af;
+        background: #faf7e6;
+        border-radius: 6px;
+        font:
+          16px/1.65 Georgia,
+          serif;
+        margin: 25px 0;
+      }
+      .capture button {
+        margin-top: 14px;
+        font:
+          14px system-ui,
+          sans-serif;
+        display: block;
+      }
+      .split {
+        display: grid;
+        grid-template-columns: minmax(0, 1.3fr) minmax(260px, 0.8fr);
+        min-height: 70vh;
+      }
+      .split .article {
+        padding: 35px;
+        min-width: 0;
+      }
+      .split .article .prose {
+        font-size: 18px;
+      }
+      .rail {
+        border-left: 1px solid var(--line);
+        padding: 28px 24px;
+        background: #faf9f4;
+      }
+      .rail .clip-title {
+        font-size: 15px;
+      }
+      .rail .clip p {
+        font:
+          16px/1.6 Georgia,
+          serif;
+      }
+      .review {
+        max-width: 760px;
+        margin: auto;
+      }
+      .review-card {
+        padding: 40px;
+        border: 1px solid var(--line);
+        background: #faf9f4;
+        border-radius: 8px;
+      }
+      .review-card blockquote {
+        font:
+          25px/1.6 Georgia,
+          serif;
+        margin: 25px 0;
+      }
+      .review-card .source {
+        margin-bottom: 15px;
+      }
+      .row {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        flex-wrap: wrap;
+      }
+      .between {
+        justify-content: space-between;
+      }
+      .review-nav {
+        margin: 22px 0;
+      }
+      .properties {
+        background: #f6f5f0;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        padding: 12px 16px;
+        margin-bottom: 24px;
+        font:
+          13px/1.8 ui-monospace,
+          monospace;
+        overflow-wrap: anywhere;
+      }
+      .properties span {
+        color: var(--muted);
+        display: inline-block;
+        min-width: 65px;
+      }
+      .note-quote {
+        font:
+          22px/1.65 Georgia,
+          serif;
+        border-left: 3px solid #c2c5a8;
+        padding: 5px 0 5px 22px;
+        margin: 28px 0;
+      }
+      .editor {
+        width: 100%;
+        min-height: 180px;
+        resize: vertical;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        padding: 16px;
+        background: transparent;
+        line-height: 1.7;
+      }
+      .title-edit {
+        font:
+          30px/1.3 Georgia,
+          serif;
+        width: 100%;
+        border: 0;
+        border-bottom: 1px solid var(--line);
+        padding: 10px 0;
+        background: transparent;
+        margin: 12px 0 20px;
+      }
+      .badge {
+        font-size: 12px;
+        background: var(--wash);
+        padding: 4px 8px;
+        border-radius: 4px;
+      }
+      .switcher {
+        position: fixed;
+        bottom: 18px;
+        left: 50%;
+        transform: translateX(-50%);
+        z-index: 5;
+        background: #292c25;
+        color: #fff;
+        padding: 6px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        border-radius: 10px;
+        box-shadow: 0 6px 30px #0003;
+        max-width: calc(100vw - 24px);
+      }
+      .switcher button {
+        background: #41453a;
+        color: white;
+        border: 0;
+        min-width: 44px;
+      }
+      .switcher .label {
+        min-width: 180px;
+        text-align: center;
+        font-size: 13px;
+        line-height: 1.4;
+      }
+      .switcher small {
+        display: block;
+        color: #c2c7b8;
+        font-size: 10px;
+      }
+      .state {
+        position: fixed;
+        bottom: 85px;
+        left: 50%;
+        transform: translateX(-50%);
+        font-size: 11px;
+        color: var(--muted);
+        background: #fffefaef;
+        border: 1px solid var(--line);
+        border-radius: 4px;
+        padding: 4px 10px;
+        max-width: 95vw;
+        white-space: nowrap;
+      }
+      .toast {
+        position: fixed;
+        top: 55px;
+        left: 50%;
+        transform: translateX(-50%);
+        background: #292c25;
+        color: white;
+        border-radius: 6px;
+        padding: 12px 20px;
+        z-index: 10;
+        font-size: 14px;
+      }
+      .mobile-nav {
+        display: none;
+      }
+      @media (max-width: 850px) {
+        .shell {
+          grid-template-columns: 140px minmax(0, 1fr);
+        }
+        .split {
+          grid-template-columns: 1fr;
+        }
+        .rail {
+          border-left: 0;
+          border-top: 1px solid var(--line);
+        }
+        .content {
+          padding: 30px 25px;
+        }
+        .split .article {
+          padding: 30px 25px;
+        }
+      }
+      @media (max-width: 580px) {
+        .shell {
+          display: block;
+          border: 0;
+        }
+        aside {
+          display: none;
+        }
+        .mobile-nav {
+          display: flex;
+          gap: 8px;
+          margin-left: auto;
+        }
+        .mobile-nav button {
+          padding: 8px 10px;
+        }
+        header {
+          padding: 10px 16px;
+          gap: 8px;
+        }
+        header .desktop-label {
+          display: none;
+        }
+        .content {
+          padding: 28px 20px;
+        }
+        h1 {
+          font-size: 31px;
+        }
+        .intro {
+          gap: 10px;
+        }
+        .intro p {
+          font-size: 13px;
+        }
+        .review-card {
+          padding: 24px;
+        }
+        .review-card blockquote {
+          font-size: 22px;
+        }
+        .article .prose {
+          font-size: 19px;
+        }
+        .switcher .label {
+          min-width: 155px;
+        }
+        .state {
+          font-size: 10px;
+        }
+        .split .article {
+          padding: 28px 20px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="topnote">INTERACTIVE MOCKUP · Sample content only · Edits disappear on reload</div>
+    <div class="shell">
+      <aside>
+        <div class="brand">Reader</div>
+        <nav class="nav" aria-label="Reader">
+          <button data-nav="article">Reading</button><button data-nav="clippings">Clippings</button>
+        </nav>
+        <div class="aside-note">One note per clipping.<br />Keep now. Think later.</div>
+      </aside>
+      <main class="workspace">
+        <header>
+          <div class="desktop-label">
+            Reader <span class="muted"> / <span id="crumb">Clippings</span></span>
+          </div>
+          <div class="mobile-nav">
+            <button data-nav="article">Reading</button
+            ><button data-nav="clippings">Clippings</button>
+          </div>
+          <span class="muted" id="header-note">Design exploration</span>
+        </header>
+        <div id="view"></div>
+      </main>
+    </div>
+    <div class="state" id="state" aria-live="polite"></div>
+    <nav class="switcher" aria-label="Mockup layouts">
+      <button id="prev-variant" aria-label="Previous layout">←</button>
+      <div class="label" id="variant-label"></div>
+      <button id="next-variant" aria-label="Next layout">→</button>
+    </nav>
+    <div id="toast" class="toast" role="status" hidden></div>
+    <script>
+      const initial = [
+        {
+          id: 1,
+          title: 'Streets shape the choices we make',
+          quote:
+            'Streets shape the choices we make. A road is never just a road; it is an invitation to behave in a particular way.',
+          source: 'The city is a set of invitations',
+          anchor: 'streets',
+          thoughts:
+            'This connects to how infrastructure makes some choices easier than others.\n\nSee also [[Urban design]].',
+        },
+        {
+          id: 2,
+          title: 'What we choose to maintain',
+          quote:
+            'What we choose to maintain reveals what we actually value, more clearly than anything we choose to announce.',
+          source: 'The invisible work of maintenance',
+          anchor: 'maintenance',
+          thoughts: '',
+        },
+        {
+          id: 3,
+          title: 'A good question changes what you notice',
+          quote: 'A good question changes what you notice long before it changes what you know.',
+          source: 'Learning to pay attention',
+          anchor: 'questions',
+          thoughts: 'Questions as tools for attention, not just requests for answers.',
+        },
+        {
+          id: 4,
+          title: 'Public space begins with permission',
+          quote:
+            'Public space begins with permission to stay, not merely permission to pass through.',
+          source: 'The city is a set of invitations',
+          anchor: 'public-space',
+          thoughts: '',
+        },
+      ];
+      let cards = initial.map((x) => ({ ...x }));
+      const names = { A: 'Clippings list', B: 'Beside the article', C: 'One card at a time' };
+      const params = new URLSearchParams(location.search);
+      let variant = names[params.get('variant')] ? params.get('variant') : 'A';
+      let page = variant === 'B' ? 'article' : 'clippings',
+        selected = 1,
+        review = 0,
+        query = '',
+        sourceTitle = initial[0].source,
+        returnPage = 'clippings',
+        saved = false;
+      const view = document.querySelector('#view');
+      const esc = (s) =>
+        String(s).replace(
+          /[&<>"']/g,
+          (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c],
+        );
+      const cardById = (id) => cards.find((c) => c.id === Number(id));
+      function sourceButton(c) {
+        return `<button class="source" data-source="${c.id}">↗ ${esc(c.source)}</button>`;
+      }
+      function clip(c) {
+        return `<section class="clip"><button class="clip-title" data-card="${c.id}">${esc(c.title)}</button><p>“${esc(c.quote)}”</p>${sourceButton(c)}${c.thoughts ? `<div class="clip-note">${esc(c.thoughts.split('\n')[0])}</div>` : ''}</section>`;
+      }
+      function search() {
+        return `<input type="search" id="search" aria-label="Search clippings" placeholder="Search clippings…" value="${esc(query)}">`;
+      }
+      function filtered() {
+        return cards.filter((c) =>
+          (c.title + ' ' + c.quote + ' ' + c.source + ' ' + c.thoughts)
+            .toLowerCase()
+            .includes(query.toLowerCase()),
+        );
+      }
+      function listing() {
+        const list = filtered();
+        return `<div class="content"><div class="intro"><div><div class="eyebrow">Your reading, becoming your thinking</div><h1>Clippings</h1><p class="muted">${cards.length} notes · newest captures first</p></div></div>${search()}<div id="results">${list.map(clip).join('') || '<p class="empty">No matching clippings. Try another word.</p>'}</div></div>`;
+      }
+      function articleMarkup() {
+        const own = cards.filter((c) => c.source === sourceTitle);
+        let body;
+        if (sourceTitle === initial[0].source) {
+          body = `<p>A city is not just a collection of buildings. It is a collection of small invitations: to walk, to linger, to meet, or to leave.</p><p><button class="kept" data-card="1">${esc(initial[0].quote)}</button></p><p>We often talk about these choices as personal preferences. But the width of a pavement, the shade of a tree, and the placement of a bench all help write the script.</p><div class="capture">A bench is a small promise that you are allowed to do nothing here.<button class="primary" id="keep" ${saved ? 'disabled' : ''}>${saved ? '✓ Kept as a card' : 'Keep this passage'}</button></div><p><button class="kept" data-card="4">${esc(initial[3].quote)}</button></p><p>Perhaps the useful question is not simply what a city contains, but what it makes easy.</p>`;
+        } else {
+          const c = own[0];
+          body = `<p>Some ideas stay with us because they change the way we look at ordinary things.</p><p><button class="kept" data-card="${c.id}">${esc(c.quote)}</button></p><p>A useful passage is a place to begin thinking, not a place to stop.</p>`;
+        }
+        return `<article class="article"><div class="eyebrow">Article · Sample essay</div><h1>${esc(sourceTitle)}</h1><p class="muted">Mara Ellis · 6 minute read</p><div class="prose">${body}</div></article>`;
+      }
+      function article() {
+        const own = cards.filter((c) => c.source === sourceTitle);
+        return variant === 'B'
+          ? `<div class="split">${articleMarkup()}<section class="rail"><div class="eyebrow">Kept from this article</div><h2>Clippings</h2><p class="muted">Open a card to add your thinking.</p>${own.map(clip).join('')}<button data-nav="clippings">All clippings</button></section></div>`
+          : `<div class="content"><div class="row between" style="margin-bottom:25px"><button data-nav="clippings">All clippings</button><button id="article-clips">This article’s clippings (${own.length})</button></div>${articleMarkup()}</div>`;
+      }
+      function reviewView() {
+        const list = filtered();
+        review = Math.max(0, Math.min(review, list.length - 1));
+        const c = list[review];
+        return `<div class="content review"><div class="eyebrow">Make space for a thought</div><h1>Revisit your clippings</h1><p class="muted">One passage at a time. Open the note when something sparks.</p>${search()}${c ? `<div class="row between review-nav"><button id="prev-card" ${review === 0 ? 'disabled' : ''}>← Previous</button><span class="muted">${review + 1} of ${list.length}</span><button id="next-card" ${review === list.length - 1 ? 'disabled' : ''}>Next →</button></div><section class="review-card"><h2>${esc(c.title)}</h2><blockquote>“${esc(c.quote)}”</blockquote>${sourceButton(c)}${c.thoughts ? `<p class="clip-note">${esc(c.thoughts)}</p>` : '<p class="muted">No thoughts added yet. The clipping is enough for now.</p>'}<button class="primary" data-card="${c.id}">Open note to write</button></section>` : '<p class="empty">No matching clippings.</p>'}</div>`;
+      }
+      function editor() {
+        const c = cardById(selected);
+        return `<div class="content article"><div class="row between"><button id="back">← Back to ${returnPage === 'article' ? 'article' : 'clippings'}</button><span class="badge">Simulated Obsidian note</span></div><p class="muted" style="margin-top:22px">In the real plugin this would open an ordinary Obsidian note.</p><label class="muted" for="title-edit">Filename / title</label><input class="title-edit" id="title-edit" value="${esc(c.title)}"><div class="properties"><div class="muted">Properties · rendered from YAML</div><div><span>type</span> clipping</div><div><span>origin</span> [[${esc(c.source)}#^${esc(c.anchor)}]]</div></div><blockquote class="note-quote">${esc(c.quote)}</blockquote><label for="thoughts">Your thinking</label><textarea class="editor" id="thoughts" placeholder="Add a thought, a question, or a [[connection]]…">${esc(c.thoughts)}</textarea><p class="muted">Changes stay in this mockup only. Reloading resets everything.</p><button class="source" data-source="${c.id}">↗ Return to source article</button></div>`;
+      }
+      function render() {
+        document.querySelector('#crumb').textContent =
+          page === 'editor' ? 'Clipping note' : page === 'article' ? 'Reading' : 'Clippings';
+        document
+          .querySelectorAll('[data-nav]')
+          .forEach((b) => b.classList.toggle('active', b.dataset.nav === page));
+        document.querySelector('#header-note').textContent =
+          page === 'editor' ? 'Note mockup' : 'Reader mockup';
+        document.querySelector('#variant-label').innerHTML =
+          `${variant} · ${names[variant]}<small>LAYOUT EXPLORER · ← / →</small>`;
+        document.querySelector('#state').textContent =
+          `${variant} · ${page} · ${cards.length} clipping files · in-memory only`;
+        view.innerHTML =
+          page === 'editor'
+            ? editor()
+            : page === 'article'
+              ? article()
+              : variant === 'C'
+                ? reviewView()
+                : listing();
+        bind();
+      }
+      function announce(msg) {
+        const t = document.querySelector('#toast');
+        t.textContent = msg;
+        t.hidden = false;
+        clearTimeout(announce.timer);
+        announce.timer = setTimeout(() => (t.hidden = true), 2400);
+      }
+      function openCard(id) {
+        returnPage = page === 'editor' ? returnPage : page;
+        selected = Number(id);
+        page = 'editor';
+        render();
+        window.scrollTo(0, 0);
+      }
+      function bind() {
+        view
+          .querySelectorAll('[data-card]')
+          .forEach((b) => (b.onclick = () => openCard(b.dataset.card)));
+        view.querySelectorAll('[data-source]').forEach(
+          (b) =>
+            (b.onclick = () => {
+              sourceTitle = cardById(b.dataset.source).source;
+              page = 'article';
+              render();
+              window.scrollTo(0, 0);
+            }),
+        );
+        view
+          .querySelectorAll('[data-nav]')
+          .forEach((b) => (b.onclick = () => navigate(b.dataset.nav)));
+        const searchInput = document.querySelector('#search');
+        if (searchInput)
+          searchInput.oninput = (e) => {
+            query = e.target.value;
+            const pos = e.target.selectionStart;
+            render();
+            const n = document.querySelector('#search');
+            n.focus();
+            n.setSelectionRange(pos, pos);
+          };
+        const keep = document.querySelector('#keep');
+        if (keep)
+          keep.onclick = () => {
+            cards.unshift({
+              id: 5,
+              title: 'A bench is a small promise',
+              quote: 'A bench is a small promise that you are allowed to do nothing here.',
+              source: initial[0].source,
+              anchor: 'bench',
+              thoughts: '',
+            });
+            saved = true;
+            render();
+            announce('Kept · A bench is a small promise.md');
+          };
+        const ac = document.querySelector('#article-clips');
+        if (ac)
+          ac.onclick = () => {
+            view.innerHTML = `<div class="content"><button id="back-source">← Back to article</button><h1 style="margin-top:24px">This article’s clippings</h1><p class="muted">${esc(sourceTitle)}</p>${cards
+              .filter((c) => c.source === sourceTitle)
+              .map(clip)
+              .join('')}</div>`;
+            bind();
+            document.querySelector('#back-source').onclick = render;
+          };
+        const back = document.querySelector('#back');
+        if (back)
+          back.onclick = () => {
+            page = returnPage;
+            render();
+          };
+        const title = document.querySelector('#title-edit');
+        if (title) title.oninput = (e) => (cardById(selected).title = e.target.value);
+        const thoughts = document.querySelector('#thoughts');
+        if (thoughts) thoughts.oninput = (e) => (cardById(selected).thoughts = e.target.value);
+        const prev = document.querySelector('#prev-card'),
+          next = document.querySelector('#next-card');
+        if (prev)
+          prev.onclick = () => {
+            review--;
+            render();
+          };
+        if (next)
+          next.onclick = () => {
+            review++;
+            render();
+          };
+      }
+      function navigate(target) {
+        page = target;
+        query = '';
+        render();
+        window.scrollTo(0, 0);
+      }
+      function changeVariant(delta) {
+        const keys = Object.keys(names);
+        variant = keys[(keys.indexOf(variant) + delta + 3) % 3];
+        const url = new URL(location);
+        url.searchParams.set('variant', variant);
+        history.replaceState(null, '', url);
+        page = variant === 'B' ? 'article' : 'clippings';
+        query = '';
+        review = 0;
+        render();
+        window.scrollTo(0, 0);
+      }
+      document
+        .querySelectorAll('aside [data-nav],header [data-nav]')
+        .forEach((b) => (b.onclick = () => navigate(b.dataset.nav)));
+      document.querySelector('#prev-variant').onclick = () => changeVariant(-1);
+      document.querySelector('#next-variant').onclick = () => changeVariant(1);
+      document.addEventListener('keydown', (e) => {
+        if (e.target.closest('input,textarea,[contenteditable]')) return;
+        if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {
+          e.preventDefault();
+          changeVariant(e.key === 'ArrowRight' ? 1 : -1);
+        }
+      });
+      render();
+    </script>
+  </body>
+</html>
