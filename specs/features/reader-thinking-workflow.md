@@ -1,6 +1,6 @@
 ---
 created: 2026-11-15
-updated: 2026-11-15
+updated: 2026-11-20
 status: proposed
 ---
 
@@ -58,7 +58,7 @@ This is a full specification **draft**, tracked in [Specify Reader’s passage, 
 
 ### Approved product constraints
 
-- Reader remains the product. Preserve acquisition, feeds, folder-authoritative queues, native Markdown escape and article position behavior. Do not port W's plugin packaging or general identity graph.
+- Reader remains the product. Preserve acquisition, feeds, YAML-status queues, native Markdown escape and article position behavior. Status changes must not move files; capture folders only select destinations for new files. Preserve the derived Needs attention list without persisting readiness flags. Do not port W's plugin packaging or general identity graph.
 - Passages, attached and independent comments, explicit connections and explorations are in the current effort. No separate new highlight feature is required. Do not strip legacy source marks or remove quotation snapshots.
 - Capture/reuse requires no semantic class or compulsory per-item note. Creating a standalone structured note still uses Fileclass public API v1, with no plugin-ID fallback or companion-settings migration.
 - Meaningful work remains in ordinary Obsidian constructs. No authoritative database, synchronized mirror, sidecar collection or parallel draft/batch/receipt transport. Native links do not by themselves grant MCP access.

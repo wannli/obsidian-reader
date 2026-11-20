@@ -34,7 +34,7 @@ Only the independent synthetic publisher projection is disclosed, never raw note
 
 - `search_sources`: query up to 500 characters; at most ten permitted matches with temporary handles and snippets.
 - `get_source`: retrieve permitted source text, publisher citation and synthetic article return link.
-- `capture_url`: create an empty-body, URL-only article in `Reading/Inbox`, without downloading anything.
+- `capture_url`: create an empty-body, URL-only article with `status: inbox` in `Reading/Inbox`, without downloading anything. YAML status selects the Reader queue; the folder is only this prototype's capture destination.
 
 Capture accepts only these synthetic URLs, with fragments removed and query parameters preserved:
 

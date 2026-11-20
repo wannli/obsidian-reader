@@ -42,16 +42,21 @@ Manual and browser-link captures start with `status: inbox`; imported feed artic
 
 ## A place for every article
 
-| List        | What belongs here                                    | Kept automatically?                         |
-| ----------- | ---------------------------------------------------- | ------------------------------------------- |
-| **Inbox**   | Articles you’ve saved and haven’t sorted yet         | Yes                                         |
-| **Feed**    | New articles from your subscriptions                 | No—unprotected entries expire after a month |
-| **Later**   | Articles you want to spend more time with            | Yes                                         |
-| **Archive** | Articles you want to keep, but not on your next list | Yes                                         |
+Lists follow YAML `status`, not folders. Changing status leaves the file in place; moving a file leaves its status unchanged. Missing or unknown statuses remain readable but unqueued.
+
+Capture-folder settings apply only to new files; changing them does not move existing notes or change their status. Reader excludes `Templates/` and `.trash/` at any depth and never automatically migrates existing notes.
+
+| List                | YAML status | What belongs here                                    | Kept automatically?                         |
+| ------------------- | ----------- | ---------------------------------------------------- | ------------------------------------------- |
+| **Inbox**           | `inbox`     | Saved articles, except those needing attention       | Yes                                         |
+| **Needs attention** | `inbox`     | Empty video captures or empty captures with an error | Yes                                         |
+| **Feed**            | `feed`      | New articles from your subscriptions                 | No—unprotected entries expire after a month |
+| **Later**           | `later`     | Articles you want to spend more time with            | Yes                                         |
+| **Archive**         | `archive`   | Articles you want to keep, but not on your next list | Yes                                         |
 
 Choosing a status from the article controls advances to the next article in your original browsing list (or returns to the list at the end). The command-palette **Change article status** action stays on the current article. **Delete** also advances and uses recoverable Obsidian trash.
 
-Highlighting or linking a passage in a Feed article moves it to Later before saving the annotation. **Simply opening or reading a Feed article does not keep it.** Choose Later or Archive if you want to retain it.
+Highlighting or linking a passage in a Feed article changes its status to Later before saving the annotation; the file stays in place. **Simply opening or reading a Feed article does not keep it.** Choose Later or Archive if you want to retain it.
 
 Only articles with fresh explicit `status: feed` can expire, regardless of folder, one calendar month after their publication date (or filename date as a fallback)—not a month after import. Articles with topics, highlights or other annotations are archived rather than trashed by Reader. In-use and unknown-age notes are protected. A missing, unknown, or non-feed YAML status never authorizes automatic expiry.
 
@@ -65,8 +70,6 @@ Only articles with fresh explicit `status: feed` can expire, regardless of folde
 - Press **?** for all shortcuts. In lists, use **J/K** to select rows, **Enter** to open one, and **L/A/T** to move the selected article to Later, Archive, or trash without opening it. **Shift+L** switches to the Later list; **Shift+T** opens the topic filter. In articles, use **J/K** to switch articles, **B/Q** to return to the list, **L** for Later, **A** for Archive, **T** to trash, **H/N** for Highlight/Create node mode, and **R** for Related notes. **Space/Shift+Space** move a full page down/up; **D/U** move half a page down/up. **Up/PageUp** and **Down/PageDown** cross article boundaries and resume the saved position. Shortcuts pause in inputs, menus, dialogs, and selections.
 - On Boox/e-ink, enable **pagination (this device)** in Reader settings to use up/down touch page buttons or hardware Up/Down and PageUp/PageDown. Left/right article-navigation arrows are removed in both modes.
 - On iPhone, **Copy reading-list link** opens the library. **Copy dog-ear link** opens the last article you opened in Reader, or the first (newest) Inbox article if none is marked. Each gives you a vault-aware link for a Shortcuts **URL → Open URLs → Add to Home Screen** shortcut. You can also use **Open dog-eared article** from the command palette.
-
-Lists follow YAML `status`: `inbox`, `feed`, `later`, or `archive`. Moving a file does not change its list; status actions update YAML without moving it. Missing or unknown statuses remain readable but unqueued. Capture-folder settings apply only to new files. Reader excludes `Templates/` and `.trash/` at any depth and never automatically migrates existing notes.
 
 **Needs attention** separates Inbox captures with no saved text when extraction has failed or the URL clearly identifies a video (such as YouTube). Open it from the list’s alert button. These notes keep `status: inbox` but stay out of normal Inbox navigation. Open an item for **Open original** and **Retry**, or archive/delete it normally. Pending/offline captures and videos with saved transcripts remain in Inbox. Adding readable text or a successful retry restores normal Inbox visibility; no readiness flags are persisted. Uncertain reads stay visible in Inbox.
 
