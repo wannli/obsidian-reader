@@ -2,6 +2,8 @@ export const queues = ['Inbox', 'Later', 'Feed', 'Archive'] as const;
 export const articleStatuses = ['inbox', 'later', 'feed', 'archive'] as const;
 export type ArticleStatus = (typeof articleStatuses)[number];
 export type Queue = (typeof queues)[number];
+export const readingLists = [...queues, 'Needs attention'] as const;
+export type ReadingList = (typeof readingLists)[number];
 export type Properties = Record<string, unknown>;
 export interface ArticleInfo {
   path: string;
@@ -52,7 +54,6 @@ export function queueStatus(queue: Queue): ArticleStatus {
   return articleStatuses[index];
 }
 export function queueAt(properties: Properties): Queue | undefined {
-  if (!Object.hasOwn(properties, 'status')) return 'Feed';
   const status = articleStatus(properties.status);
   return status === undefined ? undefined : queues[articleStatuses.indexOf(status)];
 }
@@ -112,11 +113,7 @@ export function monthCutoff(now: Date): number {
 export function excludedReaderPath(path: string): boolean {
   return path.split('/').some((part) => /^(?:templates|\.trash)$/i.test(part));
 }
-export function articleInfo(
-  path: string,
-  properties: Properties,
-  folderQueue?: Queue,
-): ArticleInfo | undefined {
+export function articleInfo(path: string, properties: Properties): ArticleInfo | undefined {
   if (properties.type !== 'article' || excludedReaderPath(path)) return;
   const name = path.split('/').pop()!.replace(/\.md$/i, '');
   let url = '';
@@ -131,7 +128,7 @@ export function articleInfo(
     path,
     title: text(properties.title).trim() || name.replace(/^\d{6} /, ''),
     url,
-    queue: folderQueue,
+    queue: queueAt(properties),
     status: Object.hasOwn(properties, 'status') ? articleStatus(properties.status) : undefined,
     dogEar: properties.dog_ear === true,
     published,

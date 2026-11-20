@@ -40,7 +40,6 @@ import {
 import { defaultFolders, type ReaderFolders } from './folders';
 import {
   defaultStatusFolders,
-  queueForPath,
   validateStatusFolders,
   type StatusFolders,
   type ResolvedStatusFolders,
@@ -159,7 +158,6 @@ export class ArticleStore<File extends NoteFile> {
   }
   setStatusFolders(folders: StatusFolders): void {
     this.statusFolders = validateStatusFolders(folders);
-    this.catalog.setStatusFolders(this.statusFolders);
     this.statusFolderRevision++;
   }
   constructor(
@@ -223,7 +221,7 @@ export class ArticleStore<File extends NoteFile> {
     return (...args) => {
       guard(...args);
       if (generation !== this.statusFolderRevision)
-        throw new ChangedNote('Reader queue folders changed. Reopen the article and retry.');
+        throw new ChangedNote('Reader capture folders changed. Reopen the article and retry.');
     };
   }
   private async unique(folder: string, name: string, ownPath?: string): Promise<string> {
@@ -519,14 +517,11 @@ export class ArticleStore<File extends NoteFile> {
     snapshot: Snapshot<File>,
     queue: Queue,
     guard: () => void = () => {},
-    relocate = true,
     onSaved?: (saved: Snapshot<File>) => void,
   ): Promise<Snapshot<File>> {
     guard();
     this.captures.delete(snapshot.file);
-    const status = queueStatus(queue),
-      folder = this.statusFolders[status],
-      transition = queueForPath(snapshot.path, this.statusFolders) !== queue;
+    const status = queueStatus(queue);
     const saved = await this.commit(snapshot, (raw) => {
       guard();
       return patchProperties(raw, { status });
@@ -540,51 +535,7 @@ export class ArticleStore<File extends NoteFile> {
         { cause: error },
       );
     }
-    // YAML commits first: a failed relocation never makes a retained article disposable.
-    // The destination folder, not stale YAML, determines whether a move is needed.
-    if (!relocate || !transition) return saved;
-    return this.relocate(saved, status, folder, guard);
-  }
-  private relocate(
-    saved: Snapshot<File>,
-    status: string,
-    folder: string,
-    guard: () => void = () => {},
-  ): Promise<Snapshot<File>> {
-    return this.creates.run('articles', async () => {
-      try {
-        guard();
-        const name = saved.path.split('/').pop()!;
-        const target = await this.unique(folder, name, saved.path);
-        guard();
-        await this.validate(saved);
-        guard();
-        if (target === saved.path) return saved;
-        await this.vault.move(saved.file, target, (current) => {
-          guard();
-          this.assert(saved.file, saved.path);
-          if (current !== saved.raw) throw new ChangedNote();
-        });
-      } catch (error) {
-        // A native rename may complete before reporting failure. Never roll back
-        // YAML or bytes over a concurrent edit; recover the actual catalog path.
-        try {
-          const actual = await this.read(saved.file.path);
-          if (actual.file === saved.file)
-            this.catalog.rename(saved.path, actual.path, actual.properties);
-        } catch {
-          /* A removed/replaced note remains protected. */
-        }
-        throw new Error(
-          `Status saved as ${status}, but the folder move failed: ${error instanceof Error ? error.message : String(error)}`,
-        );
-      }
-      const current = await this.read(saved.file.path);
-      if (current.file !== saved.file || current.properties.status !== status)
-        throw new ChangedNote();
-      this.catalog.rename(saved.path, current.path, current.properties);
-      return current;
-    });
+    return saved;
   }
   /** Retain first: interruption may leave Later, never an annotated disposable Feed article. */
   annotate(snapshot: Snapshot<File>, transform: (raw: string) => string): Promise<Snapshot<File>> {
@@ -607,10 +558,9 @@ export class ArticleStore<File extends NoteFile> {
       return snapshot;
     }
     let current = snapshot;
-    const promote = queueForPath(current.path, this.statusFolders) === 'Feed';
-    const folder = this.statusFolders.later;
+    const promote = current.properties.status === 'feed';
     if (promote) {
-      current = await this.moveNow(current, 'Later', guard, false, onRetained);
+      current = await this.moveNow(current, 'Later', guard, onRetained);
     }
     if (current.body !== snapshot.body)
       throw new ChangedNote(
@@ -623,7 +573,6 @@ export class ArticleStore<File extends NoteFile> {
     });
     onSaved?.(annotated);
     guard();
-    if (promote) return this.relocate(annotated, 'later', folder, guard);
     return annotated;
   }
   /** Replace only baseline typed relationships; never edit filed snapshots. The guard
@@ -915,7 +864,7 @@ export class ArticleStore<File extends NoteFile> {
           await this.writes.run(destination.file, async () => {
             await this.validate(annotated);
             this.vault.assertWritable(annotated.file, annotated.raw);
-            // Native source relocation may have rewritten any target's links. Reread each.
+            // Earlier writes or external edits may have changed target bytes. Reread each.
             destination.raw = undefined;
             assertDestination(destination);
             destination.raw = await this.vault.read(destination.file);
@@ -1162,11 +1111,7 @@ export class ArticleStore<File extends NoteFile> {
         guard();
         const snapshot = await this.read(article.path);
         guard();
-        if (
-          queueForPath(snapshot.path, this.statusFolders) !== 'Feed' ||
-          snapshot.properties.status !== 'feed'
-        )
-          continue;
+        if (snapshot.properties.status !== 'feed') continue;
         if (protectedArticle(snapshot.body, snapshot.properties)) {
           await this.move(snapshot, 'Archive', guard);
           result.promoted++;
@@ -1185,7 +1130,6 @@ export class ArticleStore<File extends NoteFile> {
               if (
                 !Object.hasOwn(fresh.properties, 'status') ||
                 fresh.properties.status !== 'feed' ||
-                queueForPath(snapshot.file.path, this.statusFolders) !== 'Feed' ||
                 !publicationBefore(
                   fresh.properties.published,
                   cutoff,

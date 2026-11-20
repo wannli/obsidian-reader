@@ -394,6 +394,7 @@ function hostFixture(folders: ReaderFolders = defaultFolders) {
     const properties = type === 'article' ? { type, status } : { type };
     const file = await vault.create(path, createDocument(properties, body));
     Object.setPrototypeOf(file, TFile.prototype);
+    Object.assign(file, { stat: { mtime: 1, size: vault.bytes.get(file)!.length } });
     cache.set(file, { frontmatter: properties, sections: [{ type: 'paragraph' }], links: [] });
     store.catalog.update(path, properties);
     return file as TFile;

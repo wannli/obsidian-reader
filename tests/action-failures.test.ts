@@ -40,7 +40,12 @@ describe('local actionable Reader failures', () => {
   it('preserves partial status outcomes rather than claiming no save', async () => {
     const f = await fixture();
     vi.spyOn(console, 'error').mockImplementation(() => {});
-    vi.spyOn(f.vault, 'move').mockRejectedValue(new Error('permission denied'));
+    const process = f.vault.process.bind(f.vault);
+    vi.spyOn(f.vault, 'process').mockImplementation(async (...args) => {
+      const raw = await process(...args);
+      f.store.setStatusFolders({ archive: 'Reading/Kept' });
+      return raw;
+    });
     f.view.key(new KeyboardEvent('keydown', { key: 'a', cancelable: true }));
     await settled(f);
     expect(alert(f)?.textContent).toContain('Status saved as archive');

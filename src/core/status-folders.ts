@@ -1,5 +1,5 @@
 import { folderPath } from './folders';
-import { articleStatuses, type ArticleStatus, type Queue, queues } from './model';
+import { articleStatuses, type ArticleStatus } from './model';
 
 export type StatusFolders = Readonly<Partial<Record<ArticleStatus, string>>>;
 export type ResolvedStatusFolders = Readonly<Record<ArticleStatus, string>>;
@@ -11,10 +11,10 @@ export const defaultStatusFolders: ResolvedStatusFolders = Object.freeze({
   archive: 'Reading/Treasury',
 });
 
-/** Folder membership is the queue; overlapping or root destinations are ambiguous. */
+/** Existing settings keys name capture destinations only; they never define queues. */
 export function validateStatusFolders(input: unknown): ResolvedStatusFolders {
   if (!input || typeof input !== 'object' || Array.isArray(input))
-    throw new Error('Choose valid status folder mappings.');
+    throw new Error('Choose valid article capture folders.');
   const record = input as Record<string, unknown>;
   const result = { ...defaultStatusFolders };
   for (const status of articleStatuses)
@@ -23,24 +23,16 @@ export function validateStatusFolders(input: unknown): ResolvedStatusFolders {
     const path = result[status];
     if (!path || path.split('/').some((part) => /^(?:templates|\.trash)$/i.test(part)))
       throw new Error(
-        'Queue folders must be outside Templates and .trash and cannot be vault root.',
+        'Article capture folders must be outside Templates and .trash and cannot be vault root.',
       );
     for (const other of articleStatuses.slice(index + 1)) {
       const a = path.normalize('NFC').toLowerCase();
       const b = result[other].normalize('NFC').toLowerCase();
       if (a === b || a.startsWith(`${b}/`) || b.startsWith(`${a}/`))
-        throw new Error('Queue folders must not overlap.');
+        throw new Error('Article capture folders must not overlap.');
     }
   }
   return Object.freeze(result);
-}
-
-export function queueForPath(path: string, folders: ResolvedStatusFolders): Queue | undefined {
-  const normalized = path.normalize('NFC').toLowerCase();
-  const status = articleStatuses.find((value) =>
-    normalized.startsWith(`${folders[value].normalize('NFC').toLowerCase()}/`),
-  );
-  return status === undefined ? undefined : queues[articleStatuses.indexOf(status)];
 }
 
 export function loadStatusFolders(data: unknown): ResolvedStatusFolders {

@@ -1039,9 +1039,13 @@ describe('folder-only library events', () => {
       const f = libraryFixture();
       const article = f.add('Reading/Stream/Group/Story.md', {
         type: 'article',
+        status: 'feed',
         url: 'https://example.com/story',
       });
-      const nested = f.add('Reading/Stream/Group/Nested/Other.md', { type: 'article' });
+      const nested = f.add('Reading/Stream/Group/Nested/Other.md', {
+        type: 'article',
+        status: 'feed',
+      });
       const feed = f.add('Reading/Stream/Group/Nested/Feed.md', {
         type: 'feed',
         url: 'https://example.com/feed',

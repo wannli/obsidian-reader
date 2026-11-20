@@ -28,7 +28,20 @@ import { ListRows } from './list-rows';
 import { readTriageFlags } from './feed-triage';
 import { SelectionCoordinator } from './selection-coordinator';
 import { nativeLinkPath, openExistingNote } from '../host/note-links';
-import { articleInfo, linkPath, queues, text, type Queue } from '../core/model';
+import {
+  articleInfo,
+  linkPath,
+  queues,
+  readingLists,
+  text,
+  type Queue,
+  type ReadingList,
+} from '../core/model';
+import {
+  attentionCandidate,
+  attentionReason,
+  type AttentionReason,
+} from '../core/reading-readiness';
 import {
   PartialCollectionError,
   protectedArticle,
@@ -83,7 +96,7 @@ function trimTypedPassage(selection: RenderedPassage): RenderedPassage | undefin
     after: trailing + selection.after,
   };
 }
-type BrowsingContext = { queue: Queue; paths: string[]; filtered?: boolean };
+type BrowsingContext = { queue: ReadingList; paths: string[]; filtered?: boolean };
 type HighlightRemoval = {
   paths: string[];
   previousQuote: Pick<HostedHighlight, 'quoteMarkdown' | 'blockId'>;
@@ -100,7 +113,9 @@ interface ReaderHost {
   refreshPresentation?(view: ReaderView, valid: () => boolean): Promise<void>;
 }
 export class ReaderView extends ItemView {
-  private queue: Queue = 'Inbox';
+  private queue: ReadingList = 'Inbox';
+  private listPaths: string[] = [];
+  private attentionReasons = new Map<string, AttentionReason>();
   private readingQueue = new ReadingQueue();
   private snapshot?: Snapshot<TFile>;
   private fallbackFile?: TFile;
@@ -214,7 +229,7 @@ export class ReaderView extends ItemView {
         await super.setState(this.getState(), result);
       return;
     }
-    if (queues.includes(state.queue as Queue)) this.queue = state.queue as Queue;
+    if (readingLists.includes(state.queue as ReadingList)) this.queue = state.queue as ReadingList;
     if (typeof state.file === 'string')
       await this.openArticle(
         state.file,
@@ -551,7 +566,7 @@ export class ReaderView extends ItemView {
       cls: 'reader-toolbar reader-bottom-controls',
       attr: { 'aria-label': 'Reading list actions' },
     });
-    for (const name of queues.filter((name) => name !== 'Archive')) {
+    for (const name of readingLists.filter((name) => name !== 'Archive')) {
       const button = this.button(
         tabs,
         name === 'Feed' ? 'Feed articles' : name,
@@ -560,8 +575,8 @@ export class ReaderView extends ItemView {
           this.listLimit = 50;
           this.showList(name);
         },
-        { Inbox: 'inbox', Feed: 'rss', Later: 'clock' }[name],
-        { Inbox: 'i', Feed: 'f', Later: 'L' }[name],
+        { Inbox: 'inbox', Feed: 'rss', Later: 'clock', 'Needs attention': 'circle-alert' }[name],
+        { Inbox: 'i', Feed: 'f', Later: 'L', 'Needs attention': undefined }[name],
       );
       button.classList.toggle('mod-cta', name === queue);
       button.setAttribute('aria-pressed', String(name === queue));
@@ -639,14 +654,18 @@ export class ReaderView extends ItemView {
     const render = () => {
       scanMessage?.remove();
       scanMessage = undefined;
-      const rows = this.topicFilter
-        ? this.filteredPaths
-            .flatMap((path) => {
+      const derived = queue === 'Inbox' || queue === 'Needs attention';
+      const sourceQueue = queue === 'Needs attention' ? 'Inbox' : queue;
+      const rows =
+        this.topicFilter || derived
+          ? this.filteredPaths.flatMap((path) => {
               const article = this.host.store.catalog.article(path);
-              return article?.queue === queue ? [article] : [];
+              return article?.queue === sourceQueue
+                ? [{ ...article, attention: this.attentionReasons.get(path) }]
+                : [];
             })
-            .slice(0, this.listLimit + 1)
-        : this.host.store.catalog.list(queue, this.search, 0, this.listLimit + 1);
+          : this.host.store.catalog.list(sourceQueue, this.search, 0, this.host.store.catalog.size);
+      this.listPaths = rows.map((article) => article.path);
       mountedRows.update(
         rows.slice(0, this.listLimit),
         rows.length > this.listLimit,
@@ -677,25 +696,38 @@ export class ReaderView extends ItemView {
     };
     this.filteredPaths = [];
     const refresh = () => {
-      if (!this.topicFilter) {
+      this.topicScan?.abort();
+      this.topicScan = undefined;
+      const derived = queue === 'Inbox' || queue === 'Needs attention';
+      const sourceQueue = queue === 'Needs attention' ? 'Inbox' : queue;
+      const allCandidates = this.host.store.catalog.list(
+        sourceQueue,
+        this.search,
+        0,
+        this.host.store.catalog.size,
+      );
+      const candidates =
+        queue === 'Needs attention' ? allCandidates.filter(attentionCandidate) : allCandidates;
+      if (!this.topicFilter && (!derived || !candidates.some(attentionCandidate))) {
+        this.attentionReasons.clear();
+        this.filteredPaths = candidates.map((article) => article.path);
         render();
         return;
       }
       const heading = list.querySelector('.reader-list-heading');
       if (heading) heading.textContent = this.listLabel();
       this.syncPresentation();
-      this.topicScan?.abort();
       scanMessage?.remove();
-      scanMessage = list.createEl('p', { text: 'Filtering articles…', attr: { role: 'status' } });
+      scanMessage = list.createEl('p', { text: 'Checking articles…', attr: { role: 'status' } });
       const controller = new AbortController();
       this.topicScan = controller;
       const lifetime = this.articleLifetime.signal;
       const abort = () => controller.abort();
       lifetime.addEventListener('abort', abort, { once: true });
       this.host.signal.addEventListener('abort', abort, { once: true });
-      const filter = this.currentTopicFilter();
+      const filter = this.topicFilter ? this.currentTopicFilter() : { label: '', terms: [] };
       const generation = this.generation;
-      const candidates = this.host.store.catalog.list(queue, '', 0, this.host.store.catalog.size);
+      const reasons = new Map<string, AttentionReason>();
       const resolve = (link: string, source: string) =>
         this.app.metadataCache.getFirstLinkpathDest(link, source)?.path;
       void this.topicScanner
@@ -703,15 +735,24 @@ export class ReaderView extends ItemView {
           signal: controller.signal,
           file: (path) => this.host.store.vault.file(path),
           read: (file) => this.host.store.vault.read(file),
-          metadataMatch: (article) => matchesTopicArticle(article, '', filter, resolve),
+          metadataMatch: (article) =>
+            (!derived || !attentionCandidate(article)) &&
+            (!this.topicFilter || matchesTopicArticle(article, '', filter, resolve)),
           bodyMatch: (raw, article) => {
             const document = readDocument(raw);
-            // Body matching is intentionally read-only and never triggers acquisition.
+            const fresh = articleInfo(article.path, document.properties);
+            if (!fresh || fresh.queue !== sourceQueue) return false;
+            const reason = attentionReason(document.properties, document.body);
+            if (reason) reasons.set(article.path, reason);
+            const visible = !derived || (queue === 'Needs attention' ? !!reason : !reason);
             return (
-              document.properties.type === 'article' &&
-              matchesTopicArticle(article, document.body, filter, resolve)
+              visible &&
+              (!this.topicFilter || matchesTopicArticle(fresh, document.body, filter, resolve))
             );
           },
+          uncertainMatch: (article) =>
+            queue === 'Inbox' &&
+            (!this.topicFilter || matchesTopicArticle(article, '', filter, resolve)),
         })
         .then(({ paths, uncertain }) => {
           if (
@@ -721,6 +762,7 @@ export class ReaderView extends ItemView {
             this.topicScan !== controller
           )
             return;
+          this.attentionReasons = reasons;
           this.filteredPaths = paths;
           render();
           if (uncertain)
@@ -799,7 +841,15 @@ export class ReaderView extends ItemView {
     const row = this.listRows().find((item) => item.dataset.readerPath === path);
     const article = path && this.host.store.catalog.article(path);
     const file = path && this.host.store.vault.file(path);
-    if (!row || !article || article.queue !== this.queue || !file) return Promise.resolve();
+    const sourceQueue = this.queue === 'Needs attention' ? 'Inbox' : this.queue;
+    if (
+      !row ||
+      !article ||
+      article.queue !== sourceQueue ||
+      !this.listPaths.includes(path!) ||
+      !file
+    )
+      return Promise.resolve();
     const rows = this.listRows();
     const index = rows.indexOf(row);
     const successor = rows[index + 1]?.dataset.readerPath ?? rows[index - 1]?.dataset.readerPath;
@@ -808,12 +858,17 @@ export class ReaderView extends ItemView {
         this.snapshot ||
         this.listSelectedPath !== path ||
         !this.listRows().includes(row) ||
-        this.host.store.catalog.article(path)?.queue !== this.queue ||
+        !this.listPaths.includes(path) ||
+        this.host.store.catalog.article(path)?.queue !== sourceQueue ||
         this.host.store.vault.file(path) !== file
       )
         return;
       const snapshot = await this.host.store.read(path);
-      if (snapshot.file !== file) return;
+      if (snapshot.file !== file || articleInfo(path, snapshot.properties)?.queue !== sourceQueue)
+        return;
+      const reason = attentionReason(snapshot.properties, snapshot.body);
+      if ((this.queue === 'Inbox' && reason) || (this.queue === 'Needs attention' && !reason))
+        return;
       const guard = () => {
         if (this.stopping || this.host.signal.aborted || this.snapshot || !row.isConnected)
           throw new Error('The reading list changed. Reopen it and retry.');
@@ -834,7 +889,8 @@ export class ReaderView extends ItemView {
       } finally {
         if (!this.stopping && !this.snapshot && row.isConnected) {
           this.listSelectedPath =
-            this.host.store.catalog.article(row.dataset.readerPath!)?.queue === this.queue
+            this.host.store.catalog.article(row.dataset.readerPath!)?.queue === sourceQueue &&
+            this.listPaths.includes(row.dataset.readerPath!)
               ? row.dataset.readerPath
               : successor;
           this.focusSelectedListRow = true;
@@ -1011,11 +1067,11 @@ export class ReaderView extends ItemView {
       ? {
           queue: this.queue,
           filtered: !!this.topicFilter,
-          paths: this.topicFilter
-            ? [...this.filteredPaths]
-            : this.host.store.catalog
-                .list(this.queue, this.search, 0, this.host.store.catalog.size)
-                .map((article) => article.path),
+          paths: this.mountedListRows
+            ? [...this.listPaths]
+            : this.host.store.catalog.paths(
+                this.queue === 'Needs attention' ? 'Inbox' : this.queue,
+              ),
         }
       : undefined;
     return this.operation(
@@ -1064,11 +1120,13 @@ export class ReaderView extends ItemView {
         (!this.readingQueue.current
           ? {
               queue: article.queue ?? this.queue,
-              paths: article.queue ? this.host.store.catalog.paths(article.queue) : [path],
+              paths: article.queue ? await this.queuePaths(article.queue) : [path],
             }
           : undefined);
       // Keep the old article and browsing context until all awaited work and modal
       // cancellation checks finish. A cancelled capture cannot steal the current view.
+      if (this.stopping || this.host.signal.aborted || signal?.aborted || token !== this.generation)
+        return;
       this.clear();
       token = this.generation;
       this.snapshot = snapshot;
@@ -1134,7 +1192,11 @@ export class ReaderView extends ItemView {
       } catch (error) {
         if (this.current(snapshot, token)) this.error(error);
       }
-      if (article.url && this.current(snapshot, token))
+      if (
+        article.url &&
+        !attentionReason(snapshot.properties, snapshot.body) &&
+        this.current(snapshot, token)
+      )
         void this.host.ingestion.acquire(snapshot.path, true).catch((error) => this.error(error));
     } catch (error) {
       if (signal?.aborted) return;
@@ -1157,6 +1219,34 @@ export class ReaderView extends ItemView {
     } finally {
       if (request === this.opening) this.loadingPath = undefined;
     }
+  }
+  /** Direct entry also excludes non-reading Inbox items from its browsing snapshot. */
+  private async queuePaths(queue: Queue): Promise<string[]> {
+    const articles = this.host.store.catalog.list(queue, '', 0, this.host.store.catalog.size);
+    if (queue !== 'Inbox' || !articles.some(attentionCandidate))
+      return articles.map((article) => article.path);
+    const attention = await this.inboxAttentionPaths();
+    return articles
+      .filter((article) => !attention.has(article.path))
+      .map((article) => article.path);
+  }
+  private async inboxAttentionPaths(): Promise<Set<string>> {
+    const candidates = this.host.store.catalog
+      .list('Inbox', '', 0, this.host.store.catalog.size)
+      .filter(attentionCandidate);
+    if (!candidates.length) return new Set();
+    this.topicScan?.abort();
+    const result = await this.topicScanner.scan(candidates, {
+      signal: this.articleLifetime.signal,
+      file: (path) => this.host.store.vault.file(path),
+      read: (file) => this.host.store.vault.read(file),
+      metadataMatch: () => false,
+      bodyMatch: (raw) => {
+        const document = readDocument(raw);
+        return !!attentionReason(document.properties, document.body);
+      },
+    });
+    return new Set(result.paths);
   }
   refreshArticleControls(): void {
     if (!this.actions || !this.surface) return;
@@ -1600,15 +1690,29 @@ export class ReaderView extends ItemView {
   private updateStatus(): void {
     if (!this.snapshot || !this.status) return;
     const article = articleInfo(this.snapshot.path, this.snapshot.properties)!;
+    const reason = attentionReason(this.snapshot.properties, this.snapshot.body);
     const message =
-      article.error ||
+      (reason
+        ? `${reason}. Open the original source or retry extraction.${article.error ? ` ${article.error}` : ''}`
+        : article.error) ||
       (!this.snapshot.body.trim()
         ? 'Article text is pending. Reader will fetch it while online and active.'
         : '');
-    if (message === this.statusMessage) return;
-    this.statusMessage = message;
+    const sourceUrl = text(this.snapshot.properties.url).trim();
+    const key = JSON.stringify([message, sourceUrl]);
+    if (key === this.statusMessage) return;
+    this.statusMessage = key;
     this.status.textContent = message;
-    if (article.error)
+    if (reason && article.url)
+      this.button(
+        this.status,
+        'Open original',
+        () => {
+          window.open(sourceUrl, '_blank', 'noopener,noreferrer');
+        },
+        'external-link',
+      );
+    if (article.error || reason)
       this.button(
         this.status,
         'Retry',
@@ -2162,7 +2266,7 @@ export class ReaderView extends ItemView {
       }
     }, false);
   }
-  readingList(queue?: Queue): Promise<void> {
+  readingList(queue?: ReadingList): Promise<void> {
     this.cancelNodeCreation();
     return this.operation(async () => {
       await this.prepareToLeave();
@@ -2179,12 +2283,16 @@ export class ReaderView extends ItemView {
     this.cancelNodeCreation();
     return this.operation(async () => {
       await this.prepareToLeave();
-      const next = this.readingQueue.neighbour(
-        direction,
-        (path) => !!this.host.store.catalog.article(path),
-      );
+      const next = await this.readableNeighbour(direction);
       if (next) await this.openArticleNow(next);
     }, false);
+  }
+  private async readableNeighbour(direction: -1 | 1): Promise<string | undefined> {
+    const attention = this.queue === 'Inbox' ? await this.inboxAttentionPaths() : undefined;
+    return this.readingQueue.neighbour(
+      direction,
+      (path) => !!this.host.store.catalog.article(path) && !attention?.has(path),
+    );
   }
   private async changeStatus(destination: 'Later' | 'Archive'): Promise<void> {
     this.cancelNodeCreation();
@@ -2202,10 +2310,8 @@ export class ReaderView extends ItemView {
         generation = this.generation;
       if (!snapshot || this.stopping) return;
       this.assertDisplayed(snapshot, true);
-      const next = this.readingQueue.neighbour(
-        1,
-        (path) => !!this.host.store.catalog.article(path),
-      );
+      const next = await this.readableNeighbour(1);
+      if (!this.current(snapshot, generation) || this.stopping || this.host.signal.aborted) return;
       const moved = destination ? await this.host.store.move(snapshot, destination) : undefined;
       const outcome = action === 'delete' ? await this.host.store.trash(snapshot) : undefined;
       if (!this.current(snapshot, generation) || this.stopping) return;
@@ -3465,7 +3571,7 @@ export class ReaderView extends ItemView {
         this.topicFilter = { ...this.topicFilter, path: change.path };
     }
     if (this.topicFilter && this.snapshot && change.path === this.topicFilter.path) this.controls();
-    if (this.topicFilter && !this.snapshot) this.topicScan?.abort();
+    if (!this.snapshot) this.topicScan?.abort();
     if (this.loadingPath) {
       if (
         this.snapshot &&
@@ -3480,7 +3586,13 @@ export class ReaderView extends ItemView {
         return;
       }
       // Batch arriving feeds and leave a focused search input untouched.
-      if ((change.metadataChanged || this.topicFilter) && this.listFrame === undefined)
+      if (
+        (change.metadataChanged ||
+          this.topicFilter ||
+          this.queue === 'Inbox' ||
+          this.queue === 'Needs attention') &&
+        this.listFrame === undefined
+      )
         this.listFrame = requestAnimationFrame(() => {
           this.listFrame = undefined;
           if (

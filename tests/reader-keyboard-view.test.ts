@@ -159,7 +159,7 @@ describe('desktop button shortcuts', () => {
     ['a', 'Archive', 'archive'],
   ] as const)(
     'moves the selected list row with %s and stays in the list',
-    async (key, queue, status) => {
+    async (key, _queue, status) => {
       const f = hostFixture();
       const first = await f.note('Reading/Inbox/A.md');
       const second = await f.note('Reading/Inbox/B.md');
@@ -168,7 +168,7 @@ describe('desktop button shortcuts', () => {
       expect(press(f.view, key).defaultPrevented).toBe(true);
       await f.probe.operations;
       expect(first.path).toBe('Reading/Inbox/A.md');
-      expect(second.path).toBe(`Reading/${queue === 'Later' ? 'Later' : 'Treasury'}/B.md`);
+      expect(second.path).toBe('Reading/Inbox/B.md');
       expect((await f.store.read(second.path)).properties.status).toBe(status);
       expect(f.view.file).toBeUndefined();
       expect(f.view.getState().queue).toBe('Inbox');
@@ -201,7 +201,7 @@ describe('desktop button shortcuts', () => {
     expect(document.activeElement?.getAttribute('data-reader-path')).toBe(second.path);
     expect(press(f.view, 't').defaultPrevented).toBe(true);
     await f.probe.operations;
-    expect(second.path).toBe('Reading/Treasury/B.md');
+    expect(second.path).toBe('Reading/Inbox/B.md');
     expect(f.vault.trashed).not.toContain('Reading/Inbox/B.md');
     expect(f.view.file).toBeUndefined();
   });
@@ -295,7 +295,7 @@ describe('desktop button shortcuts', () => {
     ['a', 'Archive', 'archive'],
   ] as const)(
     '%s chooses %s directly and advances rather than opening the picker',
-    async (key, destination, savedStatus) => {
+    async (key, _destination, savedStatus) => {
       const f = hostFixture();
       const first = await f.note('Reading/Inbox/A.md');
       const next = await f.note('Reading/Inbox/B.md');
@@ -303,7 +303,7 @@ describe('desktop button shortcuts', () => {
       expect(press(f.view, key).defaultPrevented).toBe(true);
       await f.probe.operations;
       expect(f.view.file).toBe(next);
-      expect(first.path).toBe(`Reading/${destination === 'Later' ? 'Later' : 'Treasury'}/A.md`);
+      expect(first.path).toBe('Reading/Inbox/A.md');
       expect((await f.store.read(first.path)).properties.status).toBe(savedStatus);
       expect(mocks.choose).not.toHaveBeenCalled();
       expect(f.store.catalog.article(first.path)?.status).toBe(savedStatus);

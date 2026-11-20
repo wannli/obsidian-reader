@@ -88,7 +88,7 @@ describe('one-passage multi-destination collection', () => {
       return move(...args);
     });
     const saved = await f.store.collectHighlightMany(f.snapshot, f.manyEdit, f.paths, options());
-    expect(trace).toEqual(['retention', 'annotation', 'move', ...f.paths]);
+    expect(trace).toEqual(['retention', 'annotation', ...f.paths]);
     expect(saved.body).toBe(f.manyEdit.body);
     expect(saved.path).toBe(f.source.path);
     const citation = originLink(saved.path, blockId, 'Source title');
@@ -311,7 +311,7 @@ describe('one-passage multi-destination collection', () => {
     }
   });
 
-  it('rereads every destination after a native source move rewrites their links', async () => {
+  it('preserves existing source links in every destination when retaining Feed', async () => {
     const f = await manyFixture('Feed'),
       originalPath = f.source.path,
       move = f.vault.move.bind(f.vault);
@@ -335,7 +335,7 @@ describe('one-passage multi-destination collection', () => {
     for (const target of [f.target, f.second]) {
       const raw = await f.vault.read(target);
       expect(raw).toContain(`Earlier [[${saved.path.replace(/\.md$/, '')}]].`);
-      expect(raw).not.toContain(originalPath.replace(/\.md$/, ''));
+      expect(raw).toContain(originalPath.replace(/\.md$/, ''));
       expect(raw).toContain(`> ${quoteMarkdown}`);
     }
   });
@@ -858,10 +858,14 @@ describe('guarded highlight collection', () => {
     expect(await vault.read(target)).not.toContain('## Highlights');
   });
 
-  it('reports a saved annotation when its Later move fails, without appending or rolling back', async () => {
+  it('reports saved retention and annotation when a destination write fails', async () => {
     const { vault, store, source, target, snapshot } = await fixture('Feed');
     const path = source.path;
-    vault.failMove = true;
+    const process = vault.process.bind(vault);
+    vi.spyOn(vault, 'process').mockImplementation(async (file, update) => {
+      if (file === target) throw new Error('Target failed');
+      return process(file, update);
+    });
     const error = await failure(store.collectHighlight(snapshot, edit, target.path, options()));
     expect(error).toBeInstanceOf(PartialCollectionError);
     const partial = error as PartialCollectionError<NoteFile>;
@@ -873,17 +877,17 @@ describe('guarded highlight collection', () => {
     expect(vault.trashed).toEqual([]);
   });
 
-  it('uses the actual postmove source path for both citation and newly created origin', async () => {
+  it('keeps the original source path for both citation and newly created origin', async () => {
     const { vault, store, source, target, snapshot } = await fixture('Feed');
     const before = source.path;
     const saved = await store.collectHighlight(snapshot, edit, target.path, {
       ...options(),
       created: true,
     });
-    expect(source.path).toContain('Reading/Later/');
+    expect(source.path).toBe(before);
     expect(saved.path).toBe(source.path);
     const raw = await vault.read(target);
-    expect(raw).not.toContain(`${before.replace(/\.md$/, '')}#^`);
+    expect(raw).toContain(`${before.replace(/\.md$/, '')}#^`);
     expect(readDocument(raw).properties.origin).toBe(
       `[[${source.path.replace(/\.md$/, '')}#^${blockId}]]`,
     );
@@ -1020,7 +1024,7 @@ describe('guarded highlight collection', () => {
     }
   });
 
-  it('traces retention, one combined annotation, relocation, then collection in that order', async () => {
+  it('traces retention, one combined annotation, then collection without relocation', async () => {
     const { vault, store, source, target, snapshot } = await fixture('Feed');
     const trace: string[] = [];
     const process = vault.process.bind(vault);
@@ -1045,7 +1049,7 @@ describe('guarded highlight collection', () => {
       return move(...args);
     });
     await store.collectHighlight(snapshot, edit, target.path, options());
-    expect(trace).toEqual(['retention', 'annotation', 'move', 'collection']);
+    expect(trace).toEqual(['retention', 'annotation', 'collection']);
   });
 
   it('reports retention honestly if saving the source annotation then fails', async () => {
@@ -1067,22 +1071,26 @@ describe('guarded highlight collection', () => {
     expect(await vault.read(target)).not.toContain('## Highlights');
   });
 
-  it('retries an unchanged annotated source after move failure by completing its Later relocation', async () => {
+  it('retries an unchanged retained annotation after a destination failure without moving it', async () => {
     const { vault, store, source, target, snapshot } = await fixture('Feed');
-    vault.failMove = true;
+    const process = vault.process.bind(vault);
+    const failing = vi.spyOn(vault, 'process').mockImplementation(async (file, update) => {
+      if (file === target) throw new Error('Target failed');
+      return process(file, update);
+    });
     const error = (await failure(
       store.collectHighlight(snapshot, edit, target.path, options()),
     )) as PartialCollectionError<NoteFile>;
-    vault.failMove = false;
+    failing.mockRestore();
     const saved = await store.collectHighlight(error.snapshot, edit, target.path, options());
-    expect(saved.path).toContain('Reading/Later/');
+    expect(saved.path).toBe(snapshot.path);
     expect(source.path).toBe(saved.path);
     expect(await vault.read(target)).toContain(
       `[[${saved.path.replace(/\.md$/, '')}#^${blockId}|Source title]]`,
     );
   });
 
-  it('uses fresh target bytes after native source relocation rewrites existing citations', async () => {
+  it('preserves existing target citations when retaining Feed without relocation', async () => {
     const { vault, store, source, target, snapshot } = await fixture('Feed');
     const originalPath = source.path;
     vault.bytes.set(
@@ -1215,7 +1223,7 @@ describe('guarded highlight collection', () => {
     expect(await vault.read(target)).not.toContain('## Highlights');
   });
 
-  it('cites the collision-safe postmove filename and returns native-rewritten source bytes', async () => {
+  it('ignores Later-folder collisions and preserves source references while filing', async () => {
     const { vault, store, source, target, snapshot } = await fixture('Feed');
     const occupied = source.path.replace('Reading/Stream/', 'Reading/Later/');
     await vault.create(occupied, '---\nfileClass: Existing\n---\nDo not overwrite.\n');
@@ -1229,8 +1237,8 @@ describe('guarded highlight collection', () => {
         );
     });
     const saved = await store.collectHighlight(snapshot, edit, target.path, options());
-    expect(saved.path).toBe(occupied.replace(/\.md$/, ' 2.md'));
-    expect(saved.body).toContain('[[Trust]]');
+    expect(saved.path).toBe(snapshot.path);
+    expect(saved.body).toContain('[[Concepts/Trust]]');
     expect(saved.raw).toBe(await vault.read(source));
     expect(await vault.read(target)).toContain(
       `[[${saved.path.replace(/\.md$/, '')}#^${blockId}|Source title]]`,
@@ -1238,12 +1246,13 @@ describe('guarded highlight collection', () => {
     expect(await vault.read(vault.file(occupied)!)).toContain('Do not overwrite.');
   });
 
-  it('retains the known saved revision if native rename completes before reporting failure', async () => {
+  it('retains the saved source revision if a target write completes then reports failure', async () => {
     const { vault, store, source, target, snapshot } = await fixture('Feed');
-    const move = vault.move.bind(vault);
-    vi.spyOn(vault, 'move').mockImplementation(async (...args) => {
-      await move(...args);
-      throw new Error('Rename reported failure');
+    const process = vault.process.bind(vault);
+    vi.spyOn(vault, 'process').mockImplementation(async (file, update) => {
+      const raw = await process(file, update);
+      if (file === target) throw new Error('Target reported failure');
+      return raw;
     });
     const error = (await failure(
       store.collectHighlight(snapshot, edit, target.path, options()),
@@ -1251,9 +1260,9 @@ describe('guarded highlight collection', () => {
     expect(error).toBeInstanceOf(PartialCollectionError);
     expect(error.annotationSaved).toBe(true);
     expect(error.snapshot.path).toBe(source.path);
-    expect(source.path).toContain('Reading/Later/');
+    expect(source.path).toBe(snapshot.path);
     expect(error.snapshot.raw).toBe(await vault.read(source));
-    expect(await vault.read(target)).not.toContain('## Highlights');
+    expect(await vault.read(target)).toContain('## Highlights');
   });
 
   it('denies source === destination before any mutation', async () => {

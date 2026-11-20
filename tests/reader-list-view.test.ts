@@ -26,13 +26,14 @@ describe('bounded Reader UI', () => {
       const buttons = [
         ...f.view.contentEl.querySelectorAll<HTMLButtonElement>('.reader-toolbar button'),
       ];
-      expect(buttons).toHaveLength(5);
+      expect(buttons).toHaveLength(6);
       for (const [index, name] of ['Inbox', 'Later', 'Feed'].entries()) {
         expect(buttons[index].getAttribute('aria-pressed')).toBe(String(name === queue));
         expect(buttons[index].classList.contains('mod-cta')).toBe(name === queue);
       }
-      expect(buttons[3].hasAttribute('aria-pressed')).toBe(false);
-      expect(buttons[4].getAttribute('aria-pressed')).toBe('false');
+      expect(buttons[3].getAttribute('aria-pressed')).toBe('false');
+      expect(buttons[4].hasAttribute('aria-pressed')).toBe(false);
+      expect(buttons[5].getAttribute('aria-pressed')).toBe('false');
       expect(
         f.view.contentEl.querySelector(
           '.reader-row-meta,.reader-row-excerpt,.reader-triage-actions',
@@ -47,7 +48,7 @@ describe('bounded Reader UI', () => {
     },
   );
 
-  it('keeps library titles as text, with five bottom actions and no search/subtitles/Archive/Feeds buttons', async () => {
+  it('keeps library titles as text, with six list actions and no search/subtitles/Archive/Feeds buttons', async () => {
     const f = hostFixture();
     await f.note('Reading/Inbox/Visible title.md');
     f.view.showList();
@@ -58,17 +59,20 @@ describe('bounded Reader UI', () => {
       'Inbox',
       'Later',
       'Feed articles',
+      'Needs attention',
       'Add URL',
       'Filter by topic',
     ]);
     expect(buttons.map((button) => button.querySelector('svg')?.getAttribute('data-icon'))).toEqual(
-      ['inbox', 'clock', 'rss', 'plus', 'list-filter'],
+      ['inbox', 'clock', 'rss', 'circle-alert', 'plus', 'list-filter'],
     );
     for (const button of buttons) {
       expect(button.textContent).toBe('');
       expect(button.querySelector('svg')?.getAttribute('aria-hidden')).toBe('true');
       const key = button.dataset.readerKey!;
-      const tooltip = `${actionName(button)} (${key === 'L' || key === 'T' ? `Shift+${key}` : key.toUpperCase()})`;
+      const tooltip = key
+        ? `${actionName(button)} (${key === 'L' || key === 'T' ? `Shift+${key}` : key.toUpperCase()})`
+        : actionName(button);
       expect(setTooltip).toHaveBeenCalledWith(button, tooltip);
       expect(button.hasAttribute('title')).toBe(false);
       expect(setIcon).toHaveBeenCalledWith(button, expect.any(String));
@@ -84,7 +88,7 @@ describe('bounded Reader UI', () => {
     );
     expect(f.view.contentEl.firstElementChild?.classList.contains('reader-list')).toBe(true);
     const capture = vi.spyOn(f.host, 'capture');
-    buttons[3].click();
+    buttons[4].click();
     expect(capture).toHaveBeenCalledOnce();
     buttons[1].click();
     expect(f.view.getState().queue).toBe('Later');
@@ -447,7 +451,7 @@ describe('leaf-scoped floating Reader layout', () => {
         const library = f.view.contentEl.querySelector('.reader-bottom-controls')!;
         expect(f.view.contentEl.firstElementChild).toBe(list);
         expect(f.view.contentEl.lastElementChild).toBe(library);
-        expect(library.querySelectorAll('button')).toHaveLength(5);
+        expect(library.querySelectorAll('button')).toHaveLength(6);
         expect(window.getComputedStyle(library).position).toBe('absolute');
         expect(window.getComputedStyle(f.view.contentEl).position).toBe('relative');
         expect(window.getComputedStyle(list).flex).toBe('1 1 auto');

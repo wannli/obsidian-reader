@@ -263,7 +263,7 @@ it.each(['Reading/Articles', 'Reading/Articles/Feeds', ''])(
   },
 );
 
-it('shows the four default queue destinations and applies a staged mapping as one group', async () => {
+it('shows the four default capture destinations and applies a staged mapping as one group', async () => {
   const save = vi.fn(async () => {});
   const settings = new ReaderSettings(
     {} as App,
@@ -277,12 +277,12 @@ it('shows the four default queue destinations and applies a staged mapping as on
   );
   settings.display();
   for (const [status, folder] of Object.entries(defaultStatusFolders))
-    expect(row(`${status} folder`).input.value).toBe(folder);
-  row('later folder').input.change('Library/Later');
-  row('archive folder').buttons[0].click();
+    expect(row(`New ${status} articles`).input.value).toBe(folder);
+  row('New later articles').input.change('Library/Later');
+  row('New archive articles').buttons[0].click();
   ui.picker.onChooseItem({ path: 'Library/Treasury' });
   expect(save).not.toHaveBeenCalled();
-  await row('Apply status folders').buttons[0].click();
+  await row('Apply article capture folders').buttons[0].click();
   expect(save).toHaveBeenCalledExactlyOnceWith({
     ...defaultStatusFolders,
     later: 'Library/Later',
@@ -330,14 +330,14 @@ it('reports mapping and typed-note persistence failures locally and retains thei
     fail,
   );
   settings.display();
-  row('later folder').input.change('Draft/Later');
-  await row('Apply status folders').buttons[0].click();
+  row('New later articles').input.change('Draft/Later');
+  await row('Apply article capture folders').buttons[0].click();
   row('New typed-note folder').input.change('Draft/Nodes');
   await row('Apply typed-note settings').buttons[0].click();
   expect(ui.alerts.map((alert) => alert.textContent).join(' ')).toMatch(
     /Apply mappings: Disk full.*Apply typed-note settings: Disk full/,
   );
-  expect(row('later folder').input.value).toBe('Draft/Later');
+  expect(row('New later articles').input.value).toBe('Draft/Later');
   expect(row('New typed-note folder').input.value).toBe('Draft/Nodes');
 });
 
@@ -381,8 +381,8 @@ it.each([
     save,
   );
   settings.display();
-  row('later folder').input.change(path);
-  await row('Apply status folders').buttons[0].click();
+  row('New later articles').input.change(path);
+  await row('Apply article capture folders').buttons[0].click();
   expect(save).not.toHaveBeenCalled();
   expect(ui.notices).toEqual([]);
   expect(console.error).toHaveBeenCalledWith(

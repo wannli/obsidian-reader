@@ -10,6 +10,7 @@ import {
 } from 'obsidian';
 import { hasAnnotations, hasPropertyAnnotations, isAnnotationProperty } from './core/annotations';
 import { excludedReaderPath, type Queue } from './core/model';
+import { attentionReason, isVideoUrl } from './core/reading-readiness';
 import { defaultFolders, validateFolders, type ReaderFolders } from './core/folders';
 import { SerialWrites } from './core/work';
 import { ArticleFragmentIntents } from './core/article-fragment';
@@ -136,7 +137,7 @@ export default class ReaderPlugin extends Plugin {
     try {
       statusFolders = loadStatusFolders(data);
     } catch (error) {
-      this.notice(`Invalid queue folder settings; using default queue folders: ${String(error)}`);
+      this.notice(`Invalid article capture folders; using default destinations: ${String(error)}`);
     }
     let invalid = false;
     try {
@@ -773,10 +774,9 @@ export default class ReaderPlugin extends Plugin {
     try {
       const snapshot = await store.read(file.path);
       if (signal.aborted) return;
-      // Folder membership is authoritative; external annotations in Feed promote
-      // without trusting a stale or missing YAML status.
+      // Revalidate workflow state from current bytes before retaining annotations.
       if (
-        store.catalog.article(snapshot.path)?.queue === 'Feed' &&
+        snapshot.properties.status === 'feed' &&
         (promotions.get(file) || hasAnnotations(snapshot.body, snapshot.properties))
       )
         await store.move(snapshot, 'Later');
@@ -837,7 +837,12 @@ export default class ReaderPlugin extends Plugin {
     )
       return;
     const article = this.store.catalog.article(file.path);
-    if (!article?.url || !['Inbox', 'Later'].includes(article.queue ?? '')) return;
+    if (
+      !article?.url ||
+      isVideoUrl(article.url) ||
+      !['Inbox', 'Later'].includes(article.queue ?? '')
+    )
+      return;
     const cache = this.app.metadataCache.getFileCache(file);
     if (!cache?.sections) return;
     const bodySections = cache.sections.filter((section) => section.type !== 'yaml');
@@ -944,6 +949,8 @@ export default class ReaderPlugin extends Plugin {
       try {
         const snapshot = await this.store.read(article.path);
         if (marked.includes(article) && snapshot.properties.dog_ear !== true) continue;
+        if (!marked.includes(article) && attentionReason(snapshot.properties, snapshot.body))
+          continue;
         path = snapshot.path;
         break;
       } catch {

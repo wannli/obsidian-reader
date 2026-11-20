@@ -3,7 +3,7 @@ import { articleInfo, queues } from '../src/core/model';
 import { ArticleStore } from '../src/core/store';
 import { createDocument, patchProperties, readDocument, savePosition } from '../src/core/document';
 import { MemoryVault } from './helpers/memory-vault';
-import { queueForPath, defaultStatusFolders } from '../src/core/status-folders';
+import { defaultStatusFolders } from '../src/core/status-folders';
 
 const now = new Date('2026-10-15T12:00:00Z');
 async function fixture(status: Record<string, unknown> = {}) {
@@ -18,7 +18,7 @@ async function fixture(status: Record<string, unknown> = {}) {
   return { vault, store, file, snapshot: await store.read(file.path) };
 }
 
-describe('folder queue authority and YAML mirror', () => {
+describe('YAML queue authority', () => {
   it('uses the four display queues and lowercase persisted values', () => {
     expect(queues).toEqual(['Inbox', 'Later', 'Feed', 'Archive']);
     for (const [status, queue] of [
@@ -28,29 +28,25 @@ describe('folder queue authority and YAML mirror', () => {
       ['archive', 'Archive'],
     ]) {
       const path = `${defaultStatusFolders[status as keyof typeof defaultStatusFolders]}/article.md`;
-      const info = articleInfo(
-        path,
-        { type: 'article', status },
-        queueForPath(path, defaultStatusFolders),
-      );
+      const info = articleInfo(path, { type: 'article', status });
       expect(info?.status).toBe(status);
       expect(info?.queue).toBe(queue);
     }
   });
-  it('folder membership wins over absent or contradictory YAML, while status stays a mirror', () => {
-    expect(queueForPath('Reading/Inbox/a.md', defaultStatusFolders)).toBe('Inbox');
-    expect(queueForPath('Elsewhere/a.md', defaultStatusFolders)).toBeUndefined();
-    expect(articleInfo('Reading/Inbox/a.md', { type: 'article' }, 'Inbox')?.queue).toBe('Inbox');
-    expect(
-      articleInfo('Reading/Inbox/a.md', { type: 'article', status: 'feed' }, 'Inbox')?.queue,
-    ).toBe('Inbox');
-    expect(articleInfo('Reading/Inbox/a.md', { type: 'article' }, 'Inbox')?.status).toBeUndefined();
+  it('uses YAML independently of placement and leaves missing status unqueued', () => {
+    expect(articleInfo('Reading/Inbox/a.md', { type: 'article' })?.queue).toBeUndefined();
+    expect(articleInfo('Reading/Inbox/a.md', { type: 'article', status: 'feed' })?.queue).toBe(
+      'Feed',
+    );
+    expect(articleInfo('Elsewhere/a.md', { type: 'article', status: 'inbox' })?.queue).toBe(
+      'Inbox',
+    );
   });
   it.each([undefined, null, '', 'Feed', 'INBOX', 'unknown', [], {}, 0, false])(
-    'keeps invalid YAML status %j out of the mirror without losing Inbox membership',
+    'keeps invalid YAML status %j readable but unqueued',
     (status) => {
-      const info = articleInfo('Reading/Inbox/a.md', { type: 'article', status }, 'Inbox');
-      expect(info?.queue).toBe('Inbox');
+      const info = articleInfo('Reading/Inbox/a.md', { type: 'article', status });
+      expect(info?.queue).toBeUndefined();
       expect(info?.status).toBeUndefined();
     },
   );
@@ -102,7 +98,7 @@ describe('folder queue authority and YAML mirror', () => {
     { status: 'later' },
     { status: 'archive' },
     { status: null },
-  ])('annotating a Stream article moves it to Later and mirrors status: %j', async (status) => {
+  ])('retains only explicit feed on annotation without moving: %j', async (status) => {
     const f = await fixture(status);
     const process = f.vault.process.bind(f.vault);
     const seen: Record<string, unknown>[] = [];
@@ -114,10 +110,11 @@ describe('folder queue authority and YAML mirror', () => {
     const saved = await f.store.annotate(f.snapshot, (raw) =>
       raw.replace('Article words.', '==Article words.=='),
     );
-    expect(saved.properties.status).toBe('later');
-    expect(seen).toHaveLength(status.status === 'later' ? 1 : 2);
-    expect(seen[0].status).toBe('later');
-    expect(f.file.path).toBe('Reading/Later/260101 Article.md');
+    const retained = status.status === 'feed';
+    expect(saved.properties.status).toBe(retained ? 'later' : status.status);
+    expect(seen).toHaveLength(retained ? 2 : 1);
+    expect(seen[0].status).toBe(retained ? 'later' : status.status);
+    expect(f.file.path).toBe(f.snapshot.path);
   });
   it('failed native/synced annotation promotion is retained, never trashed', async () => {
     const f = await fixture({ status: 'feed' });
@@ -139,7 +136,7 @@ it('changes only status, preserving comments, unknown YAML, bookmark and placeme
     '---\ntype: article\nstatus: feed # state comment\ncustom: &custom [one, two] # authored\ncopy: *custom\nbookmark: Article words.\nreading_position: {old: true}\n---\n## Authored\n\nArticle words.\n';
   f.vault.bytes.set(f.file, raw);
   const saved = await f.store.move(await f.store.read(f.file.path), 'Archive');
-  expect(saved.path).toBe('Reading/Treasury/260101 Article.md');
+  expect(saved.path).toBe(f.snapshot.path);
   expect(saved.body).toBe(readDocument(raw).body);
   expect(saved.properties).toEqual({ ...readDocument(raw).properties, status: 'archive' });
   expect(saved.raw).toContain('# state comment');
@@ -152,7 +149,7 @@ it('reading and saving a bookmark never add a missing status', async () => {
   const saved = await f.store.position(f.file.path, 'Article words.');
   expect(saved.properties).not.toHaveProperty('status');
   expect(saved.properties.bookmark).toBe('Article words.');
-  expect(f.store.catalog.article(f.file.path)?.queue).toBe('Feed');
+  expect(f.store.catalog.article(f.file.path)?.queue).toBeUndefined();
   expect(f.store.catalog.article(f.file.path)?.status).toBeUndefined();
 });
 

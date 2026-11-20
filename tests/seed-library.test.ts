@@ -87,14 +87,14 @@ describe('synthetic seed library with the current ArticleStore', () => {
     expect(await vault.read(vault.file(`Daily/${DAY}.md`)!)).toBe(files[`Daily/${DAY}.md`]);
   });
 
-  it('keeps out-of-queue typed notes readable and promotes missing-status Feed annotations', async () => {
+  it('keeps missing-status articles readable without inferring queue or status', async () => {
     const { vault, store } = await library();
     const raw =
       '---\ntype: article\npublished: 2001-01-01\nreading_position: legacy anchor\ncustom: keep\n---\nA synthetic passage.\n';
     const path = 'Reading/Stream/Loose article.md';
     await vault.create(path, raw);
     store.catalog.update(path, readDocument(raw).properties);
-    expect(store.catalog.article(path)?.queue).toBe('Feed');
+    expect(store.catalog.article(path)?.queue).toBeUndefined();
     expect(store.catalog.article(path)?.status).toBeUndefined();
     await store.expire(new Date(`${DAY}T12:00:00Z`));
     expect(await vault.read(vault.file(path)!)).toBe(raw);
@@ -105,8 +105,8 @@ describe('synthetic seed library with the current ArticleStore', () => {
     const saved = await store.annotate(snapshot, (current) =>
       replaceBody(current, snapshot.body, addHighlight(snapshot.body, range.from, range.to)),
     );
-    expect(saved.path).toBe('Reading/Later/Loose article.md');
-    expect(saved.properties.status).toBe('later');
+    expect(saved.path).toBe(path);
+    expect(saved.properties.status).toBeUndefined();
     expect(saved.properties.reading_position).toBe('legacy anchor');
     expect(saved.properties.custom).toBe('keep');
     expect(saved.body).toBe('A ==synthetic passage==.\n');
@@ -144,14 +144,14 @@ describe('synthetic seed library with the current ArticleStore', () => {
     );
     const moved = await store.move(highlighted, 'Later');
     expect(moved.file).toBe(original.file);
-    expect(moved.path).toBe(original.path.replace('Reading/Inbox/', 'Reading/Later/'));
+    expect(moved.path).toBe(original.path);
     expect(moved.body).toBe(highlighted.body);
     expect(moved.raw).toBe(highlighted.raw.replace('status: "inbox"', 'status: "later"'));
     expect(moved.properties.status).toBe('later');
     expect(moved.properties['test-note']).toBe('Preserve this unknown property');
     expect(store.catalog.list('Inbox')).toEqual([]);
     expect(store.catalog.list('Later')).toHaveLength(2);
-    expect(vault.file(original.path)).toBeUndefined();
+    expect(vault.file(original.path)).toBe(original.file);
     expect(vault.file(moved.path)).toBe(original.file);
     expect(store.catalog.article(moved.path)?.queue).toBe('Later');
     expect([...vault.files.keys()].sort()).toEqual(

@@ -269,7 +269,7 @@ describe('atomic related typed nodes', () => {
     expect(saved.properties.topics).toEqual(['[[Concepts/B.md]]']);
   });
 
-  it('retains Feed once, writes the relationship change once, then relocates without altering target bytes', async () => {
+  it('retains Feed once and writes relationships without moving or altering target bytes', async () => {
     const f = await fixture([], 'Feed'),
       trace: string[] = [],
       process = f.vault.process.bind(f.vault),
@@ -289,8 +289,8 @@ describe('atomic related typed nodes', () => {
       return move(...args);
     });
     const saved = await f.store.setRelatedNodes(f.snapshot, [f.b.path], f.targets, f.guard);
-    expect(trace).toEqual(['retention', 'related', 'move']);
-    expect(saved.path).toContain('Reading/Later/');
+    expect(trace).toEqual(['retention', 'related']);
+    expect(saved.path).toBe(f.snapshot.path);
     expect(saved.properties.status).toBe('later');
     expect(saved.body).toBe(body);
     expect(await f.vault.read(f.b)).toBe(before);

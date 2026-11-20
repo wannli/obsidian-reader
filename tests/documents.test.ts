@@ -132,16 +132,14 @@ describe('one authoritative Markdown document', () => {
 });
 
 describe('explicit identity, paths, dates and URLs', () => {
-  it('requires explicit article identity; queue membership comes from the folder', () => {
+  it('requires explicit article identity; queue membership comes from YAML', () => {
+    expect(articleInfo('Reading/Inbox/file.md', { url: 'https://example.com' })).toBeUndefined();
+    expect(articleInfo('Elsewhere/Article.md', { type: 'article', status: 'feed' })?.queue).toBe(
+      'Feed',
+    );
     expect(
-      articleInfo('Reading/Inbox/file.md', { url: 'https://example.com' }, 'Inbox'),
-    ).toBeUndefined();
-    expect(
-      articleInfo('Elsewhere/Article.md', { type: 'article', status: 'feed' })?.queue,
-    ).toBeUndefined();
-    expect(
-      articleInfo('Reading/Inbox/Article.md', { type: 'article', status: 'feed' }, 'Inbox')?.queue,
-    ).toBe('Inbox');
+      articleInfo('Reading/Inbox/Article.md', { type: 'article', status: 'feed' })?.queue,
+    ).toBe('Feed');
     expect(queueAt({ status: 'invalid' })).toBeUndefined();
   });
   it.each(['../private', '/absolute', 'A/../B', 'A//B', 'A\\B'])('rejects unsafe folders', (path) =>

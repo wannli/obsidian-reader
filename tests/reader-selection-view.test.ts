@@ -1073,9 +1073,7 @@ describe('automatic selection event ownership', () => {
           ...(label === 'Next' ? {} : { status: 'archive' }),
         }),
       );
-      expect(f.article.path).toBe(
-        label === 'Next' ? originalPath : 'Reading/Treasury/Selection.md',
-      );
+      expect(f.article.path).toBe(originalPath);
       const nextKey = new KeyboardEvent('keydown', { key: 'j', cancelable: true });
       f.view.key(nextKey);
       expect(nextKey.defaultPrevented).toBe(true);
@@ -1305,7 +1303,7 @@ describe('automatic selection event ownership', () => {
     document.dispatchEvent(new Event('selectionchange'));
     vi.advanceTimersByTime(900);
     await f.probe.operations;
-    expect(f.article.path).toBe('Reading/Later/Selection.md');
+    expect(f.article.path).toBe('Reading/Inbox/Selection.md');
     expect((await f.store.read(f.article.path)).properties.status).toBe('later');
     expect((await f.store.read(f.article.path)).body).toBe(
       expectedHosted('==Alpha== phrase.\n\nBeta phrase.'),

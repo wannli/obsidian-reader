@@ -267,7 +267,7 @@ describe('public article commands', () => {
     mocks.choose.mockResolvedValue('Later');
     command('move', false);
     await f.probe.operations;
-    expect(article.path).toBe('Reading/Later/Commands.md');
+    expect(article.path).toBe('Reading/Inbox/Commands.md');
     expect((await f.store.read(article.path)).properties.status).toBe('later');
     expect(await f.vault.read(article)).toBe(patchProperties(before, { status: 'later' }));
     command('topics', false);
@@ -755,46 +755,46 @@ describe('native title-only presentation', () => {
   });
 });
 
-describe('folder-authoritative queue presentation', () => {
+describe('YAML-authoritative queue presentation', () => {
   it.each([
-    ['Reading/Stream/Misleading.md', {}, 'Feed', 'later', 'Reading/Later/Misleading.md'],
+    ['Reading/Stream/Misleading.md', {}, undefined, undefined, 'Reading/Stream/Misleading.md'],
     [
       'Reading/Stream/Misleading.md',
       { status: 'inbox' },
-      'Feed',
-      'later',
-      'Reading/Later/Misleading.md',
+      'Inbox',
+      'inbox',
+      'Reading/Stream/Misleading.md',
     ],
     [
       'Reading/Inbox/Misleading.md',
       { status: 'feed' },
-      'Inbox',
-      'feed',
+      'Feed',
+      'later',
       'Reading/Inbox/Misleading.md',
     ],
     [
       'Reading/Later/Misleading.md',
       { status: 'archive' },
-      'Later',
+      'Archive',
       'archive',
       'Reading/Later/Misleading.md',
     ],
     [
       'Reading/Treasury/Misleading.md',
       { status: 'later' },
-      'Archive',
+      'Later',
       'later',
       'Reading/Treasury/Misleading.md',
     ],
     [
       'Unrelated/Inbox/Misleading.md',
       { status: 'inbox' },
-      undefined,
+      'Inbox',
       'inbox',
       'Unrelated/Inbox/Misleading.md',
     ],
   ] as const)(
-    'folder wins over YAML and Feed annotation retains before saving: %s %j',
+    'YAML wins over folder and Feed annotation retains in place: %s %j',
     async (path, properties, queue, savedStatus, finalPath) => {
       const f = hostFixture(),
         article = await f.note(path);
@@ -971,7 +971,7 @@ describe('browsing context and presentation', () => {
         expect.any(AbortSignal),
       );
       expect(move).toHaveBeenCalledWith(expect.anything(), 'Later');
-      expect(article.path).toBe('Reading/Later/A.md');
+      expect(article.path).toBe(`${folder}/A.md`);
       expect((await f.store.read(article.path)).properties.status).toBe('later');
       expect(f.view.file).toBe(article);
       expect(f.probe.surface).toBe(surface);
@@ -983,7 +983,7 @@ describe('browsing context and presentation', () => {
       expect(mocks.notice).toHaveBeenCalledWith('Saved to Later');
       mocks.choose.mockResolvedValueOnce('Later');
       await f.probe.move();
-      expect(article.path).toBe('Reading/Later/A.md');
+      expect(article.path).toBe(`${folder}/A.md`);
       expect((await f.store.read(article.path)).properties.status).toBe('later');
       await f.view.navigate(1);
       expect(f.view.file).toBe(next);
@@ -1008,18 +1008,17 @@ describe('browsing context and presentation', () => {
     expect(mocks.notice).not.toHaveBeenCalledWith('Saved to Later');
   });
 
-  it('does not acknowledge Later when YAML saves but the folder move fails', async () => {
+  it('acknowledges Later without attempting a folder move', async () => {
     const f = hostFixture();
     const article = await f.note('Reading/Inbox/A.md');
     await f.view.openArticle(article.path, true);
     f.vault.failMove = true;
     articleAction(f.view, 'Save to Later and advance');
     await Promise.resolve();
-    await expect(f.probe.operations).rejects.toThrow('Move failed');
+    await f.probe.operations;
     expect((await f.store.read(article.path)).properties.status).toBe('later');
     expect(article.path).toBe('Reading/Inbox/A.md');
-    expect(f.probe.articleCommands.some((action: any) => action.key === 'l')).toBe(true);
-    expect(mocks.notice).not.toHaveBeenCalledWith('Saved to Later');
+    expect(mocks.notice).toHaveBeenCalledWith('Saved to Later');
   });
 
   it('keeps direct queue actions after external folder moves and YAML changes without remounting', async () => {
@@ -1085,7 +1084,7 @@ describe('browsing context and presentation', () => {
     await Promise.resolve();
     await f.probe.operations;
     expect(f.view.file).toBeUndefined();
-    expect(b.path).toBe('Reading/Treasury/B.md');
+    expect(b.path).toBe('Reading/Stream/B.md');
     expect(f.vault.bytes.get(a)).toBe(rawA);
     expect(f.vault.bytes.get(b)).toBe(patchProperties(rawB!, { status: 'archive', dog_ear: true }));
   });
@@ -1359,7 +1358,7 @@ describe('plugin routing and conservative expiry', () => {
     promote.mockRestore();
     for (const file of candidates) await f.pluginProbe.promote(file);
     for (const file of candidates) {
-      expect(file.path).toContain('/Later/');
+      expect(file.path).toContain('/Stream/');
       expect((await f.store.read(file.path)).properties.status).toBe('later');
     }
     for (const file of ordinary) expect(file.path).toContain('/Stream/');
@@ -1426,7 +1425,7 @@ describe('plugin routing and conservative expiry', () => {
         promote = vi.spyOn(f.pluginProbe, 'promote');
       f.pluginProbe.changed({ path: file.path, metadataChanged: false });
       await Promise.all(promote.mock.results.map((result) => result.value));
-      expect(file.path).toBe(stale ? 'Reading/Stream/Article.md' : 'Reading/Later/Article.md');
+      expect(file.path).toBe('Reading/Stream/Article.md');
       expect(await f.vault.read(file)).toBe(
         stale ? before : patchProperties(before, { status: 'later' }),
       );

@@ -3,21 +3,17 @@ import { Catalog } from '../src/core/catalog';
 import { validateFolders } from '../src/core/folders';
 import { ArticleStore } from '../src/core/store';
 import { createDocument, readDocument } from '../src/core/document';
-import {
-  defaultStatusFolders,
-  queueForPath,
-  validateStatusFolders,
-} from '../src/core/status-folders';
+import { defaultStatusFolders, validateStatusFolders } from '../src/core/status-folders';
 import { MemoryVault } from './helpers/memory-vault';
 
-it('classifies by folder, not YAML, and never indexes Templates or trash', () => {
+it('classifies by YAML, not folder, and never indexes Templates or trash', () => {
   const catalog = new Catalog();
   for (const [path, status, queue] of [
-    ['Reading/Inbox/One.md', 'archive', 'Inbox'],
-    ['Reading/Stream/Two.md', 'later', 'Feed'],
-    ['Reading/Later/Three.md', 'feed', 'Later'],
-    ['Reading/Treasury/Four.md', 'inbox', 'Archive'],
-    ['Elsewhere/Five.md', 'feed', undefined],
+    ['Reading/Inbox/One.md', 'archive', 'Archive'],
+    ['Reading/Stream/Two.md', 'later', 'Later'],
+    ['Reading/Later/Three.md', 'feed', 'Feed'],
+    ['Reading/Treasury/Four.md', 'inbox', 'Inbox'],
+    ['Elsewhere/Five.md', 'feed', 'Feed'],
   ] as const) {
     catalog.update(path, { type: 'article', status });
     expect(catalog.article(path)?.queue).toBe(queue);
@@ -30,13 +26,13 @@ it('classifies by folder, not YAML, and never indexes Templates or trash', () =>
     expect(catalog.feed(path.replace('Article', 'Feed'))).toBeUndefined();
   }
   expect(catalog.size).toBe(5);
-  expect(catalog.paths('Feed')).toEqual(['Reading/Stream/Two.md']);
+  expect(catalog.paths('Feed')).toEqual(['Elsewhere/Five.md', 'Reading/Later/Three.md']);
   catalog.rename('Reading/Stream/Two.md', 'Reading/Treasury/Two.md', {
     type: 'article',
     status: 'later',
   });
-  expect(catalog.paths('Feed')).toEqual([]);
-  expect(catalog.paths('Archive')).toContain('Reading/Treasury/Two.md');
+  expect(catalog.paths('Later')).toContain('Reading/Treasury/Two.md');
+  expect(catalog.paths('Archive')).not.toContain('Reading/Treasury/Two.md');
   catalog.rename('Reading/Treasury/Two.md', 'Templates/Two.md', {
     type: 'article',
     status: 'later',
@@ -46,7 +42,6 @@ it('classifies by folder, not YAML, and never indexes Templates or trash', () =>
 
 it('has four default destinations including Later, with no overlap or template destinations', () => {
   expect(defaultStatusFolders.later).toBe('Reading/Later');
-  expect(queueForPath('Reading/Later/A.md', defaultStatusFolders)).toBe('Later');
   expect(validateStatusFolders({ inbox: 'Custom/Inbox' }).later).toBe('Reading/Later');
   expect(() => validateStatusFolders({ later: 'Templates/Later' })).toThrow();
   expect(() => validateStatusFolders({ later: 'Reading/Inbox/Sub' })).toThrow();
@@ -55,13 +50,12 @@ it('has four default destinations including Later, with no overlap or template d
   ).toThrow();
 });
 
-it('reclassifies the index after changing queue-folder settings without touching note bytes', () => {
-  const catalog = new Catalog();
+it('never reclassifies articles after changing capture destinations', () => {
+  const store = new ArticleStore(new MemoryVault());
+  const catalog = store.catalog;
   catalog.update('Custom/Inbox/Article.md', { type: 'article', status: 'archive' });
-  expect(catalog.article('Custom/Inbox/Article.md')?.queue).toBeUndefined();
-  catalog.setStatusFolders({ inbox: 'Custom/Inbox' });
-  expect(catalog.paths('Inbox')).toEqual(['Custom/Inbox/Article.md']);
-  catalog.setStatusFolders({});
+  store.setStatusFolders({ inbox: 'Custom/Inbox' });
+  expect(catalog.paths('Archive')).toEqual(['Custom/Inbox/Article.md']);
   expect(catalog.paths('Inbox')).toEqual([]);
 });
 
@@ -73,7 +67,7 @@ it('captures manual and feed articles into their respective queue folders', asyn
   expect(feed.path).toMatch(/^Reading\/Stream\//);
 });
 
-it('explicit status selection repairs placement even when YAML already agrees', async () => {
+it('explicit status selection leaves placement alone when YAML already agrees', async () => {
   const vault = new MemoryVault();
   const store = new ArticleStore(vault);
   const file = await vault.create(
@@ -82,7 +76,7 @@ it('explicit status selection repairs placement even when YAML already agrees', 
   );
   const snapshot = await store.read(file.path);
   const saved = await store.move(snapshot, 'Archive');
-  expect(saved.path).toBe('Reading/Treasury/Story.md');
+  expect(saved.path).toBe(snapshot.path);
   expect(saved.raw).toBe(snapshot.raw);
 });
 
@@ -96,13 +90,13 @@ it('protected articles archive on Delete, without trashing or recording a delete
   ] as const) {
     const file = await vault.create(`Reading/Stream/${name}.md`, createDocument(properties, body));
     await store.trash(await store.read(file.path));
-    expect(file.path).toBe(`Reading/Treasury/${name}.md`);
+    expect(file.path).toBe(`Reading/Stream/${name}.md`);
     expect(readDocument(await vault.read(file)).properties.status).toBe('archive');
   }
   expect(vault.trashed).toEqual([]);
 });
 
-it('never expires a YAML-only Feed article or a Feed-folder article with conflicting YAML', async () => {
+it('expires explicit Feed anywhere, but protects conflicting or missing status', async () => {
   const vault = new MemoryVault();
   const store = new ArticleStore(vault);
   for (const [path, status] of [
@@ -115,11 +109,11 @@ it('never expires a YAML-only Feed article or a Feed-folder article with conflic
     store.catalog.update(file.path, properties);
   }
   expect(await store.expire(new Date('2026-10-19'))).toEqual({
-    deleted: 0,
+    deleted: 1,
     retained: 0,
     promoted: 0,
   });
-  expect(vault.trashed).toEqual([]);
+  expect(vault.trashed).toEqual(['Reading/Inbox/Wrong folder.md']);
 });
 
 it('archives old Feed articles with topics or highlights rather than expiring them', async () => {

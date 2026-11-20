@@ -172,7 +172,7 @@ export class ReaderSettings extends PluginSettingTab {
     this.containerEl.createEl('h2', { text: 'Reader' });
     const candidate = { ...this.folders };
     this.containerEl.createEl('p', {
-      text: 'New articles go to their queue folder below (manual captures to Inbox, imported entries to Feed). Choose where new feed subscription notes are created. Applying settings never moves existing files or changes their Markdown.',
+      text: 'Choose where new article and subscription files are created. Reading lists follow YAML status, not folders. Applying settings never moves existing files or changes their Markdown.',
     });
     for (const key of folderKeys.filter((key) => key === 'feeds')) {
       const setting = new Setting(this.containerEl).setName(folderLabels[key]);
@@ -219,15 +219,15 @@ export class ReaderSettings extends PluginSettingTab {
             }
           }),
       );
-    this.containerEl.createEl('h3', { text: 'Article queue folders' });
+    this.containerEl.createEl('h3', { text: 'Article capture folders' });
     this.containerEl.createEl('p', {
-      text: 'An article’s folder determines its reading list, even when its YAML status disagrees. The four folders must be distinct and cannot overlap or be inside Templates or .trash. Reader moves articles when you explicitly change their status; applying settings does not move existing notes.',
+      text: 'These destinations apply only when creating new articles. Manual captures start with status: inbox; feed imports start with status: feed. Changing status updates YAML without moving the file. Needs attention is derived from saved text and source information, not a status.',
     });
     const mappings: Record<ArticleStatus, string> = {
       ...validateStatusFolders(this.statusFolders),
     };
     for (const status of articleStatuses) {
-      const setting = new Setting(this.containerEl).setName(`${status} folder`);
+      const setting = new Setting(this.containerEl).setName(`New ${status} articles`);
       setting.addText((control) => {
         control.setValue(mappings[status]).onChange((value) => {
           mappings[status] = value;
@@ -243,7 +243,7 @@ export class ReaderSettings extends PluginSettingTab {
       });
     }
     const mappingError = inlineFailure(this.containerEl);
-    new Setting(this.containerEl).setName('Apply status folders').addButton((button) =>
+    new Setting(this.containerEl).setName('Apply article capture folders').addButton((button) =>
       button.setButtonText('Apply mappings').onClick(async () => {
         button.setDisabled(true);
         const submitted = { ...mappings };
@@ -252,7 +252,7 @@ export class ReaderSettings extends PluginSettingTab {
           const next = validateStatusFolders(submitted);
           await this.saveStatusFolders(next);
           this.statusFolders = next;
-          new Notice('Status folders applied. Existing files were not moved.');
+          new Notice('Article capture folders applied. Existing files were not moved.');
         } catch (error) {
           if (error instanceof SavedSettingsError) this.statusFolders = submitted;
           report(mappingError, 'Apply mappings', error);

@@ -157,7 +157,18 @@ body.is-mobile.reader-mobile-active .mobile-navbar {
   bottom: calc(var(--reader-pane-padding) + var(--reader-controls-bottom));
 }
 .reader-toolbar {
-  grid-template-columns: repeat(5, 44px);
+  grid-template-columns: repeat(6, 44px);
+}
+@container reader-pane (max-width: 292px) {
+  .reader-toolbar {
+    grid-template-columns: repeat(3, 44px);
+  }
+  .reader-list {
+    --reader-controls-clearance: calc(108px + var(--reader-controls-bottom));
+  }
+  .reader-list.reader-triage-list {
+    --reader-controls-clearance: calc(156px + var(--reader-controls-bottom));
+  }
 }
 .reader-view button.reader-filter-active,
 .reader-view button.reader-filter-active:not(:disabled):hover {
@@ -400,6 +411,12 @@ body.is-mobile.reader-mobile-active .mobile-navbar {
 }
 .reader-shortcut-help button {
   min-height: 44px;
+}
+.reader-row-attention {
+  flex: 0 1 auto;
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+  overflow-wrap: anywhere;
 }
 .reader-list-title {
   flex: 1 1 auto;

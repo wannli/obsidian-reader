@@ -74,7 +74,7 @@ it('keeps emitter and plugin-owned reference counts bounded across generation re
   expect(plugin.register).not.toHaveBeenCalled();
 });
 
-it('places a live native Inbox capture but never touches template articles', async () => {
+it('indexes a live native Inbox capture in place but never touches template articles', async () => {
   const memory = new MemoryVault();
   const store = new ArticleStore(memory);
   const metadata = emitter(),
@@ -103,7 +103,7 @@ it('places a live native Inbox capture but never touches template articles', asy
       expect(await memory.read(file)).toBe(raw);
       expect(store.catalog.article(path)).toBeUndefined();
     } else {
-      expect(file.path).toBe('Reading/Inbox/QuickAdd.md');
+      expect(file.path).toBe(path);
       expect(readDocument(await memory.read(file)).properties.status).toBe('inbox');
     }
   }
@@ -134,7 +134,7 @@ it('updates YAML metadata without moving a note on an external status edit', asy
   metadata.emit('changed', file, updated, { frontmatter: readDocument(updated).properties });
   for (let i = 0; i < 10; i++) await Promise.resolve();
   expect(file.path).toBe('Reading/Inbox/Article.md');
-  expect(store.catalog.article(file.path)?.queue).toBe('Inbox');
+  expect(store.catalog.article(file.path)?.queue).toBe('Archive');
   expect(store.catalog.article(file.path)?.status).toBe('archive');
   stop();
 });

@@ -680,7 +680,7 @@ describe('Nodes v2 linked creation', () => {
         if (['Next', 'Previous', 'Archive', 'Read later', 'Delete'].includes(label))
           expect(f.view.file?.path).toBe(neighbour);
         if (label === 'Read later') {
-          expect(f.article.path).toBe('Reading/Later/A.md');
+          expect(f.article.path).toBe(sourcePath);
           expect((await f.store.read(f.article.path)).properties.status).toBe('later');
           expect(mocks.choose).not.toHaveBeenCalled();
           expect(f.api.createNodeForLink).toHaveBeenCalledTimes(1);
@@ -697,7 +697,7 @@ describe('Nodes v2 linked creation', () => {
           expect(f.api.createNodeForLink).toHaveBeenCalledTimes(2);
         if (label === 'Add highlight to notes…') expect(calls).toBe(2);
         if (label === 'Archive') {
-          expect(f.article.path).toBe('Reading/Treasury/A.md');
+          expect(f.article.path).toBe(sourcePath);
           expect((await f.store.read(f.article.path)).properties.status).toBe('archive');
         }
         if (label === 'Open Markdown')
@@ -743,7 +743,7 @@ describe('Nodes v2 linked creation', () => {
 
         expect(f.vault.trashed).toEqual([]);
         if (label === 'Delete') {
-          expect(f.article.path).toBe('Reading/Treasury/A.md');
+          expect(f.article.path).toBe(sourcePath);
           expect((await f.store.read(f.article.path)).properties.status).toBe('archive');
         }
         expect(f.vault.file(f.target.path)).toBe(f.target);

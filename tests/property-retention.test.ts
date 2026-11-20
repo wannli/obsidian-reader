@@ -122,7 +122,7 @@ describe('core YAML-link retention boundaries', () => {
     async ({ body, ...properties }) => {
       const f = await article(properties, body);
       await f.store.trash(f.snapshot);
-      expect(f.file.path).toBe('Reading/Treasury/260801 Article.md');
+      expect(f.file.path).toBe(f.snapshot.path);
       expect(f.vault.trashed).toEqual([]);
       expect(readDocument(await f.vault.read(f.file)).properties.status).toBe('archive');
       expect(readDocument(await f.vault.read(f.file)).body).toBe(body);
@@ -139,7 +139,7 @@ describe('core YAML-link retention boundaries', () => {
         promoted: 1,
         retained: 0,
       });
-      expect(f.file.path).toBe('Reading/Treasury/260801 Article.md');
+      expect(f.file.path).toBe(f.snapshot.path);
       expect(readDocument(await f.vault.read(f.file)).properties).toEqual({
         ...readDocument(before).properties,
         status: 'archive',
@@ -214,6 +214,6 @@ describe('core YAML-link retention boundaries', () => {
       ...readDocument(edited).properties,
       status: 'archive',
     });
-    expect(f.file.path).toBe('Reading/Treasury/260801 Article.md');
+    expect(f.file.path).toBe(f.snapshot.path);
   });
 });

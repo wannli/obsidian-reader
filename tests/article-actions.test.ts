@@ -82,7 +82,7 @@ describe('contextual five-button article bar', () => {
     expect(mocks.menuShown).toHaveBeenCalledOnce();
   });
 
-  it('uses folder membership rather than YAML status or the browsing queue', async () => {
+  it('uses YAML status rather than folder membership or the browsing queue', async () => {
     const f = hostFixture();
     const path = 'Reading/Stream/A.md';
     const article = await f.note(path);
@@ -92,8 +92,8 @@ describe('contextual five-button article bar', () => {
     f.store.catalog.update(path, { type: 'article', status: 'later' });
     f.probe.queue = 'Later';
     await f.view.openArticle(path, true);
-    expect(labels(f)).toContain('Trash article and advance');
-    expect(labels(f)).not.toContain('Highlight mode');
+    expect(labels(f)).not.toContain('Trash article and advance');
+    expect(labels(f)).toContain('Highlight mode');
   });
 
   it('groups reading tools and disposition separately from Trash, without duplicating primary actions', async () => {

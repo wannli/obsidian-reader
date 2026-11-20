@@ -235,9 +235,7 @@ describe('guarded article operations', () => {
     const result = await store.expire(new Date('2026-10-13'));
     expect(result).toEqual({ deleted: 2, promoted: 1, retained: 0 });
     expect(vault.trashed).toHaveLength(2);
-    expect(store.catalog.list('Archive').map((article) => article.path)).toEqual([
-      'Reading/Treasury/' + annotated.path.split('/').pop(),
-    ]);
+    expect(store.catalog.list('Archive').map((article) => article.path)).toEqual([annotated.path]);
     expect((await store.read(annotated.path)).properties.status).toBe('archive');
     expect((await store.read(annotated.path)).body).toBe(annotatedBody);
     expect(vault.trashed).not.toContain(annotated.path);
@@ -283,7 +281,7 @@ describe('guarded article operations', () => {
         promoted: 1,
         retained: 0,
       });
-      expect(file.path).toMatch(/^Reading\/Treasury\//);
+      expect(file.path).toMatch(/^Reading\/Stream\//);
       expect((await store.read(file.path)).properties.status).toBe('archive');
       expect(readDocument(await vault.read(file)).properties).toEqual({
         ...readDocument(raw).properties,
@@ -415,6 +413,7 @@ describe('incremental index and bounded work', () => {
       catalog.update(`Reading/Stream/261001 Article ${i}.md`, {
         type: 'article',
         title: `Article ${i}`,
+        status: 'feed',
         url: `https://example.com/${i}`,
       });
     expect(catalog.size).toBe(10_000);
@@ -424,6 +423,7 @@ describe('incremental index and bounded work', () => {
       catalog.update('Reading/Stream/261001 Article 0.md', {
         type: 'article',
         title: 'Article 0',
+        status: 'feed',
         url: 'https://example.com/0',
         bookmark: 'new marker',
       }),

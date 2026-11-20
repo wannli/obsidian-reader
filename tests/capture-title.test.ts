@@ -480,7 +480,7 @@ describe('expiry metadata prefilter', () => {
       promoted: 1,
       retained: 0,
     });
-    expect(annotated.path).toMatch(/^Reading\/Treasury\//);
+    expect(annotated.path).toMatch(/^Reading\/Stream\//);
     expect((await store.read(annotated.path)).properties.status).toBe('archive');
     expect((await store.read(annotated.path)).body).toContain('==highlight==');
     expect(vault.file(changed.path)).toBe(changed);

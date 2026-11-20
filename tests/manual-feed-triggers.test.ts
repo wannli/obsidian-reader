@@ -366,8 +366,8 @@ it('does not treat resolved after folder Apply as startup capture recovery', asy
     articles: 'Capture',
     feeds: 'Subscriptions',
   });
-  // A pre-existing external capture is indexed, but neither queued nor migrated on Apply.
-  expect(f.plugin.store.catalog.article(file.path)?.queue).toBeUndefined();
+  // Apply indexes YAML queue membership without migrating or acquiring captures.
+  expect(f.plugin.store.catalog.article(file.path)?.queue).toBe('Inbox');
   expect(file.path).toBe('Capture/Native.md');
   await f.metadata('resolved');
   await f.metadata('resolved');
@@ -385,9 +385,9 @@ it('does not treat resolved after folder Apply as startup capture recovery', asy
   await f.metadata('resolve', fresh);
   expect(f.plugin.ingestion.acquire).toHaveBeenCalledExactlyOnceWith(fresh.path);
   f.plugin.ingestion.acquire.mockClear();
-  // Foreground does not migrate or acquire pre-existing external captures.
+  // Explicit foreground recovery acquires YAML Inbox captures without relocating them.
   await f.event('visibilitychange');
-  expect(f.plugin.ingestion.acquire).not.toHaveBeenCalled();
+  expect(f.plugin.ingestion.acquire).toHaveBeenCalledExactlyOnceWith(file.path);
   expect(file.path).toBe('Capture/Native.md');
 });
 
@@ -437,7 +437,7 @@ it('preserves hidden/unloaded guards and hidden-view flushing', async () => {
 });
 
 it.each(['Root capture.md', 'Elsewhere/Nested/Capture.md'])(
-  'does not auto-acquire external inbox YAML outside the mapped folder: %s',
+  'auto-acquires explicit inbox YAML regardless of folder: %s',
   async (path) => {
     const f = await fixture();
     const file = { path, extension: 'md' };
@@ -449,9 +449,9 @@ it.each(['Root capture.md', 'Elsewhere/Nested/Capture.md'])(
     f.app.notes.set(path, { file, properties });
     f.plugin.store.catalog.update(path, properties);
     await f.metadata('resolve', file);
-    expect(f.plugin.store.catalog.article(path)?.queue).toBeUndefined();
+    expect(f.plugin.store.catalog.article(path)?.queue).toBe('Inbox');
     expect(file.path).toBe(path);
-    expect(f.plugin.ingestion.acquire).not.toHaveBeenCalled();
+    expect(f.plugin.ingestion.acquire).toHaveBeenCalledWith(path);
     expect(f.plugin.ingestion.refreshAll).not.toHaveBeenCalled();
   },
 );
@@ -462,7 +462,7 @@ it('does not acquire a missing-status native capture in Feed', async () => {
   const properties = { type: 'article', url: 'https://example.com/missing-status' };
   f.app.notes.set(file.path, { file, properties });
   f.plugin.store.catalog.update(file.path, properties);
-  expect(f.plugin.store.catalog.article(file.path)?.queue).toBe('Feed');
+  expect(f.plugin.store.catalog.article(file.path)?.queue).toBeUndefined();
   await f.metadata('resolve', file);
   await f.event('visibilitychange');
   expect(f.plugin.ingestion.acquire).not.toHaveBeenCalled();

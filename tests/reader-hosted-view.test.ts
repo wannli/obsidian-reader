@@ -224,7 +224,7 @@ describe('hosted highlight UI integration', () => {
       expect.any(Function),
     );
     expect(f.api.createNode).not.toHaveBeenCalled();
-    expect(f.article.path).toBe('Reading/Later/Hosted.md');
+    expect(f.article.path).toBe('Reading/Stream/Hosted.md');
     const source = await f.store.read(f.article.path),
       first = await f.vault.read(f.targets[0]),
       pending = await f.vault.read(created);

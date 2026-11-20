@@ -3,11 +3,10 @@ import { ArticleStore } from '../src/core/store';
 import { createDocument, readDocument } from '../src/core/document';
 import { queueStatus, queues } from '../src/core/model';
 import { MemoryVault, gate } from './helpers/memory-vault';
-import { defaultStatusFolders } from '../src/core/status-folders';
 
 const folders = { articles: 'Capture', feeds: 'Subscriptions' };
 
-it('captures into Inbox and moves through queue folders without losing authored data', async () => {
+it('captures into Inbox and changes status without moving or losing authored data', async () => {
   const vault = new MemoryVault(),
     store = new ArticleStore(vault, folders);
   const file = await store.capture({
@@ -25,13 +24,13 @@ it('captures into Inbox and moves through queue folders without losing authored 
   const move = vi.spyOn(vault, 'move');
   for (const queue of queues) {
     const saved = await store.move(await store.read(file.path), queue);
-    expect(file.path.startsWith(`${defaultStatusFolders[queueStatus(queue)]}/`)).toBe(true);
+    expect(file.path.startsWith('Reading/Inbox/')).toBe(true);
     expect(saved.body).toBe('Authored ==words==.\n');
     expect(saved.properties).toEqual({ ...properties, status: queueStatus(queue) });
     expect(store.catalog.article(file.path)?.queue).toBe(queue);
     expect(await store.capture({ url: 'https://example.com/new' })).toBe(file);
   }
-  expect(move).toHaveBeenCalled();
+  expect(move).not.toHaveBeenCalled();
 });
 
 it('archives protected annotations and expires only unprotected explicit feed in Stream', async () => {
@@ -47,7 +46,7 @@ it('archives protected annotations and expires only unprotected explicit feed in
   const saved = await store.annotate(await store.read(path), (raw) =>
     raw.replace('Keep words', '==Keep words=='),
   );
-  expect(annotated.path).toBe(path.replace('Reading/Stream/', 'Reading/Later/'));
+  expect(annotated.path).toBe(path);
   expect(saved.properties.status).toBe('later');
   const expired = await store.capture({
     url: 'https://example.com/disposable',

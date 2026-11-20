@@ -6,6 +6,7 @@ interface ListArticle {
   feed?: string;
   url?: string;
   published?: string;
+  attention?: string;
 }
 interface Row {
   path: string;
@@ -83,6 +84,15 @@ export class ListRows {
       }
       row.button.dataset.readerPath = article.path;
       if (row.title.textContent !== article.title) row.title.textContent = article.title;
+      let reason = row.button.querySelector('.reader-row-attention');
+      if (article.attention) {
+        if (!reason) {
+          reason = this.list.ownerDocument.createElement('span');
+          reason.className = 'reader-row-attention';
+          row.button.append(reason);
+        }
+        reason.textContent = article.attention;
+      } else reason?.remove();
       const meta = row.button.querySelector('.reader-row-meta');
       if (meta) {
         let source =

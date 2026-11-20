@@ -6,17 +6,17 @@ import { defaultStatusFolders } from '../src/core/status-folders';
 
 const folders: ReaderFolders = { articles: 'Capture', feeds: 'Subscriptions' };
 
-describe('folder-authoritative catalog independent of capture destinations', () => {
-  it('classifies articles by queue folder, regardless of conflicting YAML status', () => {
+describe('YAML-authoritative catalog independent of capture destinations', () => {
+  it('classifies articles by status regardless of their folder', () => {
     const catalog = new Catalog(folders);
     for (const queue of queues) {
       const path = `${defaultStatusFolders[queueStatus(queue)]}/a.md`;
-      catalog.update(path, { type: 'article', status: 'feed' });
+      catalog.update(path, { type: 'article', status: queueStatus(queue) });
       expect(catalog.article(path)?.queue).toBe(queue);
       expect(catalog.list(queue).some((article) => article.path === path)).toBe(true);
     }
     catalog.update('Notes/a.md', { type: 'article', status: 'inbox' });
-    expect(catalog.article('Notes/a.md')?.queue).toBeUndefined();
+    expect(catalog.article('Notes/a.md')?.queue).toBe('Inbox');
     expect(articleInfo('Capture/normal.md', { type: 'note', status: 'inbox' })).toBeUndefined();
   });
 

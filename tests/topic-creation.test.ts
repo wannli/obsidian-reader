@@ -805,17 +805,10 @@ describe('related-note creation and staged draft', () => {
     ]);
   });
 
-  it('advances its body/path baseline after relocation and allows only one creation per flow', async () => {
+  it('advances its saved baseline after retention and allows only one creation per flow', async () => {
     const f = await fixture();
     f.store.setStatusFolders({ later: 'Reading/Later' });
-    const move = f.vault.move.bind(f.vault);
-    vi.spyOn(f.vault, 'move').mockImplementation(async (file, path, guard) => {
-      await move(file, path, guard);
-      f.vault.bytes.set(
-        file,
-        (await f.vault.read(file)).replace('body', 'rewritten [[Topics/Old.md]] body'),
-      );
-    });
+    const move = vi.spyOn(f.vault, 'move');
     const setBody = vi.fn((body: string) => {
       f.probe.surface.displayedBody = body;
     });
@@ -828,9 +821,7 @@ describe('related-note creation and staged draft', () => {
     };
     let count = 0;
     f.api.createNodeForLink = vi.fn(async (options, link) => {
-      expect(options.sourcePath).toBe(
-        count === 0 ? 'Reading/Stream/Article.md' : 'Reading/Later/Article.md',
-      );
+      expect(options.sourcePath).toBe('Reading/Stream/Article.md');
       const path = `Topics/New${++count}.md`;
       await f.note(path, { type: 'topic' });
       await link(f.node(path));
@@ -839,8 +830,9 @@ describe('related-note creation and staged draft', () => {
     const first = await f.open();
     startCreate('New1');
     await tick();
-    expect(f.article.path).toBe('Reading/Later/Article.md');
-    expect(setBody).toHaveBeenCalledOnce();
+    expect(f.article.path).toBe('Reading/Stream/Article.md');
+    expect(setBody).not.toHaveBeenCalled();
+    expect(move).not.toHaveBeenCalled();
     search('New2');
     expect(creates()).toHaveLength(0);
     search('');
@@ -859,7 +851,7 @@ describe('related-note creation and staged draft', () => {
       '[[Topics/Other.md]]',
       '[[Topics/New2.md]]',
     ]);
-    expect((await f.saved()).body).toBe('rewritten [[Topics/Old.md]] body');
+    expect((await f.saved()).body).toBe('body');
   });
 
   it('rejects missing requested topic membership even when YAML and primary type advertise topic', async () => {

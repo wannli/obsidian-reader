@@ -38,7 +38,7 @@ This README describes the current source. An installed release may not include e
 
 To save several articles, use **Add articles from URLs**. Separate URLs with commas, semicolons, or newlines; `www.` links use HTTPS. Reader validates and deduplicates them before saving. Already saved articles remain if you cancel or a later save fails.
 
-Manual and browser-link captures go to `Reading/Inbox`; imported feed articles go to `Reading/Stream`. New native/QuickAdd notes with `type: article` and `status: inbox` are placed in Inbox when Reader observes their live creation. Configure the native capture tool to target Inbox too, especially for captures made while Reader is not running. Subscription notes default to `Reading/Feeds` (configurable). Reader can still read typed articles elsewhere, but they are not in a reading list.
+Manual and browser-link captures start with `status: inbox`; imported feed articles start with `status: feed`. Their default file destinations remain `Reading/Inbox` and `Reading/Stream`. Native/QuickAdd captures with `type: article` and `status: inbox` join Inbox wherever they are saved. Subscription notes default to `Reading/Feeds` (configurable). Reader never moves files to change their queue.
 
 ## A place for every article
 
@@ -53,7 +53,7 @@ Choosing a status from the article controls advances to the next article in your
 
 Highlighting or linking a passage in a Feed article moves it to Later before saving the annotation. **Simply opening or reading a Feed article does not keep it.** Choose Later or Archive if you want to retain it.
 
-Only notes in the Feed folder with explicit `status: feed` can expire, one calendar month after their publication date (or filename date as a fallback)—not a month after import. Articles with topics, highlights or other annotations are archived rather than trashed by Reader. In-use and unknown-age notes are protected. A missing or conflicting YAML status never authorizes deletion.
+Only articles with fresh explicit `status: feed` can expire, regardless of folder, one calendar month after their publication date (or filename date as a fallback)—not a month after import. Articles with topics, highlights or other annotations are archived rather than trashed by Reader. In-use and unknown-age notes are protected. A missing, unknown, or non-feed YAML status never authorizes automatic expiry.
 
 ### Find your way around
 
@@ -66,7 +66,9 @@ Only notes in the Feed folder with explicit `status: feed` can expire, one calen
 - On Boox/e-ink, enable **pagination (this device)** in Reader settings to use up/down touch page buttons or hardware Up/Down and PageUp/PageDown. Left/right article-navigation arrows are removed in both modes.
 - On iPhone, **Copy reading-list link** opens the library. **Copy dog-ear link** opens the last article you opened in Reader, or the first (newest) Inbox article if none is marked. Each gives you a vault-aware link for a Shortcuts **URL → Open URLs → Add to Home Screen** shortcut. You can also use **Open dog-eared article** from the command palette.
 
-Lists follow folders, not YAML `status`. Their configurable defaults are `Reading/Inbox`, `Reading/Stream` (Feed), `Reading/Later`, and `Reading/Treasury` (Archive); folders must not overlap. Moving a file yourself changes its list without rewriting YAML. Reader status actions update YAML and move the file, but changing settings never migrates existing notes. Reader excludes `Templates/` and `.trash/` at any depth. Moves follow Obsidian’s internal-link update preference; disabling it can break links.
+Lists follow YAML `status`: `inbox`, `feed`, `later`, or `archive`. Moving a file does not change its list; status actions update YAML without moving it. Missing or unknown statuses remain readable but unqueued. Capture-folder settings apply only to new files. Reader excludes `Templates/` and `.trash/` at any depth and never automatically migrates existing notes.
+
+**Needs attention** separates Inbox captures with no saved text when extraction has failed or the URL clearly identifies a video (such as YouTube). Open it from the list’s alert button. These notes keep `status: inbox` but stay out of normal Inbox navigation. Open an item for **Open original** and **Retry**, or archive/delete it normally. Pending/offline captures and videos with saved transcripts remain in Inbox. Adding readable text or a successful retry restores normal Inbox visibility; no readiness flags are persisted. Uncertain reads stay visible in Inbox.
 
 ## Follow feeds without the backlog
 
@@ -108,7 +110,7 @@ The article’s **Related notes** multiselect manages future defaults, not previ
 
 While reading, clicking a web link offers **Save to Inbox**, **Open link**, or **Cancel**. Saving keeps your current article open.
 
-For native iOS/QuickAdd capture, configure the destination as `Reading/Inbox` (or your configured Inbox folder), along with templates and shortcuts, directly in [Obsidian](https://help.obsidian.md/mobile/ios). Give captured notes `type: article`, `status: inbox`, and a `url` property. Reader can fetch the article while active and online when the body is empty or contains only a Markdown source link matching that URL. A plain URL body is not a supported placeholder.
+For native iOS/QuickAdd capture, configure your preferred destination, templates, and shortcuts directly in [Obsidian](https://help.obsidian.md/mobile/ios). Give captured notes `type: article`, `status: inbox`, and a `url` property. Reader can fetch the article while active and online when the body is empty or contains only a Markdown source link matching that URL. A plain URL body is not a supported placeholder.
 
 Reader leaves extra text, annotations, and native Full Text captures intact. Native captures keep their own filenames and can create duplicates. Reader capture and feed refresh check observed URL matches against current note contents. If several articles share a normalized URL, Reader reports a conflict rather than choosing or overwriting one; reconcile the notes explicitly before retrying. These checks are local, not a cross-device reservation. Reader does not install templates or change your capture setup.
 

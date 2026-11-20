@@ -67,6 +67,8 @@ export async function scanTopicArticles<
     read(file: File): Promise<string>;
     metadataMatch(article: ArticleInfo): boolean;
     bodyMatch(raw: string, article: ArticleInfo): boolean;
+    /** Uncertain reads must not silently hide Inbox items. */
+    uncertainMatch?(article: ArticleInfo): boolean;
   },
 ): Promise<{ paths: string[]; uncertain: number }> {
   const matches = new Set<string>();
@@ -92,11 +94,15 @@ export async function scanTopicArticles<
           file.stat.size !== size
         ) {
           uncertain++;
+          if (options.uncertainMatch?.(article)) matches.add(article.path);
           continue;
         }
         if (options.bodyMatch(raw, article)) matches.add(article.path);
       } catch {
-        if (!options.signal.aborted) uncertain++;
+        if (!options.signal.aborted) {
+          uncertain++;
+          if (options.uncertainMatch?.(article)) matches.add(article.path);
+        }
       }
     }
   };

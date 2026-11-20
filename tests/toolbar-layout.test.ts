@@ -29,7 +29,7 @@ describe('leaf-owned bottom toolbar alignment contract', () => {
     expect(controls).toContain('position: absolute;');
     expect(controls).toContain('left: 50%;');
     expect(controls).toContain('transform: translateX(-50%);');
-    expect(rule('.reader-toolbar')).toContain('repeat(5, 44px)');
+    expect(rule('.reader-toolbar')).toContain('repeat(6, 44px)');
     expect(rule('.reader-actions')).toContain('repeat(5, 44px)');
     expect(css).toContain('@container reader-pane (max-width: 260px)');
     expect(css).toContain('grid-template-columns: repeat(3, 44px);');

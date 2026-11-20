@@ -27,7 +27,10 @@ describe('truthful guarded deletion outcomes', () => {
         protectedBody ? 'archived-protected' : 'trashed',
       );
       expect(f.vault.trashed).toEqual(protectedBody ? [] : ['Reading/Inbox/A.md']);
-      if (protectedBody) expect(f.file.path).toBe('Reading/Treasury/A.md');
+      if (protectedBody) {
+        expect(f.file.path).toBe('Reading/Inbox/A.md');
+        expect((await f.store.read(f.file.path)).properties.status).toBe('archive');
+      }
     },
   );
 
@@ -48,7 +51,7 @@ describe('failed deletion outcomes', () => {
     'never returns success when native mutation fails (protected=%s)',
     async (protectedBody) => {
       const f = await coreFixture(protectedBody);
-      if (protectedBody) vi.spyOn(f.vault, 'move').mockRejectedValue(new Error('Move failed'));
+      if (protectedBody) vi.spyOn(f.vault, 'process').mockRejectedValue(new Error('Status failed'));
       else vi.spyOn(f.vault, 'trash').mockRejectedValue(new Error('Trash uncertain'));
       await expect(f.store.trash(f.snapshot)).rejects.toThrow();
       expect(f.vault.trashed).toEqual([]);
@@ -85,7 +88,7 @@ describe('visible status and retention guidance', () => {
     },
   );
 
-  it('uses folder membership, not YAML status, and does not change bytes', async () => {
+  it('uses YAML status, not folder membership, and does not change bytes', async () => {
     const f = hostFixture();
     const article = await f.note('Reading/Inbox/A.md');
     await f.vault.process(article, () =>
@@ -95,7 +98,7 @@ describe('visible status and retention guidance', () => {
     await f.view.openArticle(article.path, true);
     const before = await f.vault.read(article);
     f.view.refreshArticleControls();
-    expect(f.view.contentEl.querySelector('.reader-action-guidance details')).toBeNull();
+    expect(f.view.contentEl.querySelector('.reader-action-guidance details')).not.toBeNull();
     expect(await f.vault.read(article)).toBe(before);
   });
 });
@@ -113,7 +116,7 @@ describe('exception-only local archive feedback', () => {
       expect(outcome(f)?.textContent).toContain('Archived instead of trashed');
       expect(outcome(f)?.getAttribute('role')).toBe('status');
       expect(f.vault.trashed).toEqual([]);
-      expect(article.path).toBe('Reading/Treasury/A.md');
+      expect(article.path).toBe('Reading/Inbox/A.md');
       expect(f.view.file).toBe(next);
     },
   );

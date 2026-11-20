@@ -132,18 +132,18 @@ it('leaves malformed fresh saved configuration paused, but allows explicit repai
 });
 
 it.each([
-  [undefined, 'Reading/Stream/Story.md', 'Later'],
+  [undefined, 'Reading/Stream/Story.md', undefined],
   ['feed', 'Reading/Stream/Story.md', 'Later'],
-  ['inbox', 'Reading/Stream/Story.md', 'Later'],
-  ['later', 'Reading/Stream/Story.md', 'Later'],
-  ['archive', 'Reading/Stream/Story.md', 'Later'],
-  ['', 'Reading/Stream/Story.md', 'Later'],
-  [null, 'Reading/Stream/Story.md', 'Later'],
-  ['Feed', 'Reading/Stream/Story.md', 'Later'],
-  ['feed', 'Elsewhere/Story.md', undefined],
-  ['feed', 'Reading/Later/Story.md', undefined],
+  ['inbox', 'Reading/Stream/Story.md', undefined],
+  ['later', 'Reading/Stream/Story.md', undefined],
+  ['archive', 'Reading/Stream/Story.md', undefined],
+  ['', 'Reading/Stream/Story.md', undefined],
+  [null, 'Reading/Stream/Story.md', undefined],
+  ['Feed', 'Reading/Stream/Story.md', undefined],
+  ['feed', 'Elsewhere/Story.md', 'Later'],
+  ['feed', 'Reading/Later/Story.md', 'Later'],
 ])(
-  'rechecks folder membership despite fresh YAML status %j at %s before native promotion',
+  'rechecks fresh YAML status regardless of folder %j at %s before native promotion',
   async (status, path, destination) => {
     const f = await runtimeFixture();
     const file = { path },
