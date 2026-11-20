@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.29.0](https://github.com/wannli/obsidian-reader/compare/0.28.0...0.29.0) (2026-11-20)
+
+
+### Added
+
+* **reader:** use YAML queues and derive needs attention ([f1d4324](https://github.com/wannli/obsidian-reader/commit/f1d432474ba7fc16b89225128cf8cce18e2441f1))
+
 ## [0.28.0](https://github.com/wannli/obsidian-reader/compare/0.27.0...0.28.0) (2026-11-20)
 
 
