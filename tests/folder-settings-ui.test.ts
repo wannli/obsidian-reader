@@ -6,6 +6,7 @@ import { defaultStatusFolders } from '../src/core/status-folders';
 const ui = vi.hoisted(() => ({
   settings: [] as any[],
   notices: [] as string[],
+  alerts: [] as { textContent: string; role?: string }[],
   picker: undefined as any,
 }));
 vi.mock('../src/host/dialogs', () => ({ input: vi.fn() }));
@@ -18,7 +19,10 @@ vi.mock('obsidian', () => {
       return this;
     }
     onChange(change: (value: string) => void) {
-      this.change = change;
+      this.change = (value) => {
+        this.value = value;
+        change(value);
+      };
       return this;
     }
   }
@@ -73,8 +77,13 @@ vi.mock('obsidian', () => {
       containerEl = {
         empty: () => {
           ui.settings = [];
+          ui.alerts = [];
         },
-        createEl: () => {},
+        createEl: (_tag: string, options?: { attr?: { role?: string } }) => {
+          const element = { textContent: '', role: options?.attr?.role };
+          if (element.role === 'alert') ui.alerts.push(element);
+          return element;
+        },
       };
       constructor(public app: unknown) {}
     },
@@ -114,6 +123,8 @@ vi.mock('obsidian', () => {
   };
 });
 import { ReaderSettings } from '../src/host/settings';
+import { SavedSettingsError } from '../src/host/action-feedback';
+import { DEFAULT_SETTINGS } from '../src/host/fileclass/settings';
 
 beforeEach(() => {
   vi.restoreAllMocks();
@@ -185,6 +196,10 @@ it('rejects an unsafe path before persistence and does not update committed sett
   row('Feed subscriptions').input.change('../Unsafe');
   await row('Apply folder locations').buttons[0].click();
   expect(save).not.toHaveBeenCalled();
+  expect(ui.alerts.some((alert) => /Apply folders.*vault-relative/.test(alert.textContent))).toBe(
+    true,
+  );
+  expect(row('Feed subscriptions').input.value).toBe('../Unsafe');
   expect(ui.notices).toEqual([]);
   expect(console.error).toHaveBeenCalledWith(
     '[Reader]',
@@ -218,6 +233,8 @@ it('retains prior settings on persistence failure and disables duplicate apply w
   reject(new Error('Disk full'));
   await pending;
   expect(button.disabled).toBe(false);
+  expect(ui.alerts.some((alert) => /Apply folders: Disk full/.test(alert.textContent))).toBe(true);
+  expect(row('Feed subscriptions').input.value).toBe('Subscriptions');
   expect(ui.notices).toEqual([]);
   expect(console.error).toHaveBeenCalledWith(
     '[Reader]',
@@ -271,6 +288,78 @@ it('shows the four default queue destinations and applies a staged mapping as on
     later: 'Library/Later',
     archive: 'Library/Treasury',
   });
+});
+
+it('reports saved-but-not-applied settings truthfully and keeps the saved values', async () => {
+  const save = vi.fn(async () => {
+    throw new SavedSettingsError(new Error('Reader is paused; retry Apply folders.'));
+  });
+  const settings = new ReaderSettings(
+    {} as App,
+    {} as Plugin,
+    defaultFolders,
+    false,
+    save,
+    vi.fn(),
+  );
+  settings.display();
+  row('Feed subscriptions').input.change('Saved/Feeds');
+  await row('Apply folder locations').buttons[0].click();
+  expect(
+    ui.alerts.some((alert) => /Settings saved.*Reader is paused/.test(alert.textContent)),
+  ).toBe(true);
+  expect(row('Apply folder locations').buttons[0].disabled).toBe(false);
+  settings.display();
+  expect(row('Feed subscriptions').input.value).toBe('Saved/Feeds');
+});
+
+it('reports mapping and typed-note persistence failures locally and retains their drafts', async () => {
+  const fail = vi.fn(async () => {
+    throw new Error('Disk full');
+  });
+  const settings = new ReaderSettings(
+    {} as App,
+    {} as Plugin,
+    defaultFolders,
+    false,
+    vi.fn(),
+    vi.fn(),
+    {},
+    fail,
+    DEFAULT_SETTINGS,
+    fail,
+  );
+  settings.display();
+  row('later folder').input.change('Draft/Later');
+  await row('Apply status folders').buttons[0].click();
+  row('New typed-note folder').input.change('Draft/Nodes');
+  await row('Apply typed-note settings').buttons[0].click();
+  expect(ui.alerts.map((alert) => alert.textContent).join(' ')).toMatch(
+    /Apply mappings: Disk full.*Apply typed-note settings: Disk full/,
+  );
+  expect(row('later folder').input.value).toBe('Draft/Later');
+  expect(row('New typed-note folder').input.value).toBe('Draft/Nodes');
+});
+
+it('rolls back the pagination toggle and reports a failed device-local save', () => {
+  const settings = new ReaderSettings(
+    {} as App,
+    {} as Plugin,
+    defaultFolders,
+    false,
+    vi.fn(),
+    () => {
+      throw new Error('Storage blocked');
+    },
+  );
+  settings.display();
+  row('Boox / e-ink pagination (this device)').toggle.change(true);
+  expect(row('Boox / e-ink pagination (this device)').toggle.value).toBe(false);
+  expect(
+    ui.alerts.some((alert) =>
+      /Save pagination preference: Storage blocked/.test(alert.textContent),
+    ),
+  ).toBe(true);
 });
 
 it.each([

@@ -46,6 +46,7 @@ import {
 } from '../core/hosted-highlights';
 import { choose, confirmWebLink } from '../host/dialogs';
 import { logReaderError } from '../host/diagnostics';
+import { actionFailure, inlineFailure } from '../host/action-feedback';
 import { connectNodes, type RelationField } from '../host/node-relations';
 import type { Ingestion } from '../host/ingestion';
 import { nodesApi, type NodesApi, type NodeResult } from '../host/nodes';
@@ -121,6 +122,7 @@ export class ReaderView extends ItemView {
   private tapUndoUntil = 0;
   private tapUndoTimer?: ReturnType<typeof setTimeout>;
   private actions?: HTMLElement;
+  private actionError?: HTMLElement;
   private status?: HTMLElement;
   private statusMessage?: string;
   private articleTitle?: HTMLElement;
@@ -316,6 +318,10 @@ export class ReaderView extends ItemView {
         this.updateTriageActions();
         try {
           await action();
+          if (generation === this.generation) this.actionError?.remove();
+        } catch (error) {
+          this.reportActionFailure('Reader action failed', error, generation);
+          throw error;
         } finally {
           this.operating = false;
           this.updateTriageActions();
@@ -391,6 +397,24 @@ export class ReaderView extends ItemView {
   private error(error: unknown): void {
     if (!this.host.signal.aborted) logReaderError(error);
   }
+  private reportActionFailure(action: string, error: unknown, generation = this.generation): void {
+    if (this.stopping || this.host.signal.aborted || generation !== this.generation) return;
+    if (!this.actionError?.isConnected) {
+      this.actionError = inlineFailure(this.contentEl);
+      this.contentEl.prepend(this.actionError);
+    }
+    this.actionError.textContent = `${actionFailure(action, error)} Check the current note before retrying; some changes may already be saved. Open Markdown to inspect article changes.`;
+  }
+  private async userAction(label: string, action: () => void | Promise<void>): Promise<void> {
+    const generation = this.generation;
+    try {
+      await action();
+      if (generation === this.generation) this.actionError?.remove();
+    } catch (error) {
+      this.reportActionFailure(label, error, generation);
+      this.error(error);
+    }
+  }
   private button(
     parent: HTMLElement,
     label: string,
@@ -419,12 +443,8 @@ export class ReaderView extends ItemView {
       );
     }
     button.addEventListener('click', () => {
-      // Let the action register navigation intent synchronously, before yielding.
-      try {
-        void Promise.resolve(action()).catch((error) => this.error(error));
-      } catch (error) {
-        this.error(error);
-      }
+      // userAction invokes synchronously before its first await, preserving navigation intent.
+      void this.userAction(label, action);
     });
     return button;
   }
@@ -454,6 +474,7 @@ export class ReaderView extends ItemView {
     this.snapshot = undefined;
     this.fallbackFile = undefined;
     this.actions = undefined;
+    this.actionError = undefined;
     this.status = undefined;
     this.statusMessage = undefined;
     this.articleTitle = undefined;
@@ -1448,13 +1469,7 @@ export class ReaderView extends ItemView {
           .setIcon(action.icon)
           .setDisabled(!!action.disabled)
           .onClick(() => {
-            try {
-              void Promise.resolve(this.runArticleAction(action)).catch((error) =>
-                this.error(error),
-              );
-            } catch (error) {
-              this.error(error);
-            }
+            void this.userAction(action.label, () => this.runArticleAction(action));
           }),
       );
     }
@@ -1543,7 +1558,12 @@ export class ReaderView extends ItemView {
           ? this.saveTapNode(surface.body, range)
           : this.saveTapSelection(surface.body, range),
       undo: () => this.undoTapHighlight(),
-      notify: (error) => this.error(error),
+      notify: (error) => {
+        if (this.surface === surface) {
+          this.reportActionFailure('Save passage', error);
+          this.error(error);
+        }
+      },
     });
   }
   private updateStatus(): void {
@@ -3640,11 +3660,7 @@ export class ReaderView extends ItemView {
       );
       if (action) {
         event.preventDefault();
-        try {
-          void Promise.resolve(this.runArticleAction(action)).catch((error) => this.error(error));
-        } catch (error) {
-          this.error(error);
-        }
+        void this.userAction(action.label, () => this.runArticleAction(action));
         return;
       }
     }

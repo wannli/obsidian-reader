@@ -22,6 +22,17 @@ body.is-mobile.reader-mobile-active .mobile-navbar {
   padding: var(--reader-pane-padding);
   overflow: hidden;
 }
+.reader-action-error {
+  color: var(--text-error);
+  overflow-wrap: anywhere;
+  margin: 0;
+  flex-shrink: 0;
+  max-height: 25vh;
+  overflow-y: auto;
+}
+.reader-action-error:empty {
+  display: none;
+}
 .reader-view *,
 .reader-view *::before,
 .reader-view *::after {

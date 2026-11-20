@@ -546,11 +546,22 @@ describe('subscription import contracts', () => {
     expect(h.store.catalog.feeds()).toHaveLength(1);
   });
 
+  it('returns both the feed failure and error-property persistence failure to the initiating UI', async () => {
+    const h = host();
+    await seedFeed(h);
+    serve(() => response('', 503));
+    vi.spyOn(h.vault, 'process').mockRejectedValueOnce(new Error('Disk full'));
+    const failures = await h.ingestion.refreshAll();
+    expect(failures).toHaveLength(1);
+    expect(failures[0]).toMatch(/HTTP 503.*could not save the subscription error.*Disk full/);
+  });
+
   it('records a feed failure and clears it after a successful retry', async () => {
     const h = host(),
       feed = await seedFeed(h);
     serve(() => response('', 503));
-    await h.ingestion.refreshAll();
+    const failures = await h.ingestion.refreshAll();
+    expect(failures).toEqual([expect.stringContaining('Feed returned HTTP 503.')]);
     expect(h.store.catalog.feed(feed.path)?.error).toBe('Feed returned HTTP 503.');
     expect(h.notify).toHaveBeenCalledWith(expect.stringContaining('Feed returned HTTP 503.'));
     serve(() => response(xml([])));

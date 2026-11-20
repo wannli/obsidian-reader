@@ -23,6 +23,7 @@ import {
 } from './core/status-folders';
 import { Network } from './host/network';
 import { logReaderError } from './host/diagnostics';
+import { SavedSettingsError } from './host/action-feedback';
 import { readDocument } from './core/document';
 import { ArticleStore } from './core/store';
 import { confirmArticleReplacement, input } from './host/dialogs';
@@ -249,11 +250,7 @@ export default class ReaderPlugin extends Plugin {
         this.paged,
         (next) => this.applyFolders(next),
         (value) => {
-          try {
-            localStorage.setItem('obsidian-reader:eink', value ? '1' : '0');
-          } catch (error) {
-            this.notice(error);
-          }
+          localStorage.setItem('obsidian-reader:eink', value ? '1' : '0');
         },
         statusFolders,
         (next) =>
@@ -262,12 +259,18 @@ export default class ReaderPlugin extends Plugin {
             const data = await this.loadData();
             if (this.unloaded) throw new Error('Reader has stopped.');
             await this.saveData(saveStatusFolderSettings(data, next));
-            if (!this.unloaded) {
-              this.statusFolders = validateStatusFolders(next);
-              this.store.setStatusFolders(this.statusFolders);
-              await Promise.allSettled(
-                this.views().map((view) => view.changed({ path: '', metadataChanged: true })),
-              );
+            try {
+              if (!this.unloaded) {
+                this.statusFolders = validateStatusFolders(next);
+                this.store.setStatusFolders(this.statusFolders);
+                const results = await Promise.allSettled(
+                  this.views().map((view) => view.changed({ path: '', metadataChanged: true })),
+                );
+                if (results.some((result) => result.status === 'rejected'))
+                  throw new Error('A Reader view could not refresh. Reopen the reading list.');
+              }
+            } catch (error) {
+              throw new SavedSettingsError(error);
             }
           }),
         typedSettings,
@@ -282,7 +285,11 @@ export default class ReaderPlugin extends Plugin {
               ...(stored && typeof stored === 'object' ? stored : {}),
               typedNotes: next,
             });
-            if (!this.unloaded) this.typedNotes?.configure(next);
+            try {
+              if (!this.unloaded) this.typedNotes?.configure(next);
+            } catch (error) {
+              throw new SavedSettingsError(error);
+            }
           }),
       ),
     );
@@ -470,58 +477,62 @@ export default class ReaderPlugin extends Plugin {
       const data = await this.loadData();
       assertLoaded();
       await this.saveData(saveFolderSettings(data, folders));
-      assertLoaded();
-      // No candidate path becomes live until the complete group is valid and durable.
-      const retiring = this.runtime;
-      for (const view of this.views()) view.stopForUnload();
-      this.stopFolders();
-      while (this.viewWrites.size) await Promise.allSettled([...this.viewWrites]);
-      await retiring.drain();
-      assertLoaded();
-      const cleared = await Promise.allSettled(
-        this.views().map(async (view) => {
-          const leaf = view.leaf;
-          view.stopForUnload();
-          if (leaf.view !== view) return;
-          await leaf.setViewState({ type: 'empty', active: false });
-          const empty = leaf.view;
-          return empty.getViewType() === 'empty' ? { leaf, empty } : undefined;
-        }),
-      );
-      assertLoaded();
-      if (cleared.some((result) => result.status === 'rejected'))
-        throw new Error(
-          'Folders saved, but a Reader tab could not close. Reader is paused; retry Apply folders.',
+      try {
+        assertLoaded();
+        // No candidate path becomes live until the complete group is valid and durable.
+        const retiring = this.runtime;
+        for (const view of this.views()) view.stopForUnload();
+        this.stopFolders();
+        while (this.viewWrites.size) await Promise.allSettled([...this.viewWrites]);
+        await retiring.drain();
+        assertLoaded();
+        const cleared = await Promise.allSettled(
+          this.views().map(async (view) => {
+            const leaf = view.leaf;
+            view.stopForUnload();
+            if (leaf.view !== view) return;
+            await leaf.setViewState({ type: 'empty', active: false });
+            const empty = leaf.view;
+            return empty.getViewType() === 'empty' ? { leaf, empty } : undefined;
+          }),
         );
-      const reset = cleared.flatMap((result) =>
-        result.status === 'fulfilled' && result.value ? [result.value] : [],
-      );
-      // Applying folders is not startup/recovery. Seed the replay hold by file identity;
-      // new captures remain eligible without reopening or acquiring existing articles.
-      this.runtime = new FolderRuntime({
-        recoverStartup: false,
-        deferredSeeds: this.app.vault.getMarkdownFiles(),
-      });
-      this.startFolders(folders);
-      const signal = this.signal;
-      // Metadata-only reseed above: never recover/acquire/promote or reopen articles here.
-      const reopened = await Promise.allSettled(
-        reset.map(async (entry) => {
-          if (!entry || entry.leaf.view !== entry.empty || signal.aborted) return;
-          let attached = false;
-          this.app.workspace.iterateAllLeaves((leaf) => {
-            if (leaf === entry.leaf) attached = true;
-          });
-          if (attached)
-            await this.dispatchView(() =>
-              entry.leaf.setViewState({ type: READER_VIEW, state: {}, active: false }),
-            );
-        }),
-      );
-      assertLoaded();
-      if (reopened.some((result) => result.status === 'rejected'))
-        this.notice('Folders applied, but a Reader tab could not reopen. Use Open reading list.');
-      this.syncMobileNavigation();
+        assertLoaded();
+        if (cleared.some((result) => result.status === 'rejected'))
+          throw new Error(
+            'Folders saved, but a Reader tab could not close. Reader is paused; retry Apply folders.',
+          );
+        const reset = cleared.flatMap((result) =>
+          result.status === 'fulfilled' && result.value ? [result.value] : [],
+        );
+        // Applying folders is not startup/recovery. Seed the replay hold by file identity;
+        // new captures remain eligible without reopening or acquiring existing articles.
+        this.runtime = new FolderRuntime({
+          recoverStartup: false,
+          deferredSeeds: this.app.vault.getMarkdownFiles(),
+        });
+        this.startFolders(folders);
+        const signal = this.signal;
+        // Metadata-only reseed above: never recover/acquire/promote or reopen articles here.
+        const reopened = await Promise.allSettled(
+          reset.map(async (entry) => {
+            if (!entry || entry.leaf.view !== entry.empty || signal.aborted) return;
+            let attached = false;
+            this.app.workspace.iterateAllLeaves((leaf) => {
+              if (leaf === entry.leaf) attached = true;
+            });
+            if (attached)
+              await this.dispatchView(() =>
+                entry.leaf.setViewState({ type: READER_VIEW, state: {}, active: false }),
+              );
+          }),
+        );
+        assertLoaded();
+        if (reopened.some((result) => result.status === 'rejected'))
+          throw new Error('A Reader tab could not reopen. Use Open reading list.');
+        this.syncMobileNavigation();
+      } catch (error) {
+        throw new SavedSettingsError(error);
+      }
     });
   }
   private rememberArticleFragment(event: MouseEvent): void {

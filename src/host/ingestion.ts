@@ -216,7 +216,8 @@ export class Ingestion {
     await this.store.vault.trash(file, validate);
     this.store.catalog.remove(feed.path);
   }
-  async refreshAll(): Promise<void> {
+  async refreshAll(): Promise<string[]> {
+    const failures: string[] = [];
     await Promise.all(
       this.store.catalog
         .feeds()
@@ -226,11 +227,15 @@ export class Ingestion {
           return this.work
             .enqueue(`feed:${feed.path}`, () => this.refresh(feed, guard))
             .catch((error) => {
-              if (this.active && !(error instanceof CancelledFeed))
-                this.notify(`${feed.title}: ${String(error)}`);
+              if (this.active && !(error instanceof CancelledFeed)) {
+                const failure = `${feed.title}: ${String(error)}`;
+                failures.push(failure);
+                this.notify(failure);
+              }
             });
         }),
     );
+    return failures;
   }
   private async refresh(feed: Subscription, guard = this.feedGuard(feed)): Promise<void> {
     try {
@@ -267,11 +272,18 @@ export class Ingestion {
     } catch (error) {
       if (!this.active || error instanceof CancelledFeed) return;
       guard.check();
-      await this.feedError(
-        feed,
-        error instanceof Error ? error.message : String(error),
-        guard.check,
-      );
+      try {
+        await this.feedError(
+          feed,
+          error instanceof Error ? error.message : String(error),
+          guard.check,
+        );
+      } catch (saveError) {
+        if (!this.active || saveError instanceof CancelledFeed) return;
+        throw new Error(
+          `${String(error)}; could not save the subscription error: ${String(saveError)}`,
+        );
+      }
       throw error;
     }
   }

@@ -2,6 +2,8 @@ import { Modal, Notice, PluginSettingTab, Setting, type App, type Plugin } from 
 import { folderKeys, folderLabels, validateFolders, type ReaderFolders } from '../core/folders';
 import { FolderPicker } from './folder-picker';
 import { logReaderError } from './diagnostics';
+import { actionFailure, inlineFailure, SavedSettingsError } from './action-feedback';
+import { readDocument } from '../core/document';
 import { readTriageFlags, saveTriageFlag, triageFlags } from '../reader/feed-triage';
 import type { Ingestion } from './ingestion';
 import type { ArticleStore } from '../core/store';
@@ -23,6 +25,8 @@ export function showFeeds(
 ): void {
   class Feeds extends Modal {
     private closed = false;
+    private failures = new Map<string, string>();
+    private pending = new Set<string>();
     onOpen(): void {
       this.setTitle('Subscriptions');
       this.render();
@@ -30,21 +34,58 @@ export function showFeeds(
     private render(): void {
       if (this.closed) return;
       this.contentEl.empty();
-      const run = async (action: () => Promise<void>) => {
+      const run = async (key: string, label: string, action: () => Promise<void>) => {
+        if (this.closed || signal.aborted || this.pending.has(key)) return;
+        this.pending.add(key);
         try {
           await action();
-          this.render();
+          this.failures.delete(key);
         } catch (error) {
-          if (!this.closed) logReaderError(error);
+          if (this.closed || signal.aborted) return;
+          logReaderError(error);
+          // A native write can finish before rejecting. Observe fresh bytes, never roll back.
+          let uncertain = false;
+          if (key !== 'sync') {
+            try {
+              const file = store.vault.file(key);
+              if (file) {
+                const revision = file.stat && { mtime: file.stat.mtime, size: file.stat.size };
+                const indexed = store.catalog.feed(key);
+                const raw = await store.vault.read(file);
+                if (this.closed || signal.aborted) return;
+                if (
+                  !revision ||
+                  file.path !== key ||
+                  store.vault.file(key) !== file ||
+                  file.stat.mtime !== revision.mtime ||
+                  file.stat.size !== revision.size ||
+                  store.catalog.feed(key) !== indexed
+                ) {
+                  // A newer observation owns the catalog; never publish this stale read.
+                  uncertain = true;
+                } else store.catalog.update(key, readDocument(raw).properties);
+              } else store.catalog.remove(key);
+            } catch {
+              uncertain = true;
+            }
+          }
+          if (this.closed || signal.aborted) return;
+          this.failures.set(
+            key,
+            `${actionFailure(label, error)}${uncertain ? ' Current subscription state could not be verified; newer observed state was kept.' : ''} Check the subscription note before trying again. Saved articles are kept.`,
+          );
+        } finally {
+          this.pending.delete(key);
+          if (!this.closed && !signal.aborted) this.render();
         }
       };
-      for (const feed of store.catalog.feeds())
+      for (const feed of store.catalog.feeds()) {
         new Setting(this.contentEl)
           .setName(feed.title)
           .setDesc(feed.error ?? feed.url)
           .addToggle((toggle) =>
             toggle.setValue(feed.enabled).onChange((enabled) => {
-              void run(() => ingestion.setFeed(feed, enabled));
+              void run(feed.path, 'Change subscription', () => ingestion.setFeed(feed, enabled));
             }),
           )
           .addButton((button) =>
@@ -52,9 +93,16 @@ export function showFeeds(
               .setButtonText('Unsubscribe')
               .setWarning()
               .onClick(() => {
-                void run(() => ingestion.unsubscribe(feed));
+                void run(feed.path, 'Unsubscribe', () => ingestion.unsubscribe(feed));
               }),
           );
+        const failure = this.failures.get(feed.path);
+        if (failure) inlineFailure(this.contentEl).textContent = failure;
+      }
+      // Retain errors even when an uncertain unsubscribe removed its row.
+      for (const [key, failure] of this.failures)
+        if (key === 'sync' || !store.catalog.feeds().some((feed) => feed.path === key))
+          inlineFailure(this.contentEl).textContent = failure;
       this.contentEl.createEl('p', {
         text: 'Adding saves a subscription without fetching. Edit its note before clicking Sync. Unsubscribing trashes only the subscription note; existing articles are kept.',
       });
@@ -75,7 +123,13 @@ export function showFeeds(
         )
         .addButton((button) =>
           button.setButtonText('Sync').onClick(() => {
-            void run(() => ingestion.refreshAll());
+            void run('sync', 'Sync feeds', async () => {
+              const failures = await ingestion.refreshAll();
+              if (failures?.length)
+                throw new Error(
+                  `${failures.join('; ')}. Some articles may already have been imported.`,
+                );
+            });
           }),
         );
     }
@@ -92,6 +146,7 @@ export function showFeeds(
   modal.open();
 }
 export class ReaderSettings extends PluginSettingTab {
+  private displayEpoch = 0;
   constructor(
     app: App,
     plugin: Plugin,
@@ -107,6 +162,12 @@ export class ReaderSettings extends PluginSettingTab {
     super(app, plugin);
   }
   display(): void {
+    const epoch = ++this.displayEpoch;
+    const report = (element: HTMLElement, action: string, error: unknown) => {
+      logReaderError(error);
+      if (epoch === this.displayEpoch)
+        element.textContent = `${actionFailure(action, error)} Review the values and apply again.`;
+    };
     this.containerEl.empty();
     this.containerEl.createEl('h2', { text: 'Reader' });
     const candidate = { ...this.folders };
@@ -129,6 +190,7 @@ export class ReaderSettings extends PluginSettingTab {
         );
       });
     }
+    const folderError = inlineFailure(this.containerEl);
     new Setting(this.containerEl)
       .setName('Apply folder locations')
       .setDesc(
@@ -140,15 +202,18 @@ export class ReaderSettings extends PluginSettingTab {
           .setCta()
           .onClick(async () => {
             button.setDisabled(true);
+            const submitted = { ...candidate };
             try {
-              const folders = validateFolders(candidate);
+              folderError.textContent = '';
+              const folders = validateFolders(submitted);
               await this.saveFolders(folders);
               this.folders = folders;
               new Notice(
                 'Reader folders applied; Reader returned to the reading list. Existing files were not moved.',
               );
             } catch (error) {
-              logReaderError(error);
+              if (error instanceof SavedSettingsError) this.folders = submitted;
+              report(folderError, 'Apply folders', error);
             } finally {
               button.setDisabled(false);
             }
@@ -177,16 +242,20 @@ export class ReaderSettings extends PluginSettingTab {
         );
       });
     }
+    const mappingError = inlineFailure(this.containerEl);
     new Setting(this.containerEl).setName('Apply status folders').addButton((button) =>
       button.setButtonText('Apply mappings').onClick(async () => {
         button.setDisabled(true);
+        const submitted = { ...mappings };
         try {
-          const next = validateStatusFolders(mappings);
+          mappingError.textContent = '';
+          const next = validateStatusFolders(submitted);
           await this.saveStatusFolders(next);
           this.statusFolders = next;
           new Notice('Status folders applied. Existing files were not moved.');
         } catch (error) {
-          logReaderError(error);
+          if (error instanceof SavedSettingsError) this.statusFolders = submitted;
+          report(mappingError, 'Apply mappings', error);
         } finally {
           button.setDisabled(false);
         }
@@ -211,17 +280,21 @@ export class ReaderSettings extends PluginSettingTab {
             draft.classProperty = value;
           }),
         );
+      const typedError = inlineFailure(this.containerEl);
       new Setting(this.containerEl).setName('Apply typed-note settings').addButton((button) =>
         button.setButtonText('Apply').onClick(async () => {
           button.setDisabled(true);
+          const submitted = { ...draft };
           try {
-            const invalid = validateTypedNotes(draft);
+            typedError.textContent = '';
+            const invalid = validateTypedNotes(submitted);
             if (invalid) throw new Error(invalid);
-            await this.saveTypedNotes(draft);
-            this.typedNotes = { ...draft };
+            await this.saveTypedNotes(submitted);
+            this.typedNotes = submitted;
             new Notice('Typed-note settings applied. Existing notes were not changed.');
           } catch (error) {
-            logReaderError(error);
+            if (error instanceof SavedSettingsError) this.typedNotes = submitted;
+            report(typedError, 'Apply typed-note settings', error);
           } finally {
             button.setDisabled(false);
           }
@@ -231,6 +304,7 @@ export class ReaderSettings extends PluginSettingTab {
     this.containerEl.createEl('h3', { text: 'Experimental Feed triage (this device)' });
     const flags = readTriageFlags();
     for (const flag of triageFlags) {
+      const flagError = inlineFailure(this.containerEl);
       new Setting(this.containerEl)
         .setName(flag === 'feedPreviews' ? 'Feed previews' : 'Feed touch actions')
         .setDesc(
@@ -242,16 +316,18 @@ export class ReaderSettings extends PluginSettingTab {
         .addToggle((control) =>
           control.setValue(flags[flag]).onChange((value) => {
             try {
+              flagError.textContent = '';
               saveTriageFlag(flag, value);
             } catch (error) {
               control.setValue(flags[flag]);
-              logReaderError(error);
+              report(flagError, 'Save device preference', error);
               return;
             }
             flags[flag] = value;
           }),
         );
     }
+    const pagedError = inlineFailure(this.containerEl);
     new Setting(this.containerEl)
       .setName('Boox / e-ink pagination (this device)')
       .setDesc(
@@ -259,8 +335,14 @@ export class ReaderSettings extends PluginSettingTab {
       )
       .addToggle((control) =>
         control.setValue(this.paged).onChange((value) => {
-          this.paged = value;
-          this.savePaged(value);
+          pagedError.textContent = '';
+          try {
+            this.savePaged(value);
+            this.paged = value;
+          } catch (error) {
+            control.setValue(this.paged);
+            report(pagedError, 'Save pagination preference', error);
+          }
         }),
       );
     this.containerEl.createEl('p', {
