@@ -71,7 +71,9 @@ import { hasNodeClass } from '../core/node-choices';
 import type { LibraryChange } from '../host/vault';
 import { ReadingSurface } from './surface';
 import { selectedPassage, selectionRange } from './render';
-import { TapHighlighter, type TapToolbarAction } from './tap-highlighter';
+import { TapHighlighter, type TapToolbarAction, type TapMode } from './tap-highlighter';
+import type { ClippingStore } from '../core/clipping-store';
+import { clippingOverlaps } from './clipping-marks';
 import { articleActionKeys, type ArticleAction } from './article-actions';
 
 export const READER_VIEW = 'obsidian-reader';
@@ -109,6 +111,8 @@ interface ReaderHost {
   signal: AbortSignal;
   paged: boolean;
   capture(): void;
+  clippings?: ClippingStore<TFile>;
+  configureClippings?(): Promise<void>;
   edit(view: ReaderView, file: TFile): Promise<void>;
   refreshPresentation?(view: ReaderView, valid: () => boolean): Promise<void>;
 }
@@ -133,7 +137,9 @@ export class ReaderView extends ItemView {
     draft: NodeResult[];
   };
   private tapMode = false;
-  private tapKind: 'highlight' | 'node' = 'highlight';
+  private tapKind: TapMode = 'highlight';
+  private clippingCapture?: AbortController;
+  private clippingScan?: AbortController;
   private tapUndo?: { snapshot: Snapshot<TFile>; before: string; passage: Passage };
   private tapUndoUntil = 0;
   private tapUndoTimer?: ReturnType<typeof setTimeout>;
@@ -261,15 +267,50 @@ export class ReaderView extends ItemView {
         if (this.topicClicked(event)) return;
         // Tap mode suppresses modified clicks on its body. Preserve explicit
         // reference navigation before that handler, without also filing a copy.
-        if ((event.ctrlKey || event.metaKey) && this.targetClicked(event)) event.stopPropagation();
+        if (
+          (event.ctrlKey || event.metaKey) &&
+          (this.clippingClicked(event) || this.targetClicked(event))
+        )
+          event.stopPropagation();
       },
       { ...options, capture: true },
     );
     this.contentEl.addEventListener('click', (event) => this.clicked(event), options);
     this.contentEl.addEventListener(
+      'keydown',
+      (event) => {
+        const mark =
+          event.target instanceof Element
+            ? event.target.closest<HTMLElement>('[data-reader-clipping]')
+            : undefined;
+        if (
+          event.key !== 'Enter' ||
+          event.repeat ||
+          event.ctrlKey ||
+          event.metaKey ||
+          event.altKey ||
+          event.shiftKey ||
+          this.stopping ||
+          !mark ||
+          !this.snapshot ||
+          !this.surface?.body.contains(mark) ||
+          this.surface.selection()
+        )
+          return;
+        event.preventDefault();
+        event.stopPropagation();
+        this.cancelNodeCreation();
+        void this.userAction('Open clipping', () =>
+          openExistingNote(this.app, mark.dataset.readerClipping!, this.snapshot!.path),
+        );
+      },
+      options,
+    );
+    this.contentEl.addEventListener(
       'auxclick',
       (event) => {
-        if (event.button === 1 && !this.topicClicked(event)) this.targetClicked(event);
+        if (event.button === 1 && !this.topicClicked(event) && !this.clippingClicked(event))
+          this.targetClicked(event);
       },
       options,
     );
@@ -313,6 +354,8 @@ export class ReaderView extends ItemView {
   private disposeReading(): void {
     if (this.lifetime.signal.aborted) return;
     this.lifetime.abort();
+    this.clippingScan?.abort();
+    this.clippingCapture?.abort();
     this.generation++;
     this.clearSend();
     this.passageActions = undefined;
@@ -950,7 +993,11 @@ export class ReaderView extends ItemView {
       );
     if (this.snapshot && !this.tapMode) {
       for (const action of this.articleCommands) {
-        if (!action.disabled && !actions.some(([key]) => key === action.key.toUpperCase()))
+        if (
+          action.key &&
+          !action.disabled &&
+          !actions.some(([key]) => key === action.key.toUpperCase())
+        )
           actions.push([action.key.toUpperCase(), action.label]);
       }
     }
@@ -1516,6 +1563,22 @@ export class ReaderView extends ItemView {
         group: 'reading',
         run: () => this.connectFromArticle(),
       });
+    if (this.host.clippings)
+      commands.splice(1, 0, {
+        key: 'v',
+        label: 'Keep passage',
+        icon: 'bookmark-plus',
+        group: 'reading',
+        run: () => this.startTapMode('clip'),
+      });
+    if (this.host.configureClippings)
+      commands.push({
+        key: '',
+        label: 'Configure clippings',
+        icon: 'settings',
+        group: 'reading',
+        run: () => this.host.configureClippings!(),
+      });
     this.articleCommands = commands;
     const feed = this.host.store.catalog.article(this.snapshot.path)?.queue === 'Feed';
     const primary = articleActionKeys(feed, this.surface.paged);
@@ -1553,8 +1616,9 @@ export class ReaderView extends ItemView {
     }
     this.setupTapHighlighter();
     this.updateStatus();
+    this.refreshClippings();
   }
-  private startTapMode(mode: 'highlight' | 'node'): void {
+  private startTapMode(mode: TapMode): void {
     const highlighter = this.tapHighlighter;
     highlighter?.setActive(true, true, mode);
     queueMicrotask(() => {
@@ -1637,7 +1701,8 @@ export class ReaderView extends ItemView {
       modeChanged: (active, mode) => {
         this.tapMode = active;
         if (!active) this.selectedPassage = undefined;
-        if (active) this.tapKind = mode === 'node' ? 'node' : 'highlight';
+        if (active) this.tapKind = mode ?? 'highlight';
+        if (!active) this.clippingCapture?.abort();
         this.invalidateSelection();
         this.automatic = undefined;
         this.lastSelection = '';
@@ -1647,7 +1712,7 @@ export class ReaderView extends ItemView {
           this.controls();
           const trigger =
             this.actions?.querySelector<HTMLButtonElement>(
-              this.tapKind === 'node'
+              this.tapKind !== 'highlight'
                 ? '[aria-label="More article actions"]'
                 : '[data-reader-key="h"]',
             ) ??
@@ -1656,7 +1721,7 @@ export class ReaderView extends ItemView {
         }
       },
       passageActions: () => this.passageActions,
-      onTarget: (event) => this.targetClicked(event),
+      onTarget: (event) => this.clippingClicked(event) || this.targetClicked(event),
       onPassage: (word, event) => {
         const origin =
           word.startContainer.nodeType === 1
@@ -1675,9 +1740,11 @@ export class ReaderView extends ItemView {
         }
       },
       save: (range, mode) =>
-        mode === 'node'
-          ? this.saveTapNode(surface.body, range)
-          : this.saveTapSelection(surface.body, range),
+        mode === 'clip'
+          ? this.keepClipping(selectedPassage(surface.body, range))
+          : mode === 'node'
+            ? this.saveTapNode(surface.body, range)
+            : this.saveTapSelection(surface.body, range),
       undo: () => this.undoTapHighlight(),
       notify: (error) => {
         if (this.surface === surface) {
@@ -1723,6 +1790,174 @@ export class ReaderView extends ItemView {
   }
   private invalidateSelection(): number {
     return this.selectionState.invalidate();
+  }
+  private refreshClippings(): void {
+    const service = this.host.clippings,
+      source = this.snapshot,
+      surface = this.surface;
+    if (!service || !source || !surface || this.stopping) return;
+    this.clippingScan?.abort();
+    const controller = new AbortController();
+    this.clippingScan = controller;
+    const generation = this.generation;
+    void service
+      .scan(source, controller.signal)
+      .then((scan) => {
+        if (
+          controller.signal.aborted ||
+          !this.current(source, generation) ||
+          this.snapshot?.body !== source.body ||
+          this.surface !== surface
+        )
+          return;
+        surface.setClippings(scan.items);
+        this.status?.querySelector('[data-reader-clipping-status]')?.remove();
+        const message = !scan.complete
+          ? 'Clipping coverage is incomplete. Some saved passages may not be shown; new Keep is blocked until coverage is complete.'
+          : scan.items.some((item) => !item.location)
+            ? 'Some clippings no longer match their exact source. Their saved quotations are unchanged.'
+            : scan.items.some((item) => clippingOverlaps(item, scan.items))
+              ? 'Some saved passages overlap. Select the exact passage and Keep to open its card; duplicate cards require inspection.'
+              : '';
+        if (message && this.status)
+          this.status.createDiv({
+            attr: { 'data-reader-clipping-status': '', role: 'status' },
+          }).textContent = message;
+        if (!scan.complete) this.status?.setAttribute('data-clipping-coverage', 'incomplete');
+        else this.status?.removeAttribute('data-clipping-coverage');
+      })
+      .catch((error) => {
+        if (!controller.signal.aborted && !this.stopping) this.error(error);
+      });
+  }
+  private offerClippingSelection(pending: PendingSelection, range: Range): void {
+    const surface = this.surface;
+    if (!surface || !this.snapshot) return;
+    this.tapHighlighter?.setActive(true, true, 'clip');
+    this.passageActions = [
+      {
+        id: 'keep-clipping',
+        label: 'Keep passage',
+        icon: 'bookmark-plus',
+        run: () => {
+          if (this.snapshot?.body !== pending.body)
+            throw new Error('The selected article changed. Select the passage again.');
+          return this.keepClipping(pending.selection);
+        },
+      },
+      {
+        id: 'collect-selection',
+        label: 'Collect into notes…',
+        icon: 'highlighter',
+        run: () => this.saveTapSelection(surface.body, range),
+      },
+      ...(this.host.configureClippings
+        ? [
+            {
+              id: 'configure-clippings',
+              label: 'Configure clippings',
+              icon: 'settings',
+              run: () => this.host.configureClippings!(),
+            },
+          ]
+        : []),
+    ];
+    this.tapHighlighter?.refreshActions();
+  }
+  private keepClipping(
+    selection: Pick<RenderedPassage, 'quote' | 'before' | 'after'> | undefined,
+  ): Promise<void> {
+    this.cancelNodeCreation();
+    const controller = new AbortController();
+    this.clippingCapture = controller;
+    const lifetime = this.articleLifetime.signal;
+    const abort = () => controller.abort();
+    lifetime.addEventListener('abort', abort, { once: true });
+    if (lifetime.aborted) controller.abort();
+    return this.operation(async () => {
+      await this.positionWrite;
+      const service = this.host.clippings,
+        source = this.snapshot,
+        generation = this.generation;
+      if (!service || !source || !selection) throw new Error('Select a passage to keep first.');
+      this.assertDisplayed(source);
+      const guard = () => {
+        if (
+          controller.signal.aborted ||
+          this.clippingCapture !== controller ||
+          this.stopping ||
+          !this.current(source, generation)
+        )
+          throw new Error('Clipping capture cancelled or the article changed.');
+      };
+      guard();
+      const work = service.keep(source, { ...selection }, controller.signal, guard, (saved) => {
+        if (controller.signal.aborted || !this.current(source, generation)) return;
+        this.adoptSnapshot(saved);
+        this.surface?.setBody(saved.body, text(saved.properties.url));
+      });
+      const kept = await new Promise<Awaited<typeof work> | undefined>((resolve, reject) => {
+        const cancelled = () => resolve(undefined);
+        controller.signal.addEventListener('abort', cancelled, { once: true });
+        if (controller.signal.aborted) cancelled();
+        void work.then(
+          (value) => {
+            controller.signal.removeEventListener('abort', cancelled);
+            if (controller.signal.aborted && value.created)
+              this.error(
+                new Error(
+                  `Clipping saved at ${value.path} after view cancellation; the note was kept.`,
+                ),
+              );
+            resolve(value);
+          },
+          (error) => {
+            controller.signal.removeEventListener('abort', cancelled);
+            if (controller.signal.aborted) {
+              if (error instanceof Error && error.message.includes('may already be saved'))
+                this.error(error);
+              resolve(undefined);
+            } else reject(error);
+          },
+        );
+      });
+      if (!kept || controller.signal.aborted || !this.current(source, generation)) return;
+      this.passageActions = undefined;
+      this.tapHighlighter?.reset();
+      this.tapHighlighter?.saved();
+      this.actionOutcome?.remove();
+      this.actionOutcome = inlineOutcome(
+        this.contentEl,
+        kept.created ? 'Clipping saved.' : 'This passage already has a clipping.',
+      );
+      this.button(
+        this.actionOutcome,
+        'Open clipping',
+        () => openExistingNote(this.app, kept.path, source.path),
+        'file-text',
+      );
+      this.refreshClippings();
+    }).finally(() => {
+      lifetime.removeEventListener('abort', abort);
+      if (this.clippingCapture === controller) this.clippingCapture = undefined;
+    });
+  }
+  private clippingClicked(event: MouseEvent): boolean {
+    const element = event.target instanceof Element ? event.target : undefined;
+    const mark = element?.closest<HTMLElement>('[data-reader-clipping]');
+    if (!mark || !this.surface?.body.contains(mark) || !this.snapshot || this.surface.selection())
+      return false;
+    event.preventDefault();
+    this.cancelNodeCreation();
+    void this.userAction('Open clipping', () =>
+      openExistingNote(
+        this.app,
+        mark.dataset.readerClipping!,
+        this.snapshot!.path,
+        event.button === 1 || event.ctrlKey || event.metaKey,
+      ),
+    );
+    return true;
   }
   private selectionChanged(): void {
     if (this.stopping || this.host.signal.aborted || this.dialog) return;
@@ -1801,6 +2036,10 @@ export class ReaderView extends ItemView {
           selection: { quote: selection.quote, before: selection.before, after: selection.after },
           body,
         };
+        if (this.host.clippings) {
+          this.offerClippingSelection(pending, selection.range.cloneRange());
+          return;
+        }
         void this.operation(async () => {
           try {
             await this.saveSelection(pending, valid);
@@ -1816,6 +2055,7 @@ export class ReaderView extends ItemView {
     valid: (hosted?: boolean) => boolean = () => true,
     leaving = false,
   ): Promise<void> {
+    if (this.host.clippings) return; // Explicit Keep/collection owns new native selections.
     await this.positionWrite;
     const closing = leaving && this.stopping && !!pending && !this.host.signal.aborted;
     if (
@@ -3028,7 +3268,7 @@ export class ReaderView extends ItemView {
       if (element?.closest('a[href]')) event.preventDefault();
       return;
     }
-    if (this.targetClicked(event)) return;
+    if (this.clippingClicked(event) || this.targetClicked(event)) return;
     const mark = element?.closest('mark');
     if (mark && this.surface?.body.contains(mark) && this.snapshot && !this.surface.selection()) {
       event.preventDefault();
@@ -3511,6 +3751,7 @@ export class ReaderView extends ItemView {
     // Explicit navigation/action intent only, never save/render/position/background flush.
     // Run before entering the operation queue that Nodes currently occupies.
     this.nodeCreationEpoch++;
+    this.clippingCapture?.abort();
     const selection = this.surface?.selection();
     if (selection && this.nodeCreation)
       this.lastSelection = JSON.stringify([selection.quote, selection.before, selection.after]);
@@ -3606,6 +3847,7 @@ export class ReaderView extends ItemView {
       return;
     }
     if (this.snapshot.file.path !== change.path) {
+      this.refreshClippings();
       this.refreshArticleTopics();
       return;
     }

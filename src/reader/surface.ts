@@ -4,6 +4,8 @@ import { VisibleText } from './text';
 import { HighlightFeedback } from './highlight-feedback';
 import { ArticleAnalysis } from './article-analysis';
 import { articleTopicPill, type ArticleTopic } from './topic-pills';
+import type { ArticleClipping } from '../core/clipping-store';
+import { clippingMarks } from './clipping-marks';
 
 const GAP = 32;
 
@@ -24,6 +26,9 @@ export class ReadingSurface {
   private readonly events: AbortController;
   private readonly window: Window;
   private content?: string;
+  private clippings: readonly ArticleClipping[] = [];
+  private clippingsKey = '';
+  private clippingsDirty = false;
   private url = '';
   private index?: VisibleText;
   private next?: { body: string; url: string };
@@ -152,8 +157,22 @@ export class ReadingSurface {
     this.reflow();
   }
 
+  setClippings(items: readonly ArticleClipping[]): void {
+    const key = JSON.stringify(items);
+    if (this.dead || key === this.clippingsKey) return;
+    this.clippings = items;
+    this.clippingsKey = key;
+    this.clippingsDirty = true;
+    this.refresh();
+  }
+
   setBody(body: string, url: string): void {
     if (this.dead) return;
+    if (body !== this.content) {
+      this.clippings = [];
+      this.clippingsKey = '';
+      this.clippingsDirty = true;
+    }
     // A newer snapshot can revert a queued change, or change only the URL base.
     this.next = body === this.content && url === this.url ? undefined : { body, url };
     // Position-only saves call setBody too; they must not revoke a confirmed clamp.
@@ -206,10 +225,16 @@ export class ReadingSurface {
         this.referenceIcon,
         this.analysis,
       );
+      this.clippingsDirty = true;
       this.index = new VisibleText(this.body);
       this.content = next.body;
       this.url = next.url;
       this.layoutPending = this.restorePending = true;
+    }
+    if (this.clippingsDirty) {
+      this.clippingsDirty = false;
+      clippingMarks(this.body, this.clippings);
+      this.index = new VisibleText(this.body);
     }
     // Keep every authored heading/text node in the body and its source index.
     // Only Reader's synthetic title is redundant when the leading heading matches.

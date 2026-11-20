@@ -1,4 +1,5 @@
 import { TFile, type App } from 'obsidian';
+import { waitForBinding } from './creation';
 import {
   missingRequired,
   type ClassInfo,
@@ -10,6 +11,7 @@ import {
 import {
   FILE_TYPES,
   SELECT_TYPES,
+  required,
   freshRequired,
   unresolved,
   waitForMetadata,
@@ -129,6 +131,38 @@ export class FileclassBridge implements FileclassBackend {
     const classes = await session.read(() => session.api.listFileClasses());
     session.check();
     return classes.map(({ name, icon }) => ({ name, ...(icon ? { icon } : {}) }));
+  }
+
+  /** Capture must not invent values or open a required-field form. Inspect public schemas before any write. */
+  async assertClippingType(type: string, binding: string): Promise<void> {
+    const session = this.session();
+    const seen = new Set<string>();
+    const inspect = async (name: string): Promise<void> => {
+      if (seen.has(name)) return;
+      seen.add(name);
+      const schema = await session.read(() => session.api.getSchema(name));
+      if (!schema) throw new Error(`Fileclass schema "${name}" is unavailable.`);
+      for (const field of schema.fields) {
+        if (required(field) && (field.path || !['origin', binding].includes(field.name)))
+          throw new Error(
+            `Clipping type requires "${field.name}". Choose a type with optional topics and no extra required fields. Reader will not change your schema.`,
+          );
+      }
+      for (const parent of schema.ancestors) await inspect(parent);
+    };
+    await inspect(type);
+    session.check();
+  }
+
+  async verifyClipping(path: string, type: string, signal: AbortSignal): Promise<void> {
+    const file = this.app.vault.getAbstractFileByPath(path);
+    if (!(file instanceof TFile)) throw new Error('The created clipping is unavailable.');
+    await waitForBinding(this.app, this, file, type, this.token(), signal);
+    const fields = await this.requiredFields(path);
+    if (fields.length)
+      throw new Error(
+        `Created card has unresolved required fields: ${fields.map((field) => field.name).join(', ')}. The note was kept; finish in Fileclass.`,
+      );
   }
 
   async members(signal?: AbortSignal): Promise<ClassMember[]> {

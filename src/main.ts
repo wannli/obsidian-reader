@@ -27,7 +27,8 @@ import { logReaderError } from './host/diagnostics';
 import { SavedSettingsError } from './host/action-feedback';
 import { readDocument } from './core/document';
 import { ArticleStore } from './core/store';
-import { confirmArticleReplacement, input } from './host/dialogs';
+import { confirmArticleReplacement, input, choose } from './host/dialogs';
+import { ReaderClippings } from './host/clippings';
 import { Ingestion } from './host/ingestion';
 import { ReaderSettings, showFeeds } from './host/settings';
 import { type LibraryChange } from './host/vault';
@@ -65,6 +66,7 @@ export default class ReaderPlugin extends Plugin {
   private sourceLeaves = new Map<WorkspaceLeaf, { file: TFile; transitioning: boolean }>();
   private statusFolders: ResolvedStatusFolders = defaultStatusFolders;
   private typedNotes?: ReaderNodes;
+  private clippingService?: ReaderClippings;
   private unbindNodes?: () => void;
   // These adapters preserve command/test seams; the generation owns the actual state.
   private get attempted() {
@@ -275,23 +277,7 @@ export default class ReaderPlugin extends Plugin {
             }
           }),
         typedSettings,
-        (next) =>
-          this.folderSaves.run('folders', async () => {
-            if (this.unloaded) throw new Error('Reader has stopped.');
-            const invalid = validateTypedNotes(next);
-            if (invalid) throw new Error(invalid);
-            const stored = await this.loadData();
-            if (this.unloaded) throw new Error('Reader has stopped.');
-            await this.saveData({
-              ...(stored && typeof stored === 'object' ? stored : {}),
-              typedNotes: next,
-            });
-            try {
-              if (!this.unloaded) this.typedNotes?.configure(next);
-            } catch (error) {
-              throw new SavedSettingsError(error);
-            }
-          }),
+        (next) => this.saveTypedNoteSettings(next),
       ),
     );
     // Observe intent before native link handlers run, but never replace their
@@ -394,6 +380,52 @@ export default class ReaderPlugin extends Plugin {
       void this.tick(false, true).catch((error) => this.notice(error));
     });
   }
+  private saveTypedNoteSettings(next: NodesSettings): Promise<void> {
+    return this.folderSaves.run('folders', async () => {
+      if (this.unloaded || !this.typedNotes) throw new Error('Reader has stopped.');
+      const invalid = validateTypedNotes(next);
+      if (invalid) throw new Error(invalid);
+      const prepared = await this.typedNotes.prepareClippingSettings({
+        ...next,
+        clippingBindings:
+          this.typedNotes.settingsSnapshot().clippingBindings ?? next.clippingBindings,
+      });
+      const stored = await this.loadData();
+      if (this.unloaded) throw new Error('Reader has stopped.');
+      await this.saveData({
+        ...(stored && typeof stored === 'object' ? stored : {}),
+        typedNotes: prepared,
+      });
+      try {
+        if (!this.unloaded) {
+          this.typedNotes.configure(prepared);
+          const results = await Promise.allSettled(
+            this.views().map((view) => view.changed({ path: '', metadataChanged: true })),
+          );
+          if (results.some((result) => result.status === 'rejected'))
+            throw new Error('A Reader view could not refresh; reopen it.');
+        }
+      } catch (error) {
+        throw new SavedSettingsError(error);
+      }
+    });
+  }
+  private async configureClippingType(): Promise<void> {
+    const nodes = this.typedNotes,
+      signal = this.signal;
+    const types = nodes?.api()?.listTypes();
+    if (!nodes || !types?.length)
+      throw new Error('Enable Fileclass and wait for its types before configuring clippings.');
+    const selected = await choose(
+      this.app,
+      'Default clipping type (topics must be optional)',
+      types,
+      (type) => type.label,
+      signal,
+    );
+    if (!selected || signal.aborted) return;
+    await this.saveTypedNoteSettings({ ...nodes.settingsSnapshot(), clippingType: selected.type });
+  }
   private readerHost(): ConstructorParameters<typeof ReaderView>[1] {
     const plugin = this,
       signal = this.signal;
@@ -402,6 +434,8 @@ export default class ReaderPlugin extends Plugin {
       store: this.store,
       ingestion: this.ingestion,
       signal,
+      clippings: this.clippingService,
+      configureClippings: () => plugin.configureClippingType(),
       get paged() {
         return plugin.paged;
       },
@@ -428,6 +462,13 @@ export default class ReaderPlugin extends Plugin {
       (change) => this.changed(change),
       (message) => this.notice(message),
     );
+    if (this.typedNotes)
+      this.clippingService = new ReaderClippings(
+        this.app,
+        this.store,
+        this.typedNotes,
+        this.signal,
+      );
   }
   private stopFolders(): void {
     this.runtime.stop();

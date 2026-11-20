@@ -132,7 +132,11 @@ export async function runtimeFixture(data: unknown = {}) {
   const leaves: any[] = [];
   const app: any = {
     notes: new Map(),
-    vault: { getMarkdownFiles: () => [...app.notes.values()].map((note: any) => note.file) },
+    vault: {
+      on: vi.fn(),
+      offref: vi.fn(),
+      getMarkdownFiles: () => [...app.notes.values()].map((note: any) => note.file),
+    },
     workspace: {
       getLeavesOfType: (type: string) => leaves.filter((leaf) => leaf.view.getViewType() === type),
       iterateAllLeaves: (visit: any) => leaves.forEach(visit),
@@ -141,7 +145,7 @@ export async function runtimeFixture(data: unknown = {}) {
       on: vi.fn(),
       onLayoutReady: vi.fn(),
     },
-    metadataCache: { on: vi.fn() },
+    metadataCache: { on: vi.fn(), offref: vi.fn() },
   };
   const plugin: any = new ReaderPlugin(app, {} as any);
   plugin.data = data;

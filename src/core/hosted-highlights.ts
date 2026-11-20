@@ -97,7 +97,10 @@ export function paragraphAnchors(body: string): ParagraphAnchor[] {
   return result;
 }
 
-function ensureAnchor(body: string, passage: Passage): { body: string; blockId: string } {
+export function ensureAnchor(
+  body: string,
+  passage: Pick<Passage, 'from' | 'to'>,
+): { body: string; blockId: string } {
   const span = paragraph(body, passage.from, passage.to);
   const existing = paragraphAnchors(body).filter(
     (item) => item.from === span.from && item.to === span.to,

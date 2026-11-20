@@ -5,6 +5,7 @@ import { FileclassCache } from './fileclass-cache';
 import { NodeIndex, type NodeEntry } from './index';
 import { CaptureController, type CreatedCapture } from './capture';
 import { DEFAULT_SETTINGS, validateSettings, type NodesSettings } from './settings';
+import { clippingSession, clippingSettings } from './clipping-capture';
 import type { NodesApi, NodeResult } from '../nodes';
 
 /** Reader-owned typed-note service; Fileclass's public v1 API remains the class authority. */
@@ -53,6 +54,20 @@ export class ReaderNodes {
     if (invalid) throw new Error(invalid);
     this.settings = { ...settings };
     this.capture.cancelAll();
+  }
+  settingsSnapshot(): NodesSettings {
+    return {
+      ...this.settings,
+      ...(this.settings.clippingBindings
+        ? { clippingBindings: this.settings.clippingBindings.map((binding) => ({ ...binding })) }
+        : {}),
+    };
+  }
+  prepareClippingSettings(next: NodesSettings): Promise<NodesSettings> {
+    return clippingSettings(this.backend, next);
+  }
+  prepareClipping(signal: AbortSignal) {
+    return clippingSession(this.backend, () => this.settingsSnapshot(), signal);
   }
   /** Explicit reconciliation; first-load indexing remains asynchronous and read-only. */
   refresh(): Promise<void> {

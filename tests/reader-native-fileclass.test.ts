@@ -5,10 +5,16 @@ import { FileclassBridge } from '../src/host/fileclass/fileclass';
 import { connectNodes } from '../src/host/node-relations';
 import type { PublicApi } from '../src/host/fileclass/fileclass-fields';
 import { bindNodesApi, nodesApi } from '../src/host/nodes';
+import { ReaderClippings } from '../src/host/clippings';
+import { ArticleStore, type VaultPort } from '../src/core/store';
+import { createDocument, readDocument } from '../src/core/document';
+import { clippingMarkdown } from '../src/core/clippings';
+import type { TFile } from 'obsidian';
 
 vi.mock('obsidian', () => {
   class TFile {
     extension = 'md';
+    stat = { ctime: 1, mtime: 1, size: 0 };
     basename: string;
     constructor(public path: string) {
       this.basename = path.split('/').at(-1)!.replace(/\.md$/, '');
@@ -102,6 +108,7 @@ function fixture() {
         if (files.has(path)) throw new Error('Duplicate file');
         const file = new ((await import('obsidian')).TFile as any)(path);
         files.set(path, file);
+        file.stat.size = raw.length;
         bytes.set(path, raw);
         frontmatter.set(path, { fileClass: raw.match(/^fileClass: (.*)$/m)?.[1] });
         vaultEvents.fire('create', file);
@@ -120,7 +127,18 @@ function fixture() {
     },
     plugins: { getPlugin },
   } as unknown as App;
-  return { app, files, frontmatter, bytes, leaves, api, plugin, getPlugin };
+  return {
+    app,
+    files,
+    frontmatter,
+    bytes,
+    leaves,
+    api,
+    plugin,
+    getPlugin,
+    vaultEvents,
+    metadataEvents,
+  };
 }
 
 const active: ReaderNodes[] = [];
@@ -454,5 +472,265 @@ describe('Reader-owned Fileclass bridge', () => {
     expect(nodesApi(f.app)).not.toBe(old);
     expect(await old.createNode({ type: 'topic', suggestedTitle: 'Nope' })).toBeNull();
     expect(f.app.vault.getAbstractFileByPath('Nodes/Nope.md')).toBeNull();
+  });
+});
+
+async function clippingAdapterFixture(before?: (f: ReturnType<typeof fixture>) => Promise<void>) {
+  const f = fixture();
+  const file = await f.app.vault.create(
+    'Articles/Source.md',
+    createDocument({ type: 'article', status: 'inbox' }, 'Saved words. ^source'),
+  );
+  await before?.(f);
+  const vault: VaultPort<TFile> = {
+    file: (path) => f.files.get(path),
+    resolveLink: (path) => f.files.get(path) ?? f.files.get(path + '.md'),
+    read: (file) => f.app.vault.read(file),
+    create: async (path, raw, guard) => {
+      await guard?.();
+      return f.app.vault.create(path, raw);
+    },
+    process: async (file, update) => {
+      const raw = update(await f.app.vault.read(file));
+      f.bytes.set(file.path, raw);
+      f.frontmatter.set(file.path, readDocument(raw).properties);
+      f.vaultEvents.fire('modify', file);
+      f.metadataEvents.fire('changed', file);
+      return raw;
+    },
+    move: async () => {
+      throw new Error('Unexpected move');
+    },
+    trash: async () => {
+      throw new Error('Unexpected trash');
+    },
+    assertWritable() {},
+  };
+  const store = new ArticleStore(vault);
+  store.catalog.update(file.path, readDocument(await vault.read(file)).properties);
+  const nodes = new ReaderNodes(f.app);
+  active.push(nodes);
+  nodes.configure(
+    await nodes.prepareClippingSettings({
+      nodesFolder: 'Nodes',
+      classProperty: 'fileClass',
+      clippingType: 'topic',
+    }),
+  );
+  const lifetime = new AbortController(),
+    clippings = new ReaderClippings(f.app, store, nodes, lifetime.signal);
+  let source = await store.read(file.path);
+  return {
+    ...f,
+    store,
+    nodes,
+    lifetime,
+    clippings,
+    get source() {
+      return source;
+    },
+    keep: () =>
+      clippings.keep(
+        source,
+        { quote: 'Saved words.' },
+        lifetime.signal,
+        () => {},
+        (saved) => {
+          source = saved;
+        },
+      ),
+  };
+}
+
+describe('clipping Fileclass compatibility', () => {
+  it('creates and verifies a card through the real host adapter and public Fileclass bridge', async () => {
+    const f = await clippingAdapterFixture();
+    try {
+      const kept = await f.keep();
+      expect(kept.path).toBe('Nodes/Saved words.md');
+      expect(readDocument(f.bytes.get(kept.path)!).properties).toEqual({
+        fileClass: 'topic',
+        origin: '[[Articles/Source#^source]]',
+      });
+      expect((await f.clippings.scan(f.source, f.lifetime.signal)).items).toHaveLength(1);
+      expect((await f.keep()).created).toBe(false);
+    } finally {
+      f.lifetime.abort();
+    }
+  });
+
+  it('scopes bounded discovery to the source, rather than reading every clipping in the vault', async () => {
+    const f = await clippingAdapterFixture(async (f) => {
+      for (let i = 0; i < 210; i++) {
+        const raw = clippingMarkdown(
+          { property: 'fileClass', type: 'topic' },
+          `[[Articles/Other ${i}#^a]]`,
+          'Other words.',
+        );
+        await f.app.vault.create(`Cards/${i}.md`, raw);
+        f.frontmatter.set(`Cards/${i}.md`, readDocument(raw).properties);
+      }
+    });
+    try {
+      vi.mocked(f.app.vault.read).mockClear();
+      expect((await f.clippings.scan(f.source, f.lifetime.signal)).complete).toBe(true);
+      expect(f.app.vault.read).not.toHaveBeenCalled();
+      expect((await f.keep()).created).toBe(true);
+    } finally {
+      f.lifetime.abort();
+    }
+  });
+
+  it('does not trust a stale origin cache after native modification, and retains fresh discovery evidence', async () => {
+    const f = await clippingAdapterFixture(async (f) => {
+      const raw = clippingMarkdown(
+        { property: 'fileClass', type: 'topic' },
+        '[[Articles/Other#^a]]',
+        'Saved words.',
+      );
+      await f.app.vault.create('Cards/Existing.md', raw);
+      f.frontmatter.set('Cards/Existing.md', readDocument(raw).properties);
+    });
+    try {
+      const card = f.files.get('Cards/Existing.md');
+      f.bytes.set(
+        card.path,
+        clippingMarkdown(
+          { property: 'fileClass', type: 'topic' },
+          '[[Articles/Source#^source]]',
+          'Saved words.',
+        ),
+      );
+      f.vaultEvents.fire('modify', card);
+      const scan = await f.clippings.scan(f.source, f.lifetime.signal);
+      expect(scan.items.map((item) => item.path)).toEqual(['Cards/Existing.md']);
+      expect((await f.clippings.scan(f.source, f.lifetime.signal)).items).toHaveLength(1);
+      expect((await f.keep()).created).toBe(false);
+    } finally {
+      f.lifetime.abort();
+    }
+  });
+
+  it('revokes negative reference coverage when a folder moves without child-file events', async () => {
+    const f = await clippingAdapterFixture();
+    try {
+      const read = f.app.vault.read.bind(f.app.vault);
+      vi.mocked(f.app.vault.read).mockImplementationOnce(async (file) => {
+        f.vaultEvents.fire('rename', { path: 'Moved folder' }, 'Original folder');
+        return read(file);
+      });
+      await expect(f.store.trash(f.source)).rejects.toThrow(/references changed/);
+      expect(f.files.has(f.source.path)).toBe(true);
+    } finally {
+      f.lifetime.abort();
+    }
+  });
+
+  it('requires deliberate setup and records the actual binding without creating or migrating notes', async () => {
+    const f = fixture();
+    const { service } = await reader(f.app);
+    await expect(service.prepareClipping(new AbortController().signal)).rejects.toThrow(
+      /default clipping/,
+    );
+    const next = await service.prepareClippingSettings({
+      nodesFolder: 'Nodes',
+      classProperty: 'fileClass',
+      clippingType: 'topic',
+    });
+    expect(next.clippingBindings).toEqual([{ property: 'fileClass', type: 'topic' }]);
+    service.configure(next);
+    const prepared = await service.prepareClipping(new AbortController().signal);
+    expect(prepared.binding).toEqual({ property: 'fileClass', type: 'topic' });
+    expect(f.files.size).toBe(0);
+  });
+
+  it('rejects required topics before capture and never changes the schema or invents a value', async () => {
+    const f = fixture();
+    f.api.getSchema.mockResolvedValue({
+      name: 'topic',
+      ancestors: [],
+      options: {},
+      fields: [{ id: 'topic', name: 'Topic', type: 'File', path: '', options: { required: true } }],
+    });
+    const { service } = await reader(f.app);
+    await expect(
+      service.prepareClippingSettings({
+        nodesFolder: 'Nodes',
+        classProperty: 'fileClass',
+        clippingType: 'topic',
+      }),
+    ).rejects.toThrow(/requires "Topic"/);
+    expect(f.files.size).toBe(0);
+    expect(f.api.setValue).not.toHaveBeenCalled();
+  });
+
+  it('checks inherited requirements, while allowing optional topics', async () => {
+    const f = fixture();
+    f.api.getSchema.mockImplementation(async (name) => ({
+      name,
+      ancestors: name === 'topic' ? ['Parent'] : [],
+      options: {},
+      fields:
+        name === 'Parent'
+          ? [{ id: 'x', name: 'Project', type: 'File', path: '', options: { required: true } }]
+          : [],
+    }));
+    const bridge = new FileclassBridge(f.app);
+    await expect(bridge.assertClippingType('topic', 'fileClass')).rejects.toThrow(/Project/);
+    f.api.getSchema.mockResolvedValue({
+      name: 'topic',
+      ancestors: [],
+      options: {},
+      fields: [{ id: 'x', name: 'Topic', type: 'File', path: '', options: { required: false } }],
+    });
+    await expect(bridge.assertClippingType('topic', 'fileClass')).resolves.toBeUndefined();
+  });
+
+  it('keeps past binding aliases for discovery without rewriting existing notes', async () => {
+    const f = fixture();
+    const { service } = await reader(f.app);
+    const first = await service.prepareClippingSettings({
+      nodesFolder: 'Nodes',
+      classProperty: 'fileClass',
+      clippingType: 'topic',
+    });
+    service.configure(first);
+    f.plugin.settings.fileClassAlias = 'kind';
+    await expect(service.prepareClipping(new AbortController().signal)).rejects.toThrow(
+      /binding changed/,
+    );
+    const second = await service.prepareClippingSettings(first);
+    expect(second.clippingBindings).toEqual([
+      { property: 'fileClass', type: 'topic' },
+      { property: 'kind', type: 'topic' },
+    ]);
+    service.configure(second);
+    expect((await service.prepareClipping(new AbortController().signal)).binding.property).toBe(
+      'kind',
+    );
+    expect(f.files.size).toBe(0);
+  });
+
+  it('rechecks the live schema and API identity after setup', async () => {
+    const f = fixture();
+    const { service } = await reader(f.app);
+    service.configure(
+      await service.prepareClippingSettings({
+        nodesFolder: 'Nodes',
+        classProperty: 'fileClass',
+        clippingType: 'topic',
+      }),
+    );
+    const session = await service.prepareClipping(new AbortController().signal);
+    f.api.getSchema.mockResolvedValue({
+      name: 'topic',
+      ancestors: [],
+      options: {},
+      fields: [{ id: 'x', name: 'Topic', type: 'File', path: '', options: { required: true } }],
+    });
+    await expect(session.validate()).rejects.toThrow(/requires/);
+    f.plugin.api = { ...f.api };
+    expect(session.check).toThrow(/changed/);
+    expect(f.files.size).toBe(0);
   });
 });

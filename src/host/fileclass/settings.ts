@@ -1,6 +1,11 @@
+import type { ClippingBinding } from '../../core/clippings';
+
 export interface NodesSettings {
   nodesFolder: string;
   classProperty: string;
+  clippingType?: string;
+  /** Past capture bindings keep old clipping types discoverable without rewriting notes. */
+  clippingBindings?: ClippingBinding[];
 }
 
 export const DEFAULT_SETTINGS: NodesSettings = {
@@ -9,6 +14,27 @@ export const DEFAULT_SETTINGS: NodesSettings = {
 };
 
 export function validateSettings(settings: NodesSettings): string | null {
+  if (
+    settings.clippingType !== undefined &&
+    (typeof settings.clippingType !== 'string' ||
+      settings.clippingType !== settings.clippingType.trim())
+  )
+    return 'Choose a valid clipping Fileclass.';
+  if (
+    settings.clippingBindings !== undefined &&
+    (!Array.isArray(settings.clippingBindings) ||
+      settings.clippingBindings.some(
+        (binding) =>
+          !binding ||
+          typeof binding.property !== 'string' ||
+          !binding.property.trim() ||
+          /[\r\n]/.test(binding.property) ||
+          ['__proto__', 'prototype', 'constructor', 'origin'].includes(binding.property) ||
+          typeof binding.type !== 'string' ||
+          !binding.type.trim(),
+      ))
+  )
+    return 'Invalid saved clipping bindings; existing notes were not changed.';
   const folder = settings.nodesFolder;
   if (
     typeof folder !== 'string' ||

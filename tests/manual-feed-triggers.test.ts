@@ -20,7 +20,10 @@ async function fixture() {
   const f = await runtimeFixture();
   plugin = f.plugin;
   f.app.workspace.getMostRecentLeaf = () => undefined;
-  f.app.vault = { getMarkdownFiles: () => [...f.app.notes.values()].map((note) => note.file) };
+  f.app.vault = {
+    ...f.app.vault,
+    getMarkdownFiles: () => [...f.app.notes.values()].map((note) => note.file),
+  };
   f.app.metadataCache.getFileCache = (file: { path: string }) => ({
     frontmatter: f.app.notes.get(file.path)?.properties ?? {},
     sections: [{ type: 'yaml' }],
@@ -54,7 +57,10 @@ async function fixture() {
       await settle();
     },
     async metadata(name: string, file?: unknown) {
-      f.app.metadataCache.on.mock.calls.find(([event]: [string]) => event === name)![1](file);
+      for (const [, callback] of f.app.metadataCache.on.mock.calls.filter(
+        ([event]: [string]) => event === name,
+      ))
+        callback(file);
       await settle();
     },
   };

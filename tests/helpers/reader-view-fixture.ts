@@ -215,6 +215,7 @@ vi.mock('../../src/reader/surface', () => ({
       if (pill) this.body.before(this.topics);
       else this.topics.remove();
     });
+    setClippings = vi.fn();
     setTitle = (title: string) => {
       this.title.textContent = title;
     };
@@ -341,11 +342,14 @@ function hostFixture(folders: ReaderFolders = defaultFolders) {
   const app: any = {
     __vault: vault,
     vault: {
+      on: vi.fn(),
+      offref: vi.fn(),
       getName: vi.fn(() => 'Device-local Reader vault'),
       getMarkdownFiles: () => [...vault.files.values()],
       getAbstractFileByPath: (path: string) => vault.file(path),
     },
     metadataCache: {
+      offref: vi.fn(),
       on: listen(metadataEvents),
       resolvedLinks: {},
       getFileCache: (file: any) => cache.get(file),

@@ -6,6 +6,8 @@ status: proposed-requires-approval
 
 # Persistence proposal: native notebooks, entries and explorations
 
+Historical notebook proposal: [clipping capture](reader-clipping-capture.md) supersedes this for new Keep actions. Do not create, convert or migrate these structures as part of clipping capture.
+
 This companion to the [workflow spec](reader-thinking-workflow.md) is a **proposal**, not a decided schema. No implementation may create these structures until Wannes approves their concrete format. No existing article, highlight, quotation or companion setting may be migrated implicitly.
 
 ## Approved invariants

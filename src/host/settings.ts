@@ -9,6 +9,7 @@ import type { Ingestion } from './ingestion';
 import type { ArticleStore } from '../core/store';
 import type { TFile } from 'obsidian';
 import { input } from './dialogs';
+import { nodesApi } from './nodes';
 import { validateSettings as validateTypedNotes, type NodesSettings } from './fileclass/settings';
 import { articleStatuses, type ArticleStatus } from '../core/model';
 import {
@@ -280,6 +281,21 @@ export class ReaderSettings extends PluginSettingTab {
             draft.classProperty = value;
           }),
         );
+      new Setting(this.containerEl)
+        .setName('Default clipping Fileclass')
+        .setDesc(
+          'Keep creates one note per passage. Topics must be optional; no extra required fields. Existing notes are not converted.',
+        )
+        .addDropdown((control) => {
+          control.addOption('', 'Not configured');
+          const types = nodesApi(this.app)?.listTypes() ?? [];
+          for (const type of types) control.addOption(type.type, type.label);
+          if (draft.clippingType && !types.some((type) => type.type === draft.clippingType))
+            control.addOption(draft.clippingType, `${draft.clippingType} (unavailable)`);
+          control.setValue(draft.clippingType ?? '').onChange((value) => {
+            draft.clippingType = value;
+          });
+        });
       const typedError = inlineFailure(this.containerEl);
       new Setting(this.containerEl).setName('Apply typed-note settings').addButton((button) =>
         button.setButtonText('Apply').onClick(async () => {

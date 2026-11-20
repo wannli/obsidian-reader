@@ -150,6 +150,13 @@ export class ArticleStore<File extends NoteFile> {
   // After restart an unfinished capture keeps its original filename, even on success.
   private captures = new WeakMap<File, { path: string; date: Date }>();
   private active = true;
+  private clippingProtection?: (
+    snapshot: Snapshot<File>,
+  ) => Promise<{ protected: boolean; guard(): void }>;
+  /** Generation-local, read-only incoming-reference authority; never persisted. */
+  protectClippings(authority: NonNullable<ArticleStore<File>['clippingProtection']>): void {
+    this.clippingProtection = authority;
+  }
   readonly folders: ReaderFolders;
   private statusFolders: ResolvedStatusFolders = defaultStatusFolders;
   private statusFolderRevision = 0;
@@ -541,6 +548,24 @@ export class ArticleStore<File extends NoteFile> {
   annotate(snapshot: Snapshot<File>, transform: (raw: string) => string): Promise<Snapshot<File>> {
     const guard = this.folderGuard(() => {});
     return this.writes.run(snapshot.file, () => this.annotateNow(snapshot, transform, guard));
+  }
+  /** Clipping capture retains Feed even when its native paragraph address already exists. */
+  clippingSource(
+    snapshot: Snapshot<File>,
+    body: string,
+    guard: () => void,
+    onSaved: (snapshot: Snapshot<File>) => void,
+  ): Promise<Snapshot<File>> {
+    const folderGuard = this.folderGuard(guard);
+    return this.writes.run(snapshot.file, () =>
+      this.annotateNow(
+        snapshot,
+        (raw) => replaceBody(raw, snapshot.body, body),
+        folderGuard,
+        onSaved,
+        onSaved,
+      ),
+    );
   }
   private async annotateNow(
     snapshot: Snapshot<File>,
@@ -1040,11 +1065,19 @@ export class ArticleStore<File extends NoteFile> {
   ): Promise<'trashed' | 'archived-protected'> {
     // Explicit Delete also retains annotated/topic-bearing articles. A stale snapshot
     // cannot bypass this: move revalidates the exact bytes before writing or renaming.
-    if (protectedArticle(snapshot.body, snapshot.properties)) {
+    guard = this.folderGuard(guard);
+    const annotated = protectedArticle(snapshot.body, snapshot.properties);
+    const protection =
+      !annotated && this.clippingProtection ? await this.clippingProtection(snapshot) : undefined;
+    if (annotated || protection?.protected) {
       await this.move(snapshot, 'Archive', guard);
       return 'archived-protected';
     }
-    await this.rss.run('rss', () => this.trashNote(snapshot, guard, true));
+    const current = () => {
+      guard();
+      protection?.guard();
+    };
+    await this.rss.run('rss', () => this.trashNote(snapshot, current, true));
     return 'trashed';
   }
   private trashNote(
@@ -1112,7 +1145,12 @@ export class ArticleStore<File extends NoteFile> {
         const snapshot = await this.read(article.path);
         guard();
         if (snapshot.properties.status !== 'feed') continue;
-        if (protectedArticle(snapshot.body, snapshot.properties)) {
+        const annotated = protectedArticle(snapshot.body, snapshot.properties);
+        const protection =
+          !annotated && this.clippingProtection
+            ? await this.clippingProtection(snapshot)
+            : undefined;
+        if (annotated || protection?.protected) {
           await this.move(snapshot, 'Archive', guard);
           result.promoted++;
         } else if (
@@ -1122,6 +1160,7 @@ export class ArticleStore<File extends NoteFile> {
             snapshot,
             () => {
               guard();
+              protection?.guard();
               if (inUse(file)) throw new ChangedNote('Article is in use.');
             },
             false,

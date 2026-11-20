@@ -26,6 +26,11 @@ vi.mock('obsidian', () => {
       return this;
     }
   }
+  class Dropdown extends Text {
+    addOption() {
+      return this;
+    }
+  }
   class Toggle {
     value = false;
     change: (value: boolean) => unknown = () => {};
@@ -92,6 +97,7 @@ vi.mock('obsidian', () => {
       settingEl = { style: { display: '' } };
       input?: Text;
       toggle?: Toggle;
+      dropdown?: Dropdown;
       buttons: Button[] = [];
       constructor() {
         ui.settings.push(this);
@@ -112,6 +118,11 @@ vi.mock('obsidian', () => {
         const button = new Button();
         this.buttons.push(button);
         add(button);
+        return this;
+      }
+      addDropdown(add: (control: Dropdown) => void) {
+        this.dropdown = new Dropdown();
+        add(this.dropdown);
         return this;
       }
       addToggle(add: (control: Toggle) => void) {

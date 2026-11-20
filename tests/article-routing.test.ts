@@ -197,7 +197,12 @@ async function fixture() {
       iterateAllLeaves: (callback: (leaf: unknown) => void) =>
         panes.forEach((entry) => callback(entry.leaf)),
     },
-    metadataCache: { on: listen(metadataEvents), getFirstLinkpathDest: resolve },
+    vault: {
+      on: vi.fn(() => ({})),
+      offref: vi.fn(),
+      getMarkdownFiles: () => [...memory.files.values()],
+    },
+    metadataCache: { on: listen(metadataEvents), offref: vi.fn(), getFirstLinkpathDest: resolve },
   };
   const plugin = new ReaderPlugin(app as unknown as App, {} as PluginManifest);
   plugins.push(plugin);

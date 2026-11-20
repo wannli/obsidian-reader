@@ -6,6 +6,8 @@ status: proposed-requires-approval
 
 # Proposed native entry grammar
 
+Historical notebook grammar: [clipping capture](reader-clipping-capture.md) defines new Keep files instead. Existing notebook records are preserved without conversion.
+
 This is the exact record-format companion to the [persistence proposal](reader-thinking-persistence.md). **No persisted field, native anchor allocation or format convention below is approved yet.** All specimens are ordinary Obsidian callouts and block references, not runtime fixtures to install in a vault.
 
 ## Passage with a connection

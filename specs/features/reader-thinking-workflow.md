@@ -6,6 +6,8 @@ status: proposed
 
 # Reader: passages, comments, connections and explorations
 
+Historical notebook proposal: [clipping capture](reader-clipping-capture.md) supersedes this for new Keep actions. Existing records stay untouched; comments/explorations are not part of that implementation.
+
 ## Problem Statement
 
 Reader currently couples new highlights to Fileclass-typed destinations and quotation collection. Wannes needs to keep a passage, write while reading, connect ideas and revisit an exploration without classifying each contribution or modifying the source article. Valuable W outcomes should enrich Reader without importing W's graph, transport system or replacement plan.

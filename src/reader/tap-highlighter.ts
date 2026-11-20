@@ -9,15 +9,17 @@ export interface TapToolbarAction {
   run(): void | Promise<unknown>;
 }
 
+export type TapMode = 'highlight' | 'node' | 'clip';
+
 interface TapHighlightOptions {
   active: boolean;
   normalTail?: HTMLElement;
   /** The owning view can supply contextual triggers instead of appending both. */
   normalTriggers?: boolean;
-  mode?: 'highlight' | 'node';
+  mode?: TapMode;
   canUndo: boolean;
-  modeChanged(active: boolean, mode?: 'node'): void;
-  save(range: Range, mode?: 'node'): Promise<void>;
+  modeChanged(active: boolean, mode?: 'node' | 'clip'): void;
+  save(range: Range, mode?: 'node' | 'clip'): Promise<void>;
   undo(): Promise<void>;
   notify(error: unknown): void;
   passageActions?(): readonly TapToolbarAction[] | undefined;
@@ -34,7 +36,7 @@ export class TapHighlighter {
   private readonly normal: Node[];
   private readonly trigger: HTMLButtonElement;
   private readonly nodeTrigger: HTMLButtonElement;
-  private mode: 'highlight' | 'node' = 'highlight';
+  private mode: TapMode = 'highlight';
   private readonly layout: HTMLElement;
   private readonly normalClearance: string;
   private readonly normalClearancePriority: string;
@@ -292,7 +294,7 @@ export class TapHighlighter {
 
   /** Called by the owner only after a confirmed source and host save. */
   saved(): void {
-    if (this.dead || !this.enabled || this.mode !== 'highlight') return;
+    if (this.dead || !this.enabled || this.mode === 'node') return;
     this.clearSaved();
     this.savedTimer = setTimeout(() => {
       this.savedTimer = undefined;
@@ -323,7 +325,7 @@ export class TapHighlighter {
     if (!this.dead) this.update();
   }
 
-  setActive(active: boolean, notify = true, mode: 'highlight' | 'node' = 'highlight'): void {
+  setActive(active: boolean, notify = true, mode: TapMode = 'highlight'): void {
     if (this.dead || this.busy) return;
     this.clearSaved();
     if (!active) this.options.clearPassage?.(notify);
@@ -339,7 +341,7 @@ export class TapHighlighter {
     this.toolbar.replaceChildren(...(active ? [this.panel] : this.normal));
     this.update();
     if (notify)
-      if (mode === 'node' && active) this.options.modeChanged(active, 'node');
+      if (mode !== 'highlight' && active) this.options.modeChanged(active, mode);
       else this.options.modeChanged(active);
   }
 
@@ -390,7 +392,7 @@ export class TapHighlighter {
     // available; a new intent or exit cancels the source-bound request.
     this.first = undefined;
     this.update();
-    void this.options.save(range, 'node').catch((error: unknown) => {
+    void this.options.save(range, this.mode).catch((error: unknown) => {
       if (!this.dead) this.options.notify(error);
     });
   }
@@ -412,7 +414,7 @@ export class TapHighlighter {
   }
 
   private update(): void {
-    const actions = this.mode === 'highlight' ? this.options.passageActions?.() : undefined;
+    const actions = this.mode !== 'node' ? this.options.passageActions?.() : undefined;
     const actionSet = actions?.length ? actions : undefined;
     if (actionSet !== this.actionSet) {
       this.actionSet = actionSet;
@@ -464,7 +466,7 @@ export class TapHighlighter {
       button.disabled = this.busy || !!this.actionSet?.[index].disabled;
     this.sentence.disabled = this.paragraph.disabled = this.busy || !this.first;
     this.done.disabled = this.busy;
-    this.undo.hidden = this.mode === 'node' || !this.undoAvailable;
+    this.undo.hidden = this.mode !== 'highlight' || !this.undoAvailable;
     this.undo.disabled = this.busy;
     this.hint.hidden = !this.enabled;
     this.status(
@@ -475,14 +477,20 @@ export class TapHighlighter {
         : this.first
           ? this.mode === 'node'
             ? 'Tap the last word to create a note'
-            : 'Tap the last word to save'
+            : this.mode === 'clip'
+              ? 'Tap the last word to keep a clipping'
+              : 'Tap the last word to save'
           : this.savedTimer !== undefined
             ? 'Saved'
             : this.actionSet
-              ? 'Highlight selected'
+              ? this.mode === 'clip'
+                ? 'Passage selected'
+                : 'Highlight selected'
               : this.mode === 'node'
                 ? 'Tap the first word to create a note'
-                : 'Tap the first word',
+                : this.mode === 'clip'
+                  ? 'Tap the first word to keep a clipping'
+                  : 'Tap the first word',
       this.busy
         ? 'hourglass'
         : this.savedTimer !== undefined

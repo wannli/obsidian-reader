@@ -6,6 +6,8 @@ status: proposed
 
 # Acceptance and delivery: Reader thinking workflow
 
+Historical notebook acceptance plan: use [clipping capture](reader-clipping-capture.md) for the new Keep-only delivery. Notebook comments, explorations and migration are not its acceptance gates.
+
 This companion defines completion for the [workflow spec](reader-thinking-workflow.md). Concrete persisted-output assertions depend on approval of the [persistence proposal](reader-thinking-persistence.md). No test fixture may quietly become an approved production schema.
 
 ## Proposed test seams

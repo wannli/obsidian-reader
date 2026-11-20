@@ -34,7 +34,7 @@ This README describes the current source. An installed release may not include e
 
 1. Open Obsidian’s command palette and run Reader’s **Add URL** command.
 2. Paste an article URL. Reader saves it to **Inbox** and extracts readable text when online.
-3. Use **Open reading list** to return to your library. Select text in an article to highlight it, or use **Change status** to choose **Later** or **Archive**.
+3. Use **Open reading list** to return to your library. Select text to keep a clipping or collect a highlight, or use **Change status** to choose **Later** or **Archive**.
 
 To save several articles, use **Add articles from URLs**. Separate URLs with commas, semicolons, or newlines; `www.` links use HTTPS. Reader validates and deduplicates them before saving. Already saved articles remain if you cancel or a later save fails.
 
@@ -56,9 +56,9 @@ Capture-folder settings apply only to new files; changing them does not move exi
 
 Choosing a status from the article controls advances to the next article in your original browsing list (or returns to the list at the end). The command-palette **Change article status** action stays on the current article. **Delete** also advances and uses recoverable Obsidian trash.
 
-Highlighting or linking a passage in a Feed article changes its status to Later before saving the annotation; the file stays in place. **Simply opening or reading a Feed article does not keep it.** Choose Later or Archive if you want to retain it.
+Keeping, highlighting or linking a passage in a Feed article changes its status to Later before saving the annotation; the file stays in place. **Simply opening or reading a Feed article does not keep it.** Choose Later or Archive if you want to retain it.
 
-Only articles with fresh explicit `status: feed` can expire, regardless of folder, one calendar month after their publication date (or filename date as a fallback)—not a month after import. Articles with topics, highlights or other annotations are archived rather than trashed by Reader. In-use and unknown-age notes are protected. A missing, unknown, or non-feed YAML status never authorizes automatic expiry.
+Only articles with fresh explicit `status: feed` can expire, regardless of folder, one calendar month after their publication date (or filename date as a fallback)—not a month after import. Articles with topics, highlights, incoming clipping references or other annotations are archived rather than trashed by Reader. Incomplete clipping-reference coverage also prevents trashing. In-use and unknown-age notes are protected. A missing, unknown, or non-feed YAML status never authorizes automatic expiry.
 
 ### Find your way around
 
@@ -67,7 +67,7 @@ Only articles with fresh explicit `status: feed` can expire, regardless of folde
 - Click the topic filter button to choose or clear a filter. Return to **List** to change it from an article. Filters persist across queues; Previous/Next follows the filtered list.
 - The article bar has five buttons. Scrolling Feed articles show **Back, Later, Archive, Trash, More**; other articles show **Back, Highlight, Related notes, Archive, More**. Paged articles show **Back, Previous page, Next page**, then **Trash** for Feed or **Highlight** elsewhere, and **More**. Open **More** for other actions; keyboard shortcuts stay available.
 - Use **Open Markdown** to edit an article, or **Related notes** (on the bar or in **More**) to edit remembered typed destinations. Checked notes stay visible while searching; Apply confirms before closing. Creating a note uses Reader’s typed-note flow backed by Fileclass. Filtering is read-only; assigning related notes to a Feed article retains it in Later.
-- Press **?** for all shortcuts. In lists, use **J/K** to select rows, **Enter** to open one, and **L/A/T** to move the selected article to Later, Archive, or trash without opening it. **Shift+L** switches to the Later list; **Shift+T** opens the topic filter. In articles, use **J/K** to switch articles, **B/Q** to return to the list, **L** for Later, **A** for Archive, **T** to trash, **H/N** for Highlight/Create node mode, and **R** for Related notes. **Space/Shift+Space** move a full page down/up; **D/U** move half a page down/up. **Up/PageUp** and **Down/PageDown** cross article boundaries and resume the saved position. Shortcuts pause in inputs, menus, dialogs, and selections.
+- Press **?** for all shortcuts. In lists, use **J/K** to select rows, **Enter** to open one, and **L/A/T** to move the selected article to Later, Archive, or trash without opening it. **Shift+L** switches to the Later list; **Shift+T** opens the topic filter. In articles, use **J/K** to switch articles, **B/Q** to return to the list, **L** for Later, **A** for Archive, **T** to trash, **V/H/N** for Keep/Highlight/Create node mode, and **R** for Related notes. **Space/Shift+Space** move a full page down/up; **D/U** move half a page down/up. **Up/PageUp** and **Down/PageDown** cross article boundaries and resume the saved position. Shortcuts pause in inputs, menus, dialogs, and selections.
 - On Boox/e-ink, enable **pagination (this device)** in Reader settings to use up/down touch page buttons or hardware Up/Down and PageUp/PageDown. Left/right article-navigation arrows are removed in both modes.
 - On iPhone, **Copy reading-list link** opens the library. **Copy dog-ear link** opens the last article you opened in Reader, or the first (newest) Inbox article if none is marked. Each gives you a vault-aware link for a Shortcuts **URL → Open URLs → Add to Home Screen** shortcut. You can also use **Open dog-eared article** from the command palette.
 
@@ -83,9 +83,11 @@ Run **Manage feeds**, choose **Add feed**, and enter an RSS or Atom URL. Reader 
 - **Delete once through Reader.** The subscription remembers explicitly deleted article URLs so later refreshes skip them. This is per subscription: another feed or a device that hasn’t synced the deletion record can still import the URL. It does not cover external deletions or automatic expiry, and you can still save the URL manually.
 - **Unsubscribe without losing saved articles.** Removing a subscription leaves its articles alone. If an article still links to a missing subscription, Reader can refuse its deletion because it cannot record the deleted URL; unsubscribing does not remove that provenance link.
 
-## Highlight and collect ideas
+## Keep clippings and collect highlights
 
-Every new highlight has at least one **typed host note**. Reader inherits one remembered destination automatically; with none or several, its initially empty native-style title/type/icon search lets you check several notes and **Add highlight** once. Creation is explicit with a Fileclass type. Untyped files are excluded.
+Choose **Default clipping Fileclass** in Reader settings once: its schema must allow optional topics and require no extra capture fields. Select text and choose **Keep passage**, or use **More → Keep passage** (**V**) and tap the first/last words. Keep saves a separate typed note in the configured folder, with YAML `origin` and a Markdown quotation. Reader may add a native paragraph address to the source, but no reverse link. Rename, move or add personal writing normally; a uniquely matched passage opens its clipping. Existing files and collections are not converted. See the [clipping file contract](specs/features/reader-clipping-capture.md).
+
+Every new hosted highlight has at least one **typed host note**. Reader inherits one remembered destination automatically; with none or several, its initially empty native-style title/type/icon search lets you check several notes and **Add highlight** once. Creation is explicit with a Fileclass type. Untyped files are excluded.
 
 Highlights preserve selected words, formatting and publisher URLs:
 
@@ -95,7 +97,7 @@ Highlights preserve selected words, formatting and publisher URLs:
 
 Each selected note receives a quotation under `## Highlights`, grouped by `### [[Article title]]`, with a precise paragraph citation and local collection-date link such as `[[2026-10-20]]`. Editing the source never silently changes the snapshot; an explicit removal from that highlight's notes can remove its uniquely matching, unedited copy.
 
-- Drag to select text, or enter **Highlight** mode and tap the **first** and **last word**. Tap the same word twice for one word.
+- Choose **Collect into notes…** after selecting text, or enter **Highlight** mode and tap the **first** and **last word**. Tap the same word twice for one word.
 - Or tap a word, then **Sentence** or **Paragraph**. On desktop, after that first word press **S** for Sentence or **P** for Paragraph; **U** undoes a saved highlight and **D** exits. **Done** cancels an unfinished selection; **Escape** clears the first word, then exits. Highlight controls and their picker have a faint yellow tint; Create node controls and its picker use green.
 - The passage bar offers **Add highlight to notes…** and explicit **Convert to note link**. With no highlight selected, clicking its reference edits that highlight’s checked notes. Unchecking removes the reference and exact saved copy; edited/ambiguous copies block removal. Source-only removal/brief Undo never deletes stored copies or reverses Feed → Later retention.
 - **Convert to note link** makes an ordinary `[[Node|original words]]` mention, without highlighting or redundant references. Only a newly created note receives `origin: "[[Article#^paragraph]]"`; existing origins are preserved. No quotation of the node's own name is added.

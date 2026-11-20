@@ -1,7 +1,7 @@
 ---
 created: 2026-11-20
 updated: 2026-11-20
-status: draft-awaiting-implementation-approval
+status: implementation-authorized-native-validation-pending
 issue: https://github.com/wannli/obsidian-reader/issues/117
 ---
 
@@ -9,8 +9,8 @@ issue: https://github.com/wannli/obsidian-reader/issues/117
 
 A clipping is a saved quotation you can think around, not a synchronised extract.
 
-**The product model is agreed. This brief does not authorise implementation.**
-Keep #117 parked until Wannes approves the bounded brief and its remaining choices.
+**Wannes authorised the bounded additive implementation after reviewing this brief.**
+Existing files remain untouched; native/device acceptance and any vault installation remain separate.
 
 ## Agreed model
 
@@ -47,7 +47,7 @@ Ordinary user edits remain possible; no clipping-to-idea workflow or type-indepe
 Do not change existing highlight/collection behaviour or automatically convert old annotations.
 No personal-vault installation, migration, version bump or release is included.
 
-## Proposed file contract
+## File contract
 
 The names `Clipping` and `fileClass` below illustrate a selected Fileclass and its binding property.
 Use the provider's actual type and binding alias; do not hard-code a new `type: clipping` property.
@@ -64,7 +64,7 @@ origin: '[[Articles/The city is a set of invitations#^streets]]'
 My thoughts can grow here, with [[connections]] to other notes.
 ```
 
-Proposed body convention: the first top-level blockquote is the captured quotation.
+The first top-level blockquote is the captured quotation; fenced code and Obsidian comments are excluded.
 It can contain rich, multiline Markdown. Quote blank lines explicitly with `>`.
 Other blocks belong to the user. A title heading is not required to identify the quotation.
 Parse Markdown structurally, not with the prototype's first-line regular expression.
@@ -75,7 +75,7 @@ Do not add clipping IDs, timestamps, context copies, selection offsets, hashes o
 Fileclass-required properties remain provider-owned metadata; do not silently omit required fields.
 A saved card is authoritative Markdown, not a mirror of the article or a generated index.
 
-## Proposed setup and creation
+## Setup and creation
 
 - Reuse the configured typed-note creation folder. No separate clipping-folder setting is proposed.
 - Add one optional default-card-type preference; preserve all unrelated settings.
@@ -104,7 +104,7 @@ Within that paragraph, match the quotation's visible words through parser-proven
 Multiple occurrences, duplicate anchors or malformed quotations are ambiguous, not a first-match success.
 Do not fuzzy-retarget a clipping after source edits. Preserve it and report an unresolved exact match.
 
-Proposed repeat rule: reuse a uniquely proven existing clipping instead of creating another.
+Repeat rule: reuse a uniquely proven existing clipping instead of creating another.
 Source identity and quotation must agree; identical text alone does not prove the same occurrence.
 Moving the card or adding personal writing must not prevent a proven match.
 If evidence is ambiguous, show candidates or an actionable uncertainty state; do not silently deduplicate.
@@ -137,17 +137,15 @@ Source expiry/Delete protection must account for incoming clipping references, i
 Keep conservative native-reference safety when cards are moved, malformed or no longer have the selected type.
 Missing read coverage must not authorise deletion. Viewing, indexing and decorating never promote articles.
 
-## Remaining choices before implementation
+## Bounded implementation choices
 
-1. **Other required Fileclass fields.** Topic is optional by decision, not an open capture requirement.
-   The current creation flow may prompt for other schema-required values after creating a note.
-   Finalise compatibility handling for those fields without reintroducing a topic prompt or bypassing provider validation.
-2. **Concrete setup/discovery contract.** Approve the actual persisted setting name and how old selected types remain discoverable.
-   Set explicit scan limits and coverage reporting. Do not inherit the notebook prototype's limits by accident.
-
-The body convention and repeat rule above are recommendations, not additional recorded approvals.
-The later paragraph-reference approval replaces the earlier proposed article-level fallback.
-Do not implement a temporary format and migrate it later.
+- Preflight public Fileclass schemas, including ancestors. Extra required fields make a type incompatible; no form or placeholder is inserted into Keep. Verify provider recognition and required-field status after creation.
+- `nodes.clippingType` stores the default; `nodes.clippingBindings` retains previously selected type/binding pairs for discovery. These are plugin settings, not note properties or identities.
+- A changed provider binding requires setup to be reapplied before new capture; old notes are never rewritten.
+- Scan source-relevant notes and uncertain/stale metadata candidates: at most 200 notes, 200 KB per note and 1 MB total. Show incomplete coverage and refuse new capture when absence cannot be established.
+- Vault events invalidate observed metadata; current raw reads can supersede stale native caches. Reads and decorations never write notes.
+- Incoming `origin` links protect sources independently of clipping type or quotation validity. Incomplete coverage protects conservatively; recheck negative coverage at trash dispatch.
+- The approved paragraph references replace the earlier proposed article-level fallback. There is no temporary format or follow-up migration.
 
 ## Acceptance checks for the approved implementation
 
@@ -173,20 +171,11 @@ Run the repository's complete check before publishing runtime changes.
 Native mobile, e-ink, Fileclass and Sync acceptance require separately authorised synthetic-vault checks.
 Prototype browser checks do not establish those results.
 
-## Evidence and next action
+## Implementation and remaining acceptance
 
-Reviewed published main `23ac522` for this brief. No plugin code was changed or integrated.
-Current `originLink` requires a paragraph ID; current hosted capture has guarded native-anchor allocation logic.
-Reuse or extract suitable anchor logic without bringing source highlight markup or hosted reverse citations into Keep.
-Current typed-note capture may ask for a title on collision and complete required fields after creation.
-The public Nodes interface does not expose the complete clipping payload as one create operation.
-These are implementation gaps to address, not evidence that the new contract already works.
+The implementation is additive: `src/core/{clippings,clipping-store}.ts` own the contract and guarded capture; `src/host/clippings.ts` owns generation-bound discovery; the Fileclass bridge owns compatibility checks. Existing hosted anchor allocation is reused without its highlight markup or reverse citations.
+Native selections offer Keep or explicit collection; the separate Keep tap mode does not replace Highlight/Create node tools. Source marks are render-only, and opening a clipping never creates a missing note.
+Automated coverage includes storage/matching, host/Fileclass integration and real-surface Reader interaction, including cancellation and legacy regressions. No personal or synthetic vault was installed into for this implementation.
 
-Prototype evidence: [UI and file-contract playgrounds on the prototype branch](https://github.com/wannli/obsidian-reader/tree/prototype/117-clipping-cards/src/reader).
-The file-contract playground was saved at `3305462`; its matching grammar is deliberately limited.
-It predates the paragraph-reference approval and does not validate creating source references.
-Relevant modules: `src/core/{quotation,hosted-highlights,projection,store}.ts`,
-`src/host/nodes.ts`, and `src/host/fileclass/{creation,capture,reader-nodes}.ts`.
-
-Next: Wannes reviews the remaining choices and approves or revises this brief.
-Only then may #117 resume as a bounded Keep-only implementation.
+Prototype evidence remains [on the prototype branch](https://github.com/wannli/obsidian-reader/tree/prototype/117-clipping-cards/src/reader). It predates paragraph-reference approval and is not runtime evidence.
+Next: separately authorised native Fileclass, mobile/e-ink and Sync acceptance. No release action is included.
