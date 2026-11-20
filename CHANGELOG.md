@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.30.0](https://github.com/wannli/obsidian-reader/compare/0.29.0...0.30.0) (2026-11-20)
+
+
+### Added
+
+* **reader:** capture passages as independent clipping notes ([3db9408](https://github.com/wannli/obsidian-reader/commit/3db94082f21cfba484073267a6b27be811f81029))
+
+
+### Fixed
+
+* **mcp:** permanently revoke changed source handles ([ebff252](https://github.com/wannli/obsidian-reader/commit/ebff252fdd3b6d531ccfc52dbd90e3a84f7b3c62))
+
 ## [0.29.0](https://github.com/wannli/obsidian-reader/compare/0.28.0...0.29.0) (2026-11-20)
 
 
