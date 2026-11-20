@@ -16,6 +16,7 @@ Keep #117 parked until Wannes approves the bounded brief and its remaining choic
 
 - Keep creates one ordinary Fileclass-typed Markdown note per passage.
 - Choose the default card type once, not during every capture.
+- Topic assignment is optional. Keep never asks for a topic; the user can add one later.
 - Use the passage's opening words as the filename. Shorten safely and suffix collisions.
 - Store metadata in YAML. Keep the quotation and personal writing in the body.
 - The clipping points to the source through `origin`. Store no reverse link in the article.
@@ -81,6 +82,9 @@ A saved card is authoritative Markdown, not a mirror of the article or a generat
 - Without setup, Keep saves nothing and offers configuration. Do not silently replay the selection.
 - Fileclass must be available for new cards. Existing cards remain ordinary readable notes without it.
 - Do not install types, change Fileclass settings or create an untyped fallback.
+- The clipping schema must allow an absent topic. Do not populate a placeholder or add a required-topic prompt.
+- If the selected schema requires a topic, explain its incompatibility; never bypass validation or change the schema automatically.
+- Later topic assignment uses supported Fileclass fields and writes. Do not invent a compulsory topic property.
 - Sanitise and bound automatic filenames. Handle collisions without a naming dialog or overwrite.
 - A filename collision is not evidence that the passage was already captured.
 - Disable repeated dispatch while that capture is pending. Cancellation must not block navigation.
@@ -133,9 +137,9 @@ Missing read coverage must not authorise deletion. Viewing, indexing and decorat
 
 ## Remaining choices before implementation
 
-1. **Required Fileclass fields.** The current creation flow may prompt after creating a note.
-   Decide whether to accept schema-required prompts, or require a capture-compatible class with no unresolved fields.
-   One-time type selection alone cannot guarantee a prompt-free Keep for every schema.
+1. **Other required Fileclass fields.** Topic is optional by decision, not an open capture requirement.
+   The current creation flow may prompt for other schema-required values after creating a note.
+   Finalise compatibility handling for those fields without reintroducing a topic prompt or bypassing provider validation.
 2. **Concrete setup/discovery contract.** Approve the actual persisted setting name and how old selected types remain discoverable.
    Set explicit scan limits and coverage reporting. Do not inherit the notebook prototype's limits by accident.
 
@@ -147,6 +151,8 @@ Do not implement a temporary format and migrate it later.
 
 - Setup selects a real provider type. Missing/reloaded Fileclass or a lost type never causes fallback creation.
 - Keep creates the expected YAML and rich quotation, with no destination/title prompt in the agreed compatible case.
+- Keep succeeds without a topic or topic prompt. Later topic assignment preserves the quotation and origin.
+- A schema requiring a topic is explained as incompatible, not silently weakened or completed with invented values.
 - Invalid selections and cancelled setup leave source and vault unchanged.
 - The source body changes only to add a missing native paragraph reference; all other source bytes are preserved.
 - Existing references are reused; new references are collision-checked; duplicate references block capture safely.
