@@ -186,7 +186,8 @@ export class ReaderView extends ItemView {
     return this.file ? `Reader: ${this.articleLabel()}` : this.listLabel();
   }
   private listLabel(): string {
-    return this.topicFilter ? `Reading list: ${this.currentTopicFilter().label}` : 'Reading list';
+    const queue = `Reader: ${this.queue}`;
+    return this.topicFilter ? `${queue} — ${this.currentTopicFilter().label}` : queue;
   }
   private articleLabel(): string {
     return this.snapshot
@@ -510,10 +511,8 @@ export class ReaderView extends ItemView {
     const previews = queue === 'Feed' && flags.feedPreviews;
     const list = this.contentEl.createDiv({ cls: 'reader-list' });
     if (touchTriage) list.classList.add('reader-triage-list');
-    if (this.topicFilter) {
-      const heading = list.createEl('h2', { cls: 'reader-list-heading' });
-      heading.textContent = this.listLabel();
-    }
+    const heading = list.createEl('h2', { cls: 'reader-list-heading' });
+    heading.textContent = this.listLabel();
     const tabs = this.contentEl.createEl('nav', {
       cls: 'reader-toolbar reader-bottom-controls',
       attr: { 'aria-label': 'Reading list actions' },
@@ -531,6 +530,7 @@ export class ReaderView extends ItemView {
         { Inbox: 'i', Feed: 'f', Later: 'L' }[name],
       );
       button.classList.toggle('mod-cta', name === queue);
+      button.setAttribute('aria-pressed', String(name === queue));
     }
     this.button(tabs, 'Add URL', () => this.host.capture(), 'plus', 'u');
     const filterButton = this.button(
@@ -1069,7 +1069,7 @@ export class ReaderView extends ItemView {
       if (this.filteredOrigin && this.topicFilter) {
         const context = surface.title.ownerDocument.createElement('div');
         context.className = 'reader-article-context';
-        context.textContent = this.listLabel();
+        context.textContent = `Reading list: ${this.currentTopicFilter().label}`;
         surface.title.before(context);
       }
       this.syncPresentation();

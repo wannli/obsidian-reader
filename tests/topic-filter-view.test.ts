@@ -173,6 +173,28 @@ vi.mock('../src/reader/tap-highlighter', () => ({
 }));
 
 describe('topic-filter view integration', () => {
+  it('keeps long filter labels as text and retains queue identity through switches and clearing', async () => {
+    const f = fixture();
+    const label = 'A long <script> & topic label '.repeat(20);
+    f.probe.topicFilter = { label, terms: ['missing'] };
+    for (const queue of ['Inbox', 'Feed', 'Later', 'Archive'] as const) {
+      f.view.showList(queue);
+      await tick();
+      const headings = f.view.contentEl.querySelectorAll('.reader-list-heading');
+      expect(headings).toHaveLength(1);
+      expect(headings[0].textContent).toBe(`Reader: ${queue} — ${label}`);
+      expect(f.view.getDisplayText()).toBe(`Reader: ${queue} — ${label}`);
+      expect(headings[0].children).toHaveLength(0);
+      expect(f.view.contentEl.querySelector('script')).toBeNull();
+    }
+    f.view.contentEl.querySelector<HTMLButtonElement>('[aria-label="Filter by topic"]')!.click();
+    expect(f.view.getDisplayText()).toBe('Reader: Archive');
+    expect(f.view.contentEl.querySelector('.reader-list-heading')?.textContent).toBe(
+      'Reader: Archive',
+    );
+    expect(f.host.ingestion.acquire).not.toHaveBeenCalled();
+    f.view.stopForUnload();
+  });
   it('suggests frequently linked topics without reading article bodies or changing the filter', async () => {
     const f = fixture();
     f.add('Topics/Alpha.md', '', { type: 'topic' });
@@ -224,9 +246,9 @@ describe('topic-filter view integration', () => {
     const filter = f.view.contentEl.querySelector('[aria-label="Filter by topic"]')!;
     expect(filter.getAttribute('aria-pressed')).toBe('true');
     expect(filter.classList.contains('reader-filter-active')).toBe(true);
-    expect(f.view.getDisplayText()).toBe('Reading list: Climate');
+    expect(f.view.getDisplayText()).toBe('Reader: Inbox — Climate');
     expect(f.view.contentEl.querySelector('.reader-list-heading')?.textContent).toBe(
-      'Reading list: Climate',
+      'Reader: Inbox — Climate',
     );
   });
 
@@ -267,7 +289,7 @@ describe('topic-filter view integration', () => {
     expect(f.rows()).toHaveLength(50);
     expect(f.view.contentEl.querySelectorAll('.reader-list-heading')).toHaveLength(1);
     expect(f.view.contentEl.querySelector('.reader-list-heading')?.textContent).toBe(
-      'Reading list: sea level',
+      'Reader: Inbox — sea level',
     );
     (f.view.contentEl.querySelector('[aria-label="Show more"]') as HTMLButtonElement).click();
     expect(f.rows()).toHaveLength(55);
@@ -279,14 +301,17 @@ describe('topic-filter view integration', () => {
     f.view.showList('Later');
     await tick();
     expect(f.rows()).toEqual(['Later']);
+    expect(f.view.getDisplayText()).toBe('Reader: Later — sea level');
     expect(f.view.contentEl.querySelector('.reader-list-heading')?.textContent).toBe(
-      'Reading list: sea level',
+      'Reader: Later — sea level',
     );
     (f.view.contentEl.querySelector('[aria-label="Filter by topic"]') as HTMLButtonElement).click();
     expect(f.probe.topicFilter).toBeUndefined();
     expect(mocks.filter).toHaveBeenCalledOnce();
-    expect(f.view.getDisplayText()).toBe('Reading list');
-    expect(f.view.contentEl.querySelector('.reader-list-heading')).toBeNull();
+    expect(f.view.getDisplayText()).toBe('Reader: Later');
+    expect(f.view.contentEl.querySelector('.reader-list-heading')?.textContent).toBe(
+      'Reader: Later',
+    );
     expect(
       f.view.contentEl
         .querySelector('[aria-label="Filter by topic"]')
@@ -302,8 +327,9 @@ describe('topic-filter view integration', () => {
     f.probe.topicFilter = { label: 'alpha <script>', terms: ['alpha'] };
     f.view.showList();
     await tick();
+    expect(f.view.getDisplayText()).toBe('Reader: Inbox — alpha <script>');
     expect(f.view.contentEl.querySelector('.reader-list-heading')?.textContent).toBe(
-      'Reading list: alpha <script>',
+      'Reader: Inbox — alpha <script>',
     );
     expect(f.view.contentEl.querySelector('script')).toBeNull();
     f.view.contentEl.querySelector<HTMLButtonElement>('.reader-list-item')!.click();
@@ -332,7 +358,7 @@ describe('topic-filter view integration', () => {
     await tick();
     expect(context()).toBeNull();
     expect(f.view.contentEl.querySelector('.reader-list-heading')?.textContent).toBe(
-      'Reading list: alpha <script>',
+      'Reader: Inbox — alpha <script>',
     );
   });
 
@@ -361,7 +387,7 @@ describe('topic-filter view integration', () => {
     await tick();
     expect(f.rows()).toEqual(['A']);
     expect(f.view.contentEl.querySelector('.reader-list-heading')?.textContent).toBe(
-      'Reading list: alpha',
+      'Reader: Inbox — alpha',
     );
   });
 
@@ -388,7 +414,9 @@ describe('topic-filter view integration', () => {
     await f.view.readingList();
     await tick();
     f.view.contentEl.querySelector<HTMLButtonElement>('[aria-label="Filter by topic"]')!.click();
-    expect(f.view.contentEl.querySelector('.reader-list-heading')).toBeNull();
+    expect(f.view.contentEl.querySelector('.reader-list-heading')?.textContent).toBe(
+      'Reader: Inbox',
+    );
     expect(f.view.contentEl.querySelector('.reader-article-context')).toBeNull();
   });
 
@@ -404,7 +432,9 @@ describe('topic-filter view integration', () => {
     expect(f.probe.topicFilter).toBeUndefined();
     expect(f.view.contentEl.querySelectorAll('.reader-article-title')).toHaveLength(1);
     await f.view.readingList();
-    expect(f.view.contentEl.querySelector('.reader-list-heading')).toBeNull();
+    expect(f.view.contentEl.querySelector('.reader-list-heading')?.textContent).toBe(
+      'Reader: Inbox',
+    );
   });
 
   it('keeps a heading during zero-result scans and scan failures', async () => {
@@ -413,18 +443,18 @@ describe('topic-filter view integration', () => {
     f.probe.topicFilter = { label: 'missing', terms: ['missing'] };
     f.view.showList();
     expect(f.view.contentEl.querySelector('.reader-list-heading')?.textContent).toBe(
-      'Reading list: missing',
+      'Reader: Inbox — missing',
     );
     await tick();
     expect(f.rows()).toEqual([]);
     expect(f.view.contentEl.querySelector('.reader-list-heading')?.textContent).toBe(
-      'Reading list: missing',
+      'Reader: Inbox — missing',
     );
     vi.spyOn(f.probe.topicScanner, 'scan').mockRejectedValueOnce(new Error('unavailable'));
     f.view.showList();
     await tick();
     expect(f.view.contentEl.querySelector('.reader-list-heading')?.textContent).toBe(
-      'Reading list: missing',
+      'Reader: Inbox — missing',
     );
     expect(f.view.contentEl.querySelector('[role="alert"]')).not.toBeNull();
   });
@@ -444,12 +474,12 @@ describe('topic-filter view integration', () => {
     await tick();
     const scan = f.probe.topicScan;
     expect(f.view.contentEl.querySelector('.reader-list-heading')?.textContent).toBe(
-      'Reading list: alpha',
+      'Reader: Inbox — alpha',
     );
     f.view.contentEl.querySelector<HTMLButtonElement>('[aria-label="Filter by topic"]')!.click();
     expect(scan.signal.aborted).toBe(true);
     expect(f.rows()).toEqual(['A']);
-    expect(f.view.getDisplayText()).toBe('Reading list');
+    expect(f.view.getDisplayText()).toBe('Reader: Inbox');
     expect(mocks.filter).not.toHaveBeenCalled();
     release(file.raw);
     await tick();
@@ -464,9 +494,9 @@ describe('topic-filter view integration', () => {
     f.view.showList();
     await tick();
     expect(f.rows()).toEqual([]);
-    expect(f.view.getDisplayText()).toBe('Reading list: Gone (unavailable)');
+    expect(f.view.getDisplayText()).toBe('Reader: Inbox — Gone (unavailable)');
     expect(f.view.contentEl.querySelector('.reader-list-heading')?.textContent).toBe(
-      'Reading list: Gone (unavailable)',
+      'Reader: Inbox — Gone (unavailable)',
     );
     await f.view.openArticle('Reading/Inbox/Match.md');
     expect(f.probe.topicFilter).toBeUndefined();
@@ -492,9 +522,9 @@ describe('topic-filter view integration', () => {
     release(createDocument({ type: 'article' }, 'alpha'));
     await tick();
     expect(f.rows()).toEqual([]);
-    expect(f.view.getDisplayText()).toBe('Reading list: beta');
+    expect(f.view.getDisplayText()).toBe('Reader: Inbox — beta');
     expect(f.view.contentEl.querySelector('.reader-list-heading')?.textContent).toBe(
-      'Reading list: beta',
+      'Reader: Inbox — beta',
     );
   });
 
@@ -526,7 +556,7 @@ describe('topic-filter view integration', () => {
     });
     await tick();
     expect(f.probe.topicFilter.path).toBe(topic.path);
-    expect(f.view.getDisplayText()).toBe('Reading list: New');
+    expect(f.view.getDisplayText()).toBe('Reader: Inbox — New');
   });
 
   it('refreshes active filtered results behind a focused picker and remains fresh after Cancel', async () => {

@@ -9,6 +9,44 @@ import { showFeeds } from '../src/host/settings';
 import { gate } from './helpers/memory-vault';
 
 describe('bounded Reader UI', () => {
+  it.each(['Inbox', 'Later', 'Feed', 'Archive'] as const)(
+    'names the %s queue with one heading and truthful accessible selection without extra controls',
+    async (queue) => {
+      const f = hostFixture();
+      const file = await f.note('Reading/Inbox/Article.md', 'User-authored body');
+      const before = await f.vault.read(file);
+      const writes = vi.spyOn(f.vault, 'process');
+      const reads = vi.spyOn(f.vault, 'read');
+      const opened = vi.spyOn(f.view, 'openArticle');
+      f.view.showList(queue);
+      expect(f.view.getDisplayText()).toBe(`Reader: ${queue}`);
+      const headings = f.view.contentEl.querySelectorAll('.reader-list-heading');
+      expect(headings).toHaveLength(1);
+      expect(headings[0].textContent).toBe(`Reader: ${queue}`);
+      const buttons = [
+        ...f.view.contentEl.querySelectorAll<HTMLButtonElement>('.reader-toolbar button'),
+      ];
+      expect(buttons).toHaveLength(5);
+      for (const [index, name] of ['Inbox', 'Later', 'Feed'].entries()) {
+        expect(buttons[index].getAttribute('aria-pressed')).toBe(String(name === queue));
+        expect(buttons[index].classList.contains('mod-cta')).toBe(name === queue);
+      }
+      expect(buttons[3].hasAttribute('aria-pressed')).toBe(false);
+      expect(buttons[4].getAttribute('aria-pressed')).toBe('false');
+      expect(
+        f.view.contentEl.querySelector(
+          '.reader-row-meta,.reader-row-excerpt,.reader-triage-actions',
+        ),
+      ).toBeNull();
+      expect(writes).not.toHaveBeenCalled();
+      expect(reads).not.toHaveBeenCalled();
+      expect(opened).not.toHaveBeenCalled();
+      expect(f.host.ingestion.acquire).not.toHaveBeenCalled();
+      expect(f.vault.bytes.get(file)).toBe(before);
+      f.view.stopForUnload();
+    },
+  );
+
   it('keeps library titles as text, with five bottom actions and no search/subtitles/Archive/Feeds buttons', async () => {
     const f = hostFixture();
     await f.note('Reading/Inbox/Visible title.md');
@@ -120,6 +158,11 @@ describe('bounded Reader UI', () => {
     command.callback!();
     await f.probe.operations;
     expect(f.view.getState().queue).toBe('Archive');
+    expect(f.view.getDisplayText()).toBe('Reader: Archive');
+    expect(f.view.contentEl.querySelector('.reader-list-heading')?.textContent).toBe(
+      'Reader: Archive',
+    );
+    expect(f.view.contentEl.querySelector('.reader-toolbar [aria-pressed="true"]')).toBeNull();
     expect(f.probe.search).toBe('');
     expect(f.probe.listLimit).toBe(50);
     expect(f.view.contentEl.querySelector('.reader-list-item')?.textContent).toContain(
@@ -409,7 +452,8 @@ describe('leaf-scoped floating Reader layout', () => {
         expect(window.getComputedStyle(f.view.contentEl).position).toBe('relative');
         expect(window.getComputedStyle(list).flex).toBe('1 1 auto');
         expect(f.view.contentEl.querySelector('input[type="search"],small')).toBeNull();
-        expect(list.textContent).toBe('Full authored title');
+        expect(list.querySelector('.reader-list-heading')?.textContent).toBe('Reader: Inbox');
+        expect(list.querySelector('.reader-list-item')?.textContent).toBe('Full authored title');
         await f.view.openArticle(file.path, true);
         const column = f.view.contentEl.querySelector('.reader-article')!;
         const actions = column.querySelector('.reader-bottom-controls')!;

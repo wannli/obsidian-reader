@@ -723,7 +723,7 @@ describe('native title-only presentation', () => {
     expect(f.view.getState()).not.toHaveProperty('readerPresentationOnly');
     surface.selectionValue = undefined;
     await f.view.readingList();
-    expect(f.view.getDisplayText()).toBe('Reading list');
+    expect(f.view.getDisplayText()).toBe('Reader: Inbox');
   });
   it('never replays an old article or swallows navigation when delayed title requests arrive', async () => {
     const f = hostFixture(),
@@ -848,19 +848,38 @@ describe('folder-authoritative queue presentation', () => {
 });
 
 describe('browsing context and presentation', () => {
+  it('refreshes queue titles without reopening an article or persisting presentation state', async () => {
+    const f = hostFixture();
+    const refresh = vi.fn(async () => {});
+    f.host.refreshPresentation = refresh;
+    const opened = vi.spyOn(f.view, 'openArticle');
+    f.view.showList('Inbox');
+    f.view.showList('Feed');
+    f.view.showList('Archive');
+    expect(refresh).toHaveBeenCalledTimes(3);
+    expect(f.view.getDisplayText()).toBe('Reader: Archive');
+    const result = { history: true };
+    await f.view.setState({ readerPresentationOnly: true }, result);
+    expect(result.history).toBe(false);
+    expect(f.view.getState()).toEqual({ file: undefined, queue: 'Archive' });
+    expect(f.view.getDisplayText()).toBe('Reader: Archive');
+    expect(opened).not.toHaveBeenCalled();
+    expect(f.host.ingestion.acquire).not.toHaveBeenCalled();
+    f.view.stopForUnload();
+  });
   it('refreshes the native list title when a filter changes or clears without persisting it', () => {
     const f = hostFixture();
     const refresh = vi.fn(async () => {});
     f.host.refreshPresentation = refresh;
     f.view.showList();
-    expect(f.view.getDisplayText()).toBe('Reading list');
+    expect(f.view.getDisplayText()).toBe('Reader: Inbox');
     f.probe.topicFilter = { label: 'sea level', terms: ['sea level'] };
     f.view.showList();
-    expect(f.view.getDisplayText()).toBe('Reading list: sea level');
+    expect(f.view.getDisplayText()).toBe('Reader: Inbox — sea level');
     expect(refresh).toHaveBeenCalledTimes(2);
     expect(f.view.getState()).toEqual({ file: undefined, queue: 'Inbox' });
     f.view.contentEl.querySelector<HTMLButtonElement>('[aria-label="Filter by topic"]')!.click();
-    expect(f.view.getDisplayText()).toBe('Reading list');
+    expect(f.view.getDisplayText()).toBe('Reader: Inbox');
     expect(refresh).toHaveBeenCalledTimes(3);
     expect(f.view.contentEl.querySelector('.reader-topic-filter-state')).toBeNull();
     f.view.stopForUnload();
@@ -888,11 +907,11 @@ describe('browsing context and presentation', () => {
     expect(f.view.contentEl.querySelector('.reader-topic-filter-state')).toBeNull();
     await f.view.readingList();
     for (let i = 0; i < 100; i++) await Promise.resolve();
-    expect(f.view.getDisplayText()).toBe('Reading list: sea level');
+    expect(f.view.getDisplayText()).toBe('Reader: Feed — sea level');
     const write = vi.spyOn(f.vault, 'process');
     f.host.ingestion.acquire.mockClear();
     f.view.contentEl.querySelector<HTMLButtonElement>('[aria-label="Filter by topic"]')!.click();
-    expect(f.view.getDisplayText()).toBe('Reading list');
+    expect(f.view.getDisplayText()).toBe('Reader: Feed');
     expect(f.probe.topicFilter).toBeUndefined();
     expect(f.view.contentEl.querySelectorAll('.reader-list-item')).toHaveLength(2);
     expect(write).not.toHaveBeenCalled();
@@ -924,7 +943,7 @@ describe('browsing context and presentation', () => {
     for (let i = 0; i < 100; i++) await Promise.resolve();
     expect(f.view.contentEl.querySelectorAll('.reader-list-item')).toHaveLength(2);
     expect(f.probe.topicFilter.label).toBe('sea level');
-    expect(f.view.getDisplayText()).toBe('Reading list: sea level');
+    expect(f.view.getDisplayText()).toBe('Reader: Inbox — sea level');
     f.view.stopForUnload();
   });
   it.each(['Inbox', 'Feed', 'Later', 'Archive'] as const)(
