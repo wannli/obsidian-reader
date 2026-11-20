@@ -12,6 +12,13 @@ export function errorMessage(error: unknown): string {
 export function actionFailure(action: string, error: unknown): string {
   return `${action}: ${errorMessage(error)}`;
 }
+export function inlineOutcome(parent: HTMLElement, message: string): HTMLElement {
+  return parent.createEl('p', {
+    cls: 'reader-action-outcome',
+    text: message,
+    attr: { role: 'status', 'aria-atomic': 'true' },
+  });
+}
 export function inlineFailure(parent: HTMLElement): HTMLElement {
   return parent.createEl('p', {
     cls: 'reader-action-error',

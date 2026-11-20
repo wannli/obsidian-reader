@@ -31,6 +31,7 @@ import { nativeLinkPath, openExistingNote } from '../host/note-links';
 import { articleInfo, linkPath, queues, text, type Queue } from '../core/model';
 import {
   PartialCollectionError,
+  protectedArticle,
   type ArticleStore,
   type HighlightCollectionPhase,
   type Snapshot,
@@ -46,7 +47,7 @@ import {
 } from '../core/hosted-highlights';
 import { choose, confirmWebLink } from '../host/dialogs';
 import { logReaderError } from '../host/diagnostics';
-import { actionFailure, inlineFailure } from '../host/action-feedback';
+import { actionFailure, inlineFailure, inlineOutcome } from '../host/action-feedback';
 import { connectNodes, type RelationField } from '../host/node-relations';
 import type { Ingestion } from '../host/ingestion';
 import { nodesApi, type NodesApi, type NodeResult } from '../host/nodes';
@@ -123,6 +124,7 @@ export class ReaderView extends ItemView {
   private tapUndoTimer?: ReturnType<typeof setTimeout>;
   private actions?: HTMLElement;
   private actionError?: HTMLElement;
+  private actionOutcome?: HTMLElement;
   private status?: HTMLElement;
   private statusMessage?: string;
   private articleTitle?: HTMLElement;
@@ -315,6 +317,7 @@ export class ReaderView extends ItemView {
         if (this.stopping || this.host.signal.aborted || (scoped && generation !== this.generation))
           return;
         this.operating = true;
+        this.actionOutcome?.remove();
         this.updateTriageActions();
         try {
           await action();
@@ -405,6 +408,15 @@ export class ReaderView extends ItemView {
     }
     this.actionError.textContent = `${actionFailure(action, error)} Check the current note before retrying; some changes may already be saved. Open Markdown to inspect article changes.`;
   }
+  private reportProtectedArchive(): void {
+    if (this.stopping || this.host.signal.aborted) return;
+    this.actionOutcome?.remove();
+    this.actionOutcome = inlineOutcome(
+      this.contentEl,
+      'Archived instead of trashed to preserve annotations or related notes.',
+    );
+    this.contentEl.prepend(this.actionOutcome);
+  }
   private async userAction(label: string, action: () => void | Promise<void>): Promise<void> {
     const generation = this.generation;
     try {
@@ -475,6 +487,7 @@ export class ReaderView extends ItemView {
     this.fallbackFile = undefined;
     this.actions = undefined;
     this.actionError = undefined;
+    this.actionOutcome = undefined;
     this.status = undefined;
     this.statusMessage = undefined;
     this.articleTitle = undefined;
@@ -806,8 +819,11 @@ export class ReaderView extends ItemView {
           throw new Error('The reading list changed. Reopen it and retry.');
       };
       try {
-        if (action === 't') await this.host.store.trash(snapshot, guard);
-        else {
+        if (action === 't') {
+          const outcome = await this.host.store.trash(snapshot, guard);
+          if (outcome === 'archived-protected' && !this.snapshot && row.isConnected)
+            this.reportProtectedArchive();
+        } else {
           const destination = action === 'l' ? 'Later' : 'Archive';
           const moved = await this.host.store.move(snapshot, destination, guard);
           if (action === 'l') {
@@ -1368,8 +1384,12 @@ export class ReaderView extends ItemView {
       },
       {
         key: 't',
-        label: 'Trash article and advance',
-        icon: 'trash-2',
+        label: protectedArticle(this.snapshot.body, this.snapshot.properties)
+          ? 'Archive protected article and advance'
+          : 'Trash article and advance',
+        icon: protectedArticle(this.snapshot.body, this.snapshot.properties)
+          ? 'archive'
+          : 'trash-2',
         group: 'trash',
         run: () => this.finish('delete'),
       },
@@ -1430,6 +1450,17 @@ export class ReaderView extends ItemView {
     );
     more.setAttribute('aria-haspopup', 'menu');
     more.setAttribute('aria-expanded', 'false');
+    const guidance = this.actions.createDiv({ cls: 'reader-action-guidance' });
+    guidance.createDiv({
+      text: 'Later / Archive / Trash → next article (list at end).',
+    });
+    if (feed) {
+      const retention = guidance.createEl('details');
+      retention.createEl('summary', { text: 'Feed: reading alone does not keep it.' });
+      retention.createDiv({
+        text: 'Choose Later or Archive to keep this one. Highlights and related notes move it to Later. Unprotected Feed articles can expire a calendar month after publication (or filename date), not import.',
+      });
+    }
     this.setupTapHighlighter();
     this.updateStatus();
   }
@@ -2176,7 +2207,7 @@ export class ReaderView extends ItemView {
         (path) => !!this.host.store.catalog.article(path),
       );
       const moved = destination ? await this.host.store.move(snapshot, destination) : undefined;
-      if (action === 'delete') await this.host.store.trash(snapshot);
+      const outcome = action === 'delete' ? await this.host.store.trash(snapshot) : undefined;
       if (!this.current(snapshot, generation) || this.stopping) return;
       if (destination === 'Later') new Notice('Saved to Later');
       if (moved && (destination === 'Inbox' || destination === 'Later'))
@@ -2186,6 +2217,7 @@ export class ReaderView extends ItemView {
       this.surface = undefined;
       if (next) await this.openArticleNow(next);
       else this.showList();
+      if (outcome === 'archived-protected') this.reportProtectedArchive();
     });
   }
   private move(destination?: Queue): Promise<void> {

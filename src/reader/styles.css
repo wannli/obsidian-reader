@@ -129,6 +129,29 @@ body.is-mobile.reader-mobile-active .mobile-navbar {
   background: var(--background-primary);
   box-shadow: none;
 }
+.reader-action-guidance {
+  grid-column: 1 / -1;
+  grid-row: 1;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  color: var(--text-muted);
+  font-size: var(--font-smallest);
+  line-height: 1.4;
+}
+.reader-action-guidance summary {
+  min-height: 44px;
+  align-content: center;
+  cursor: pointer;
+}
+.reader-action-guidance details > div {
+  max-height: 25vh;
+  overflow-y: auto;
+}
+.reader-action-outcome {
+  margin: 4px 0;
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+}
 /* Article controls belong to the inner column, inset by the leaf padding. */
 .reader-view > .reader-toolbar {
   bottom: calc(var(--reader-pane-padding) + var(--reader-controls-bottom));

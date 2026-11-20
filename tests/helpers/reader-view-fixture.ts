@@ -487,17 +487,24 @@ function actionName(button: Element): string {
 }
 
 function articleAction(view: ReaderView, label: string): void {
-  if (label === 'Delete') label = 'Trash article and advance';
+  const deleting = label === 'Delete';
+  if (deleting) label = 'Trash article and advance';
   const buttons = [
     ...view.contentEl.querySelectorAll<HTMLButtonElement>('.reader-actions > button'),
   ];
-  const visible = buttons.find((button) => button.getAttribute('aria-label') === label);
+  const visible = buttons.find(
+    (button) =>
+      button.getAttribute('aria-label') === label ||
+      (deleting && button.getAttribute('aria-label') === 'Archive protected article and advance'),
+  );
   if (visible) {
     visible.click();
     return;
   }
   buttons.find((button) => button.getAttribute('aria-label') === 'More article actions')!.click();
-  const run = mocks.menus.at(-1)!.get(label);
+  const run =
+    mocks.menus.at(-1)!.get(label) ??
+    (deleting ? mocks.menus.at(-1)!.get('Archive protected article and advance') : undefined);
   expect(run, `Secondary article action: ${label}`).toBeDefined();
   run!();
   mocks.menuClosed.at(-1)!();

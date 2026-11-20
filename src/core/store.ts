@@ -46,7 +46,7 @@ import {
   type ResolvedStatusFolders,
 } from './status-folders';
 
-function protectedArticle(body: string, properties: Properties): boolean {
+export function protectedArticle(body: string, properties: Properties): boolean {
   const topics = properties.topics;
   return (
     hasAnnotations(body, properties) ||
@@ -1085,12 +1085,18 @@ export class ArticleStore<File extends NoteFile> {
       this.commit(snapshot, (raw) => patchProperties(raw, { error: message })),
     );
   }
-  trash(snapshot: Snapshot<File>, guard: () => void = () => {}): Promise<void> {
+  async trash(
+    snapshot: Snapshot<File>,
+    guard: () => void = () => {},
+  ): Promise<'trashed' | 'archived-protected'> {
     // Explicit Delete also retains annotated/topic-bearing articles. A stale snapshot
     // cannot bypass this: move revalidates the exact bytes before writing or renaming.
-    if (protectedArticle(snapshot.body, snapshot.properties))
-      return this.move(snapshot, 'Archive', guard).then(() => {});
-    return this.rss.run('rss', () => this.trashNote(snapshot, guard, true));
+    if (protectedArticle(snapshot.body, snapshot.properties)) {
+      await this.move(snapshot, 'Archive', guard);
+      return 'archived-protected';
+    }
+    await this.rss.run('rss', () => this.trashNote(snapshot, guard, true));
+    return 'trashed';
   }
   private trashNote(
     snapshot: Snapshot<File>,
