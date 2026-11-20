@@ -42,6 +42,8 @@ Do not migrate their records or integrate their comments, explorations or browse
 5. Open a matching clipping as an ordinary Obsidian note through the passage action.
 
 Do not add a clippings browser, custom card editor, managed Move, AI titles or processing statuses.
+Developing or retyping clippings into ideas is outside this brief. Do not design recognition after such retyping now.
+Ordinary user edits remain possible; no clipping-to-idea workflow or type-independent recognition rule is approved.
 Do not change existing highlight/collection behaviour or automatically convert old annotations.
 No personal-vault installation, migration, version bump or release is included.
 
