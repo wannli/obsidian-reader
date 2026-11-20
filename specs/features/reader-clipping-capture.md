@@ -19,6 +19,7 @@ Keep #117 parked until Wannes approves the bounded brief and its remaining choic
 - Use the passage's opening words as the filename. Shorten safely and suffix collisions.
 - Store metadata in YAML. Keep the quotation and personal writing in the body.
 - The clipping points to the source through `origin`. Store no reverse link in the article.
+- Keep may add a native paragraph block reference, but never changes source words or adds clipping metadata there.
 - Assume the quotation stays as captured. Personal writing grows around it.
 - Reader never rewrites the quotation or stores a hidden original selection.
 - Users can edit any Markdown. An edited quotation need not retain exact source matching.
@@ -89,8 +90,11 @@ A saved card is authoritative Markdown, not a mirror of the article or a generat
 
 Discover eligible cards by configured Fileclass membership, not filename or capture-folder membership.
 Resolve `origin` relative to the clipping. A moved card remains discoverable if its type and link resolve.
-Use existing unique paragraph references when available; never allocate source anchors as a side effect.
-Within the source scope, match the quotation's visible words through parser-proven projection.
+Reuse the selected paragraph's existing unique native block reference when available.
+Otherwise, allocate a native reference, collision-check the fresh source and guard its insertion.
+Several clippings from one paragraph share that reference. Duplicate authored references block capture rather than being repaired.
+Store the paragraph link in `origin`; it is an address, not a reverse link or clipping identity.
+Within that paragraph, match the quotation's visible words through parser-proven projection.
 Multiple occurrences, duplicate anchors or malformed quotations are ambiguous, not a first-match success.
 Do not fuzzy-retarget a clipping after source edits. Preserve it and report an unresolved exact match.
 
@@ -107,14 +111,18 @@ Changing the default type affects future creation only; it cannot authorise hidi
 
 ## Writes, retention and failures
 
-Keep never changes the source body. Feed retention is a separate YAML-only source write.
-Retain an explicit Feed article as Later before committing its clipping; do not move the article file.
-Preflight valid selection, setup and provider eligibility before retention or creation.
+The only permitted source-body edit is adding the selected paragraph's native block reference.
+Preserve all other source bytes. Never add clipping links, quotation copies or metadata to the article body.
+Preflight valid selection, setup and provider eligibility before any write.
+Retain an explicit Feed article as Later, ensure its paragraph reference, then commit the clipping.
+Feed retention changes YAML only; do not move the article file.
 Recheck source identity, bytes, generation and dirty-editor safety at mutation boundaries.
 Create with no-overwrite semantics. Never use an existing filename as a destination for replacement.
 Preserve provider output and unknown YAML/body content during any guarded completion write.
 
-Retention and card creation are not atomic. A failed capture may leave the source retained.
+Source updates and card creation are not atomic. A failed capture may leave Later status or an unused paragraph reference.
+Preserve those successful writes; report progress rather than attempting automatic rollback or anchor cleanup.
+Reconcile a possibly saved reference before retrying, and reuse it when proven unique.
 A provider-created but incomplete card must remain recoverable and be reported accurately.
 Verify saved contents before claiming success. Uncertain settlement means possibly saved, not safe to retry blindly.
 Reconcile available evidence before retrying. Do not overwrite an edited card or manufacture a second one on uncertainty.
@@ -125,17 +133,14 @@ Missing read coverage must not authorise deletion. Viewing, indexing and decorat
 
 ## Remaining choices before implementation
 
-1. **No existing paragraph reference.** Recommend an article-level `origin` and unique quotation matching.
-   This keeps capture available without source-body edits or extra selection metadata.
-   Return opens the article; a unique match can locate the passage. Ambiguous matches stay unresolved.
-   The prototype currently stops here; it does not validate this fallback.
-2. **Required Fileclass fields.** The current creation flow may prompt after creating a note.
+1. **Required Fileclass fields.** The current creation flow may prompt after creating a note.
    Decide whether to accept schema-required prompts, or require a capture-compatible class with no unresolved fields.
    One-time type selection alone cannot guarantee a prompt-free Keep for every schema.
-3. **Concrete setup/discovery contract.** Approve the actual persisted setting name and how old selected types remain discoverable.
+2. **Concrete setup/discovery contract.** Approve the actual persisted setting name and how old selected types remain discoverable.
    Set explicit scan limits and coverage reporting. Do not inherit the notebook prototype's limits by accident.
 
-The body convention, article-level fallback and repeat rule above are recommendations, not additional recorded approvals.
+The body convention and repeat rule above are recommendations, not additional recorded approvals.
+The later paragraph-reference approval replaces the earlier proposed article-level fallback.
 Do not implement a temporary format and migrate it later.
 
 ## Acceptance checks for the approved implementation
@@ -143,7 +148,9 @@ Do not implement a temporary format and migrate it later.
 - Setup selects a real provider type. Missing/reloaded Fileclass or a lost type never causes fallback creation.
 - Keep creates the expected YAML and rich quotation, with no destination/title prompt in the agreed compatible case.
 - Invalid selections and cancelled setup leave source and vault unchanged.
-- The source body stays byte-for-byte unchanged, including for Feed retention.
+- The source body changes only to add a missing native paragraph reference; all other source bytes are preserved.
+- Existing references are reused; new references are collision-checked; duplicate references block capture safely.
+- Failed card creation can leave a retained source and unused reference; retry does not allocate another reference blindly.
 - Opening words produce safe bounded filenames; collisions never overwrite notes or force title entry.
 - Repeat capture uses proven evidence, including after card renames, moves and added personal writing.
 - Repeated source words and multiple same-paragraph selections never produce false exact-location claims.
@@ -161,14 +168,15 @@ Prototype browser checks do not establish those results.
 ## Evidence and next action
 
 Reviewed published main `23ac522` for this brief. No plugin code was changed or integrated.
-Current `originLink` requires a paragraph ID; current hosted capture can insert one into the article.
-Neither behaviour may be copied unchanged into source-preserving Keep.
+Current `originLink` requires a paragraph ID; current hosted capture has guarded native-anchor allocation logic.
+Reuse or extract suitable anchor logic without bringing source highlight markup or hosted reverse citations into Keep.
 Current typed-note capture may ask for a title on collision and complete required fields after creation.
 The public Nodes interface does not expose the complete clipping payload as one create operation.
 These are implementation gaps to address, not evidence that the new contract already works.
 
 Prototype evidence: [UI and file-contract playgrounds on the prototype branch](https://github.com/wannli/obsidian-reader/tree/prototype/117-clipping-cards/src/reader).
 The file-contract playground was saved at `3305462`; its matching grammar is deliberately limited.
+It predates the paragraph-reference approval and does not validate creating source references.
 Relevant modules: `src/core/{quotation,hosted-highlights,projection,store}.ts`,
 `src/host/nodes.ts`, and `src/host/fileclass/{creation,capture,reader-nodes}.ts`.
 
