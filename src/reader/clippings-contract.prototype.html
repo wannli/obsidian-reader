@@ -1,0 +1,718 @@
+<!doctype html>
+<!-- THROWAWAY #117: origin-only clipping contract. No real vault or persistence.
+     Open this self-contained HTML directly. All undecided rules are labelled. -->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Reader · Clipping file contract</title>
+    <style>
+      :root {
+        font:
+          16px/1.6 system-ui,
+          sans-serif;
+        color: #292b26;
+        background: #f7f7f2;
+        --line: #dcded3;
+        --muted: #656b5c;
+        --accent: #48573a;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+      }
+      main {
+        max-width: 1220px;
+        margin: auto;
+        padding: 30px 28px 80px;
+      }
+      h1 {
+        font:
+          normal 36px/1.2 Georgia,
+          serif;
+        margin: 12px 0;
+      }
+      h2 {
+        font-size: 20px;
+        margin: 0 0 12px;
+      }
+      h3 {
+        font-size: 15px;
+        margin: 0;
+      }
+      p {
+        margin: 8px 0 16px;
+      }
+      .muted {
+        color: var(--muted);
+        font-size: 14px;
+      }
+      .eyebrow {
+        font-size: 11px;
+        letter-spacing: 1.5px;
+        text-transform: uppercase;
+        color: var(--muted);
+      }
+      .intro {
+        max-width: 850px;
+      }
+      .contract {
+        padding: 17px 20px;
+        background: #e9eddf;
+        border-left: 3px solid var(--accent);
+        margin: 24px 0;
+      }
+      .contract code {
+        font-size: 14px;
+      }
+      button {
+        font: inherit;
+        min-height: 44px;
+        border: 1px solid var(--line);
+        padding: 9px 13px;
+        border-radius: 5px;
+        background: white;
+        color: inherit;
+        cursor: pointer;
+      }
+      button:hover {
+        background: #edf0e6;
+      }
+      button:disabled {
+        opacity: 0.5;
+        cursor: default;
+      }
+      button:focus-visible,
+      textarea:focus-visible {
+        outline: 2px solid var(--accent);
+        outline-offset: 3px;
+      }
+      button.primary,
+      button[aria-selected='true'] {
+        background: #e2e9d7;
+        border-color: #a3af91;
+      }
+      .row {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+        align-items: center;
+      }
+      .between {
+        justify-content: space-between;
+      }
+      .panel {
+        border: 1px solid var(--line);
+        background: #fffefa;
+        padding: 20px;
+        border-radius: 6px;
+        margin-bottom: 22px;
+      }
+      .summary {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 16px;
+        margin-bottom: 14px;
+      }
+      .summary strong {
+        display: block;
+        font-size: 18px;
+      }
+      .summary span {
+        font-size: 13px;
+        color: var(--muted);
+      }
+      .outcome {
+        border-top: 1px solid var(--line);
+        padding-top: 14px;
+        margin: 12px 0 0;
+        white-space: pre-wrap;
+      }
+      .warning {
+        background: #fff5de;
+        border: 1px solid #dac69e;
+        padding: 12px 15px;
+        font-size: 14px;
+        border-radius: 4px;
+      }
+      .files {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 18px;
+      }
+      .file {
+        min-width: 0;
+      }
+      .file-title {
+        overflow-wrap: anywhere;
+        font:
+          13px ui-monospace,
+          monospace;
+        margin-bottom: 8px;
+      }
+      pre {
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+        font:
+          13px/1.65 ui-monospace,
+          monospace;
+        background: #f1f2eb;
+        padding: 16px;
+        margin: 0;
+        border: 1px solid var(--line);
+        border-radius: 4px;
+        min-height: 180px;
+      }
+      .change {
+        display: inline-block;
+        font:
+          11px system-ui,
+          sans-serif;
+        background: #e2e9d7;
+        padding: 2px 7px;
+        border-radius: 3px;
+        margin-left: 6px;
+      }
+      .missing {
+        color: var(--muted);
+        font-style: italic;
+        padding: 20px;
+        border: 1px dashed var(--line);
+      }
+      .group {
+        margin: 18px 0;
+      }
+      .group p {
+        margin: 0 0 8px;
+      }
+      .tabs {
+        margin: 10px 0 18px;
+      }
+      .step {
+        display: flex;
+        gap: 12px;
+        align-items: center;
+        flex-wrap: wrap;
+      }
+      .step .muted {
+        flex: 1;
+        min-width: 200px;
+      }
+      details {
+        margin-top: 18px;
+      }
+      summary {
+        cursor: pointer;
+        min-height: 44px;
+        padding: 9px 0;
+      }
+      textarea {
+        width: 100%;
+        min-height: 230px;
+        font:
+          13px/1.65 ui-monospace,
+          monospace;
+        padding: 14px;
+        background: #fffefa;
+        border: 1px solid var(--line);
+        border-radius: 4px;
+      }
+      ul {
+        padding-left: 22px;
+      }
+      .previous {
+        margin-top: 10px;
+      }
+      .previous pre {
+        opacity: 0.8;
+        min-height: 0;
+      }
+      .decision {
+        color: #795a22;
+      }
+      .description {
+        max-width: 85ch;
+      }
+      @media (max-width: 720px) {
+        main {
+          padding: 22px 16px 50px;
+        }
+        .files {
+          grid-template-columns: 1fr;
+        }
+        .summary {
+          grid-template-columns: 1fr;
+          gap: 8px;
+        }
+        .summary strong {
+          font-size: 16px;
+        }
+        .panel {
+          padding: 16px;
+        }
+        h1 {
+          font-size: 30px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <div class="eyebrow">Reader · Data contract playground · Not a plugin implementation</div>
+      <div class="intro">
+        <h1>What does Keep actually save?</h1>
+        <p>
+          Explore a clipping that points to its source, without the article pointing back. Press an
+          action and inspect the exact Markdown before and after. All files are simulated in memory.
+        </p>
+      </div>
+      <div class="contract">
+        <strong>Chosen direction:</strong> one ordinary note per clipping; metadata in YAML; a
+        one-way <code>origin</code> link to the source.
+        <strong>Keep does not add markup or links to the article body.</strong>
+      </div>
+      <section class="panel">
+        <div class="row between">
+          <h2>Current state</h2>
+          <button id="reset">Reset files</button>
+        </div>
+        <div id="summary" class="summary"></div>
+        <div id="outcome" class="outcome" role="status" aria-live="polite"></div>
+      </section>
+      <section class="panel">
+        <h2>The files</h2>
+        <p class="muted">
+          These are the entire simulated files—not a separate database. The paragraph reference
+          already exists in this sample article.
+        </p>
+        <div class="files" id="files"></div>
+      </section>
+      <section class="panel">
+        <h2>Try an action</h2>
+        <div class="group">
+          <p class="muted">Capture</p>
+          <div class="row">
+            <button class="primary" data-action="keep">Keep the passage</button
+            ><button data-action="repeat">Keep the same passage again</button>
+          </div>
+        </div>
+        <div class="group">
+          <p class="muted">Work with the card</p>
+          <div class="row">
+            <button data-action="thought">Add my own thought</button
+            ><button data-action="move">Rename and move the card</button
+            ><button data-action="editQuote">Rewrite the quotation</button
+            ><button data-action="deleteCard">Delete the card</button>
+          </div>
+        </div>
+        <div class="group">
+          <p class="muted">Change the source</p>
+          <div class="row">
+            <button data-action="editSource">Change the source wording</button
+            ><button data-action="removeAnchor">Remove the paragraph reference</button
+            ><button data-action="renameSource">Rename source, without updating links</button
+            ><button data-action="deleteSource">Delete the source article</button>
+          </div>
+        </div>
+        <details>
+          <summary>Inspect or edit the clipping’s raw Markdown</summary>
+          <p class="muted">
+            This deliberately limited demo recognises a simple type/origin YAML header and the first
+            blockquote. That parsing rule is a proposal, not an approved production format. Other
+            content is preserved.
+          </p>
+          <textarea id="raw" aria-label="Clipping Markdown" spellcheck="false"></textarea
+          ><button id="apply">Apply in mockup</button>
+        </details>
+      </section>
+      <section class="panel">
+        <h2>Guided walkthroughs</h2>
+        <div class="row tabs" role="tablist" aria-label="File contract scenarios" id="tabs"></div>
+        <p id="scenario-description" class="description"></p>
+        <div class="step">
+          <button id="step" class="primary"></button><span id="progress" class="muted"></span>
+        </div>
+        <p class="muted">
+          Choosing a walkthrough resets the files. Free-play actions end the walkthrough.
+        </p>
+      </section>
+      <section class="panel">
+        <h2>What this does—and does not—settle</h2>
+        <ul>
+          <li>
+            <strong>No reverse link:</strong> a clipping points to the article. Reader would
+            discover cards by type and inspect their origins; the actual scan/index mechanism is not
+            designed here.
+          </li>
+          <li>
+            <strong>Independent files:</strong> renaming a card or adding thoughts never changes its
+            source article. Deleting either file never automatically deletes the other.
+          </li>
+          <li>
+            <strong>Location is not selection:</strong> <code>origin</code> locates a paragraph, but
+            does not say which words were originally selected.
+          </li>
+          <li>
+            <strong>Proposed matching:</strong> this demo uses the first blockquote to find the kept
+            words in that paragraph. Editing it can make matching and duplicate detection uncertain.
+            It does not save a hidden extra copy.
+          </li>
+          <li>
+            <strong>Unresolved:</strong> exact selection anchors, repeated text, multiple cards from
+            one paragraph, and what happens after someone rewrites the quotation. The demo stops
+            rather than inventing an answer.
+          </li>
+          <li>
+            <strong>No source reference?</strong> this demo blocks precise capture. We still need to
+            choose between a less precise article-only link and a different locator. It does not
+            silently add a block ID.
+          </li>
+          <li>
+            <strong>Not simulated:</strong> dirty editors, Fileclass setup, real link rewriting,
+            concurrent writes or Sync. No new production schema is approved by this mockup.
+          </li>
+        </ul>
+      </section>
+      <p class="muted">
+        Self-contained HTML · no network dependencies · no vault access · reload to discard changes
+      </p>
+    </main>
+    <script>
+      // Pure file-contract model. Files are the source of truth; derived state is recomputed.
+      const Contract = (() => {
+        const path = 'Articles/The city is a set of invitations.md';
+        const quote = 'Streets shape the choices we make.';
+        const origin = `[[${path}#^streets]]`;
+        const article =
+          '---\ntype: article\nurl: https://example.org/city\n---\n\n# The city is a set of invitations\n\n' +
+          quote +
+          ' A road is an invitation to behave in a particular way. ^streets\n';
+        const clipping = `---\ntype: clipping\norigin: "${origin}"\n---\n\n> ${quote}\n`;
+        const start = () => ({
+          files: { [path]: article },
+          articlePath: path,
+          message:
+            'Nothing kept yet. Keep will create one new note and leave the article unchanged.',
+          before: null,
+        });
+        function parse(raw) {
+          const front = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(raw);
+          if (!front) return {};
+          const type = /^type: clipping\s*$/m.test(front[1]);
+          const o = /^origin: "(\[\[[^"\n]+\]\])"\s*$/m.exec(front[1])?.[1];
+          const q = /^> (.+)$/m.exec(raw.slice(front[0].length))?.[1];
+          return { type, origin: o, quote: q };
+        }
+        function cards(s) {
+          return Object.entries(s.files)
+            .filter(([p, raw]) => p !== s.articlePath && parse(raw).type)
+            .map(([p, raw]) => ({ path: p, raw, ...parse(raw) }));
+        }
+        function locate(s, c) {
+          const m = /^\[\[(.+)#\^([^\]]+)\]\]$/.exec(c.origin || '');
+          if (!m)
+            return {
+              status: 'Unrecognised origin',
+              detail:
+                'The demo cannot interpret this YAML origin. No data is repaired or rewritten.',
+            };
+          const raw = s.files[m[1]];
+          if (raw === undefined)
+            return {
+              status: 'Source link unresolved',
+              detail: 'The origin path no longer resolves. The card and your writing still exist.',
+            };
+          const para = raw.split(/\n\s*\n/).find((p) => p.trimEnd().endsWith('^' + m[2]));
+          if (!para)
+            return {
+              status: 'Paragraph reference missing',
+              detail:
+                'The source file exists, but its paragraph reference does not. No fuzzy match is claimed.',
+            };
+          if (!c.quote || !para.includes(c.quote))
+            return {
+              status: 'Paragraph found; words uncertain',
+              detail:
+                'The paragraph still exists, but the first blockquote no longer matches it. Reader cannot reliably show the original selection from this data alone.',
+            };
+          return {
+            status: 'Paragraph and words found',
+            detail:
+              'Proposed rule: the first blockquote matches words in the linked paragraph. This simple case can be decorated without editing the article.',
+          };
+        }
+        function derive(s) {
+          const all = cards(s);
+          return {
+            cards: all,
+            relation: all.length
+              ? locate(s, all[0])
+              : { status: 'No clipping yet', detail: 'No saved passage to locate.' },
+            articleExists: s.files[s.articlePath] !== undefined,
+          };
+        }
+        function act(s, action, value) {
+          if (action === 'reset') return start();
+          const next = { ...s, files: { ...s.files }, before: { ...s.files } };
+          const card = cards(s)[0],
+            articleRaw = s.files[s.articlePath];
+          const needCard = () => {
+            next.message = 'No card exists. Keep the passage first.';
+            return next;
+          };
+          if (action === 'keep' || action === 'repeat') {
+            if (articleRaw === undefined) {
+              next.message =
+                'Capture blocked: the source article is missing. Existing cards are untouched.';
+              return next;
+            }
+            if (!articleRaw.includes(quote)) {
+              next.message =
+                'The original selected words are no longer in the source. Nothing saved. Select a fresh passage in a real Reader.';
+              return next;
+            }
+            if (!articleRaw.includes('^streets')) {
+              next.message =
+                'Open question: the source has no paragraph reference. This demo does not add one or silently invent a less precise origin.';
+              return next;
+            }
+            if (s.articlePath !== path) {
+              next.message =
+                'Open question: capture after a source rename needs a fresh origin and reconciliation of old links. Nothing saved in this demo.';
+              return next;
+            }
+            const related = cards(s).filter((c) => c.origin === origin);
+            if (related.some((c) => c.quote === quote)) {
+              next.message =
+                'Proposed repeat rule: return the existing card. No new file; no article edit. Adding thoughts or moving the card does not prevent this match.';
+              return next;
+            }
+            if (related.length) {
+              next.message =
+                'Decision needed: a card points to this paragraph, but its quotation is different. It could be an edited card or another selection. origin alone cannot tell. No extra file created.';
+              return next;
+            }
+            let target = 'Clippings/Streets shape the choices we make.md',
+              n = 2;
+            while (Object.hasOwn(next.files, target))
+              target = `Clippings/Streets shape the choices we make ${n++}.md`;
+            next.files[target] = clipping;
+            next.message =
+              'Created one clipping note. type and origin are in YAML; the quotation is in the body. The article is byte-for-byte unchanged.';
+          } else if (action === 'thought') {
+            if (!card) return needCard();
+            next.files[card.path] +=
+              '\nThis connects to [[Urban design]]. Places make some choices easier than others.\n';
+            next.message =
+              'Only the card body changed. No new properties, source edits or synchronised copies.';
+          } else if (action === 'move') {
+            if (!card) return needCard();
+            const target = 'Ideas/Design shapes our choices.md';
+            if (card.path === target) {
+              next.message = 'The card is already at its new path.';
+              return next;
+            }
+            if (Object.hasOwn(next.files, target)) {
+              next.message = 'Destination already exists. Nothing overwritten.';
+              return next;
+            }
+            next.files[target] = card.raw;
+            delete next.files[card.path];
+            next.message =
+              'The card moved and was renamed. Its contents, including origin, did not change. The article has no reverse link to update. Other notes linking to this card would depend on Obsidian’s link-update behaviour, not this contract.';
+          } else if (action === 'editQuote') {
+            if (!card) return needCard();
+            next.files[card.path] = card.raw.replace(
+              /^> .+$/m,
+              '> Street design influences our behaviour.',
+            );
+            next.message =
+              'Your edit is preserved. The original quotation is not secretly stored elsewhere. Now inspect whether origin alone can still identify the original selection.';
+          } else if (action === 'deleteCard') {
+            if (!card) return needCard();
+            delete next.files[card.path];
+            next.message =
+              'Only the card was deleted. The article is unchanged. With no card left, this model has no saved clipping to decorate. Keeping again can create a new card.';
+          } else if (action === 'apply') {
+            if (!card) return needCard();
+            next.files[card.path] = value;
+            next.message =
+              'Raw Markdown updated exactly as entered. Unsupported or type-changed content is preserved, but may no longer be recognised as a clipping by this limited demo.';
+          } else if (articleRaw === undefined) {
+            next.message = 'The source article is already missing. Cards remain untouched.';
+          } else if (action === 'editSource') {
+            next.files[s.articlePath] = articleRaw.replace(
+              quote,
+              'Street design changes what we choose to do.',
+            );
+            next.message =
+              'Only the article changed. The saved quotation and your thoughts remain exactly as they were. Its paragraph can still be found, but the words may no longer match.';
+          } else if (action === 'removeAnchor') {
+            next.files[s.articlePath] = articleRaw.replace(' ^streets', '');
+            next.message =
+              'Removed the source paragraph reference. The card remains readable, but origin no longer resolves to that paragraph.';
+          } else if (action === 'renameSource') {
+            const target = 'Articles/Invitations.md';
+            next.files[target] = articleRaw;
+            delete next.files[s.articlePath];
+            next.articlePath = target;
+            next.message =
+              'Simulated source rename with link updates OFF. The clipping is untouched, so its origin still uses the old path. A one-way link is not immune to broken links.';
+          } else if (action === 'deleteSource') {
+            delete next.files[s.articlePath];
+            next.message =
+              'Only the article was deleted. Its clipping and your own writing remain. origin is now a link to a missing file.';
+          }
+          return next;
+        }
+        return { start, act, derive };
+      })();
+    </script>
+    <script>
+      const scenarios = [
+        {
+          name: 'Keep → think → move',
+          description:
+            'Does an independent card need any changes to its source when you develop it?',
+          steps: [
+            ['keep', 'Keep the passage'],
+            ['thought', 'Add a thought'],
+            ['move', 'Rename and move the card'],
+            ['repeat', 'Keep the same passage again'],
+          ],
+        },
+        {
+          name: 'Source changes',
+          description:
+            'The saved quotation should survive, even when its original wording disappears.',
+          steps: [
+            ['keep', 'Keep the passage'],
+            ['thought', 'Add a thought'],
+            ['editSource', 'Change the source wording'],
+            ['deleteSource', 'Delete the source article'],
+          ],
+        },
+        {
+          name: 'Quotation changes',
+          description:
+            'This exposes a gap in the minimal contract: origin identifies a paragraph, not the original selected words.',
+          steps: [
+            ['keep', 'Keep the passage'],
+            ['editQuote', 'Rewrite the quotation'],
+            ['repeat', 'Try keeping the original again'],
+          ],
+        },
+        {
+          name: 'Broken link',
+          description:
+            'Watch what happens when a source is renamed without Obsidian updating links. Nothing automatically repairs it here.',
+          steps: [
+            ['keep', 'Keep the passage'],
+            ['renameSource', 'Rename source without link updates'],
+          ],
+        },
+        {
+          name: 'No paragraph reference',
+          description:
+            'Do we accept a less precise source link, or need another locator? This is deliberately left undecided.',
+          steps: [
+            ['removeAnchor', 'Remove the paragraph reference'],
+            ['keep', 'Try keeping the passage'],
+          ],
+        },
+        {
+          name: 'Delete and keep again',
+          description:
+            'No hidden tombstone or global highlight ID: deleting the card removes the only saved clipping record.',
+          steps: [
+            ['keep', 'Keep the passage'],
+            ['deleteCard', 'Delete its card'],
+            ['repeat', 'Keep the passage again'],
+          ],
+        },
+      ];
+      let state = Contract.start(),
+        scenario = -1,
+        step = 0;
+      const $ = (s) => document.querySelector(s),
+        esc = (s) =>
+          String(s).replace(
+            /[&<>"']/g,
+            (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c],
+          );
+      function run(action, value, free = true) {
+        if (free) scenario = -1;
+        state = Contract.act(state, action, value);
+        render();
+      }
+      function render() {
+        const d = Contract.derive(state);
+        $('#summary').innerHTML =
+          `<div><strong>${d.articleExists ? 'Source exists' : 'Source missing'}</strong><span>${esc(state.articlePath)}</span></div><div><strong>${d.cards.length} clipping note${d.cards.length === 1 ? '' : 's'}</strong><span>Discovered from type: clipping</span></div><div><strong>${esc(d.relation.status)}</strong><span>${esc(d.relation.detail)}</span></div>`;
+        $('#outcome').textContent = state.message;
+        const paths = [
+          ...new Set([...Object.keys(state.files), ...Object.keys(state.before || {})]),
+        ];
+        $('#files').innerHTML = paths
+          .map((path) => {
+            const raw = state.files[path],
+              old = state.before?.[path],
+              changed = state.before && raw !== old;
+            const label = changed
+              ? raw === undefined
+                ? 'Removed'
+                : old === undefined
+                  ? 'Created'
+                  : 'Changed'
+              : 'Unchanged';
+            return `<section class="file"><div class="file-title">${esc(path)} ${state.before ? `<span class="change">${label}</span>` : ''}</div>${raw === undefined ? '<div class="missing">File does not exist.</div>' : `<pre>${esc(raw)}</pre>`}${changed && old !== undefined ? `<details class="previous"><summary>Before this action</summary><pre>${esc(old)}</pre></details>` : ''}</section>`;
+          })
+          .join('');
+        $('#raw').value = d.cards[0]?.raw || '';
+        $('#raw').disabled = !d.cards.length;
+        $('#apply').disabled = !d.cards.length;
+        $('#tabs').innerHTML = scenarios
+          .map(
+            (s, i) =>
+              `<button role="tab" aria-selected="${scenario === i}" data-scenario="${i}">${esc(s.name)}</button>`,
+          )
+          .join('');
+        document.querySelectorAll('[data-scenario]').forEach(
+          (b) =>
+            (b.onclick = () => {
+              scenario = Number(b.dataset.scenario);
+              step = 0;
+              state = Contract.start();
+              render();
+            }),
+        );
+        const current = scenarios[scenario];
+        $('#scenario-description').textContent =
+          current?.description ||
+          'Choose a walkthrough to start from clean files, or use the actions above in any order.';
+        $('#step').disabled = !current || step >= current.steps.length;
+        $('#step').textContent = current
+          ? current.steps[step]?.[1] || 'Walkthrough complete'
+          : 'Choose a walkthrough';
+        $('#progress').textContent = current
+          ? `${Math.min(step + 1, current.steps.length)} / ${current.steps.length}${step >= current.steps.length ? ' · Try another walkthrough or free-play action.' : ''}`
+          : '';
+      }
+      $('#reset').onclick = () => run('reset');
+      document
+        .querySelectorAll('[data-action]')
+        .forEach((b) => (b.onclick = () => run(b.dataset.action)));
+      $('#apply').onclick = () => run('apply', $('#raw').value);
+      $('#step').onclick = () => {
+        const action = scenarios[scenario]?.steps[step]?.[0];
+        if (action) {
+          step++;
+          run(action, undefined, false);
+        }
+      };
+      render();
+    </script>
+  </body>
+</html>
