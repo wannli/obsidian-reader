@@ -65,19 +65,20 @@ function normalizeURL(value) {
   return url.href;
 }
 
+function sameRevision(before, after) {
+  // Inodes can be reused after deletion; identical bytes alone do not restore consent.
+  return ['dev', 'ino', 'size', 'mtimeNs', 'ctimeNs', 'birthtimeNs'].every(
+    (key) => before[key] === after[key],
+  );
+}
+
 async function snapshot(path) {
-  const before = await lstat(path);
-  if (before.size > 100_000) throw new Error('Unavailable');
+  const before = await lstat(path, { bigint: true });
+  if (before.size > 100_000n) throw new Error('Unavailable');
   const raw = (await regularFile(path)).toString('utf8');
-  const after = await lstat(path);
-  if (
-    before.dev !== after.dev ||
-    before.ino !== after.ino ||
-    before.mtimeMs !== after.mtimeMs ||
-    before.size !== after.size
-  )
-    throw new Error('Unavailable');
-  return { raw, dev: after.dev, ino: after.ino };
+  const after = await lstat(path, { bigint: true });
+  if (!sameRevision(before, after)) throw new Error('Unavailable');
+  return { raw, revision: after };
 }
 
 async function articleURLs(deadline) {
@@ -157,15 +158,20 @@ export async function createSession({ read = false, capture = false } = {}) {
         selected.set(randomUUID(), { source, current });
     }
   async function permitted(entry) {
-    if (!enabledRead) return false;
-    await assertOwned();
-    const current = await snapshot(notePath(entry.source));
-    return (
-      enabledRead &&
-      current.raw === entry.current.raw &&
-      current.dev === entry.current.dev &&
-      current.ino === entry.current.ino
-    );
+    if (!enabledRead || !entry || entry.revoked) return false;
+    try {
+      await assertOwned();
+      const current = await snapshot(notePath(entry.source));
+      if (
+        current.raw !== entry.current.raw ||
+        !sameRevision(current.revision, entry.current.revision)
+      )
+        entry.revoked = true;
+    } catch {
+      entry.revoked = true;
+    }
+    // Revocation is permanent, including when a concurrent check observed the change.
+    return enabledRead && !entry.revoked;
   }
   function projection(handle, source) {
     return {

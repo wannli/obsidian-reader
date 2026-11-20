@@ -1,6 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { cp, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
+import fs from 'node:fs/promises';
+import { syncBuiltinESMExports } from 'node:module';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -17,6 +19,28 @@ async function fixture(t) {
   const module = await import(pathToFileURL(join(root, 'scripts/reader-mcp.mjs')).href);
   await module.setup();
   return { ...module, root };
+}
+
+async function pinIdentity(t, path, pinRevision = false) {
+  const initial = await fs.lstat(path);
+  const initialBigInt = await fs.lstat(path, { bigint: true });
+  const lstat = fs.lstat;
+  const mocked = t.mock.method(fs, 'lstat', async (target, options) => {
+    const stat = await lstat(target, options);
+    if (target === path) {
+      const baseline = options?.bigint ? initialBigInt : initial;
+      const keys = pinRevision
+        ? ['dev', 'ino', 'mtimeMs', 'ctimeMs', 'birthtimeMs', 'mtimeNs', 'ctimeNs', 'birthtimeNs']
+        : ['dev', 'ino'];
+      for (const key of keys) if (key in baseline) stat[key] = baseline[key];
+    }
+    return stat;
+  });
+  syncBuiltinESMExports();
+  t.after(() => {
+    mocked.mock.restore();
+    syncBuiltinESMExports();
+  });
 }
 
 const capture = { url: 'https://example.com/reader-mcp/capture' };
@@ -108,6 +132,57 @@ test('revocation and changed/replaced sources invalidate handles', async (t) => 
   assert.deepEqual(await session.call('capture_url', capture), unavailable);
   const next = await f.createSession({ read: true });
   assert.deepEqual(await next.call('get_source', { handle: matches[1].handle }), unavailable);
+});
+
+test('observed source changes permanently revoke only the affected handle', async (t) => {
+  const f = await fixture(t);
+  const path = join(f.vault, 'Reading/Inbox/Synthetic gardens.md');
+  // Even restored metadata must not revive a handle after an observed byte change.
+  await pinIdentity(t, path, true);
+  const session = await f.createSession({ read: true });
+  const { matches } = await session.call('search_sources', { query: '' });
+  const original = await readFile(path);
+  await writeFile(path, 'PRIVATE_CHANGED_CANARY');
+  assert.deepEqual(await session.call('search_sources', { query: 'gardens' }), { matches: [] });
+  await writeFile(path, original);
+  assert.deepEqual(await session.call('get_source', { handle: matches[0].handle }), unavailable);
+  assert.equal((await session.call('search_sources', { query: '' })).matches.length, 1);
+  assert.equal(
+    (await session.call('get_source', { handle: matches[1].handle })).title,
+    'Synthetic libraries',
+  );
+  const next = await f.createSession({ read: true });
+  assert.equal((await next.call('search_sources', { query: '' })).matches.length, 2);
+});
+
+test('a failed source read permanently revokes its handle after the file returns', async (t) => {
+  const f = await fixture(t);
+  const path = join(f.vault, 'Reading/Inbox/Synthetic gardens.md');
+  await pinIdentity(t, path, true);
+  const session = await f.createSession({ read: true });
+  const { matches } = await session.call('search_sources', { query: '' });
+  const original = await readFile(path);
+  await rm(path);
+  assert.deepEqual(await session.call('get_source', { handle: matches[0].handle }), unavailable);
+  await writeFile(path, original);
+  assert.deepEqual(await session.call('get_source', { handle: matches[0].handle }), unavailable);
+  assert.equal((await session.call('search_sources', { query: '' })).matches.length, 1);
+});
+
+test('replaced sources cannot reuse handles even when the filesystem reuses an inode', async (t) => {
+  const f = await fixture(t);
+  const path = join(f.vault, 'Reading/Inbox/Synthetic gardens.md');
+  const original = await readFile(path);
+  // Model Linux inode reuse without relying on the host filesystem's allocator.
+  await pinIdentity(t, path);
+  const session = await f.createSession({ read: true });
+  const { matches } = await session.call('search_sources', { query: '' });
+  await rm(path);
+  await writeFile(path, original);
+  // A deterministic revision change, even on filesystems with coarse timestamps.
+  await fs.utimes(path, new Date(0), new Date(0));
+  assert.deepEqual(await session.call('get_source', { handle: matches[0].handle }), unavailable);
+  assert.equal((await session.call('search_sources', { query: '' })).matches.length, 1);
 });
 
 test('ownership mismatch and symlinked destinations block access', async (t) => {
