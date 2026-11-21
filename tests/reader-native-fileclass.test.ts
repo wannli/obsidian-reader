@@ -617,6 +617,23 @@ describe('clipping Fileclass compatibility', () => {
     }
   });
 
+  it('reports the last native event when repeated changes prevent a stable capture check', async () => {
+    const f = await clippingAdapterFixture();
+    const validate = f.store.validate.bind(f.store);
+    vi.spyOn(f.store, 'validate').mockImplementation(async (source) => {
+      await validate(source);
+      f.metadataEvents.fire('changed', source.file);
+    });
+    try {
+      await expect(f.keep()).rejects.toThrow(
+        /changed during all 3 lookup attempts.*Last change: metadata in "Articles\/Source\.md"/,
+      );
+      expect(f.files.has('Nodes/Saved words.md')).toBe(false);
+    } finally {
+      f.lifetime.abort();
+    }
+  });
+
   it('scopes bounded discovery to the source, rather than reading every clipping in the vault', async () => {
     const f = await clippingAdapterFixture(async (f) => {
       for (let i = 0; i < 210; i++) {

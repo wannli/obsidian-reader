@@ -138,6 +138,7 @@ it('keeps incomplete background lookup quiet but explains a blocked Keep without
     referenced: false,
     complete: false,
     revision: 0,
+    diagnostic: 'Could not resolve origin in: "Cards/Existing.md".',
   });
   f.view.refreshArticleControls();
   await vi.waitFor(() =>
@@ -150,6 +151,9 @@ it('keeps incomplete background lookup quiet but explains a blocked Keep without
   await f.probe.operations.catch(() => {});
   expect(f.view.contentEl.querySelector('[role="alert"]')?.textContent).toContain(
     'Clipping lookup is incomplete',
+  );
+  expect(f.view.contentEl.querySelector('[role="alert"]')?.textContent).toContain(
+    'Could not resolve origin in: "Cards/Existing.md".',
   );
   expect(f.vault.files.size).toBe(1);
   expect(await f.vault.read(f.article)).toBe(before);

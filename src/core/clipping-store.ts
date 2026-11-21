@@ -20,11 +20,19 @@ export interface ClippingCandidate<File> {
   path: string;
   bytes: number;
 }
+export interface ClippingChange {
+  event: 'settings' | 'metadata' | 'create' | 'modify' | 'rename' | 'delete';
+  path?: string;
+}
+function diagnosticPath(path: string): string {
+  return JSON.stringify(path.length > 300 ? `${path.slice(0, 140)}…${path.slice(-140)}` : path);
+}
 export interface ClippingPort<File extends NoteFile> {
   bindings(): readonly ClippingBinding[];
   candidates(source: Snapshot<File>): readonly ClippingCandidate<File>[];
   observed?(candidate: ClippingCandidate<File>, raw: string): void;
   revision(): number;
+  lastChange?(): ClippingChange | undefined;
   prepare(signal: AbortSignal): Promise<{
     binding: ClippingBinding;
     folder: string;
@@ -43,6 +51,8 @@ export interface ClippingScan {
   referenced: boolean;
   complete: boolean;
   revision: number;
+  /** Bounded local diagnostics: reasons and paths only, never note contents or parser errors. */
+  diagnostic: string;
 }
 export interface KeptClipping<File extends NoteFile> {
   snapshot: Snapshot<File>;
@@ -68,62 +78,104 @@ export class ClippingStore<File extends NoteFile> {
       };
     });
   }
+  private changeDiagnostic(): string {
+    const change = this.port.lastChange?.();
+    return change
+      ? ` Last change: ${change.event}${change.path ? ` in ${diagnosticPath(change.path)}` : ''}.`
+      : '';
+  }
   async scan(snapshot: Snapshot<File>, signal: AbortSignal): Promise<ClippingScan> {
     const revision = this.port.revision(),
-      items: ArticleClipping[] = [];
+      items: ArticleClipping[] = [],
+      problems: string[] = [];
     let referenced = false,
       complete = true,
+      omitted = 0,
       bytes = 0,
       reads = 0;
+    const incomplete = (reason: string, path?: string) => {
+      complete = false;
+      if (problems.length < 3) problems.push(path ? `${reason}: ${diagnosticPath(path)}.` : reason);
+      else omitted++;
+    };
     for (const candidate of this.port.candidates(snapshot)) {
       if (signal.aborted) throw new Error('Clipping lookup cancelled.');
-      if (++reads > 200 || candidate.bytes > 200_000 || (bytes += candidate.bytes) > 1_000_000) {
-        complete = false;
+      if (++reads > 200) {
+        incomplete('Reached the 200-note scan limit before inspecting', candidate.path);
         continue;
       }
+      if (candidate.bytes > 200_000) {
+        incomplete('Exceeded the 200 KB note-size limit', candidate.path);
+        continue;
+      }
+      if ((bytes += candidate.bytes) > 1_000_000) {
+        incomplete('Exceeded the 1 MB scan-size limit before inspecting', candidate.path);
+        continue;
+      }
+      let failure = 'Could not read note';
       try {
         const raw = await this.articles.vault.read(candidate.file);
+        if (raw.length > 200_000) {
+          incomplete('Exceeded the 200 KB note-size limit', candidate.path);
+          continue;
+        }
         if (
-          raw.length > 200_000 ||
           candidate.file.path !== candidate.path ||
           this.articles.vault.file(candidate.path) !== candidate.file
         ) {
-          complete = false;
+          incomplete('Note moved, was replaced, or was deleted', candidate.path);
           continue;
         }
         bytes += Math.max(0, raw.length - candidate.bytes);
         if (bytes > 1_000_000) {
-          complete = false;
+          incomplete('Exceeded the 1 MB scan-size limit while reading', candidate.path);
           continue;
         }
+        failure = 'Could not inspect note';
         if (revision === this.port.revision()) this.port.observed?.(candidate, raw);
         if (!/^(?:\uFEFF)?---\r?\n/u.test(raw)) continue;
+        failure = 'Could not parse frontmatter';
         const doc = readDocument(raw);
+        failure = 'Could not inspect clipping';
         const source =
           clippingOrigin(doc.properties.origin)?.path ??
           (typeof doc.properties.origin === 'string' ? linkPath(doc.properties.origin) : undefined);
         if (source) {
           const target = this.articles.vault.resolveLink?.(source, candidate.path);
           if (target === snapshot.file) referenced = true;
-          else if (!target) complete = false; // Unknown resolution cannot prove absence, even without a clipping type.
+          else if (!target) {
+            // Unknown resolution cannot prove absence, even without a clipping type.
+            incomplete('Could not resolve origin in', candidate.path);
+            continue;
+          }
         }
         const clipping = readClipping(raw, this.port.bindings());
         if (!clipping) continue;
         const origin = clippingOrigin(clipping.origin)!;
         const target = this.articles.vault.resolveLink?.(origin.path, candidate.path);
         if (!target) {
-          complete = false;
+          incomplete('Could not resolve origin in', candidate.path);
           continue;
         }
         if (target !== snapshot.file) continue;
         const location = locateClipping(snapshot.body, origin.blockId, clipping.quote);
         items.push({ path: candidate.path, quote: clipping.quote, location });
       } catch {
-        complete = false;
+        incomplete(failure, candidate.path);
       }
     }
     if (signal.aborted) throw new Error('Clipping lookup cancelled.');
-    return { items, referenced, complete: complete && revision === this.port.revision(), revision };
+    if (revision !== this.port.revision())
+      incomplete(
+        `Vault, metadata or clipping settings changed during lookup.${this.changeDiagnostic()}`,
+      );
+    return {
+      items,
+      referenced,
+      complete,
+      revision,
+      diagnostic: problems.join(' ') + (omitted ? ` ${omitted} additional lookup problems.` : ''),
+    };
   }
   keep(
     snapshot: Snapshot<File>,
@@ -167,7 +219,13 @@ export class ClippingStore<File extends NoteFile> {
       if (scan.revision === this.port.revision()) return scan;
       // Only an invalidated scan is retried. Stable missing/oversized coverage still blocks.
     }
-    return { items: [], referenced: false, complete: false, revision: this.port.revision() };
+    return {
+      items: [],
+      referenced: false,
+      complete: false,
+      revision: this.port.revision(),
+      diagnostic: `Vault, metadata or clipping settings changed during all 3 lookup attempts.${this.changeDiagnostic()}`,
+    };
   }
   private async perform(
     snapshot: Snapshot<File>,
@@ -193,7 +251,7 @@ export class ClippingStore<File extends NoteFile> {
     active();
     if (!scan.complete)
       throw new Error(
-        'Clipping lookup is incomplete or changed. Nothing new was saved; retry after indexing settles.',
+        `Clipping lookup is incomplete. No new clipping was saved. ${scan.diagnostic}`,
       );
     const desired = locateClipping(plan.body, plan.blockId, plan.quote);
     if (!desired)
@@ -233,7 +291,9 @@ export class ClippingStore<File extends NoteFile> {
     const finalScan = await this.scanForCapture(source, signal, active);
     active();
     if (!finalScan.complete)
-      throw new Error('Source retained, but clipping lookup is incomplete. No card was created.');
+      throw new Error(
+        `Source retained, but clipping lookup is incomplete. No card was created. ${finalScan.diagnostic}`,
+      );
     if (
       finalScan.items.some(
         (item) =>

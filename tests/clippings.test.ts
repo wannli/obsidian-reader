@@ -264,9 +264,78 @@ describe('guarded clipping capture', () => {
     for (let i = 0; i < 201; i++)
       await f.vault.create(`Other/${i}.md`, '---\nfileClass: Other\n---\nText');
     expect((await f.clippings.scan(f.snapshot, f.controller.signal)).complete).toBe(false);
-    await expect(f.keep()).rejects.toThrow(/incomplete/);
+    await expect(f.keep()).rejects.toThrow(/200-note scan limit.*Other\/200\.md/);
     expect(f.snapshot.body).not.toContain('^reader-');
   });
+  it.each([
+    ['oversized', '200 KB note-size limit'],
+    ['unreadable', 'Could not read note'],
+    ['invalid-yaml', 'Could not parse frontmatter'],
+    ['unresolved-origin', 'Could not resolve origin'],
+    ['moved', 'Note moved, was replaced, or was deleted'],
+  ] as const)('reports the file and condition blocking capture: %s', async (kind, reason) => {
+    const f = await fixture();
+    const path = `Other/${kind}.md`;
+    const raw =
+      kind === 'oversized'
+        ? 'x'.repeat(200_001)
+        : kind === 'invalid-yaml'
+          ? '---\nfileClass: [\n---\nPrivate body'
+          : kind === 'unresolved-origin'
+            ? clippingMarkdown(binding, '[[Missing#^source]]', 'Private quotation')
+            : 'Ordinary text';
+    const file = await f.vault.create(path, raw);
+    const read = f.vault.read.bind(f.vault);
+    vi.spyOn(f.vault, 'read').mockImplementation(async (candidate) => {
+      if (candidate === file && kind === 'unreadable')
+        throw new Error('Private error details must not be exposed');
+      const result = await read(candidate);
+      if (candidate === file && kind === 'moved') candidate.path = 'Other/Moved.md';
+      return result;
+    });
+    const before = f.snapshot.raw;
+    const error = await f.keep().catch((error: Error) => error);
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toContain(reason);
+    expect((error as Error).message).toContain(path);
+    expect((error as Error).message).not.toMatch(/Private|indexing settles/);
+    expect(await f.vault.read(f.file)).toBe(before);
+    expect(f.vault.file('Nodes/Streets shape our choices.md')).toBeUndefined();
+  });
+
+  it('reports the bounded read budget and the first file it cannot inspect', async () => {
+    const f = await fixture();
+    for (let i = 0; i < 6; i++) await f.vault.create(`Other/${i}.md`, 'x'.repeat(180_000));
+    await expect(f.keep()).rejects.toThrow(/1 MB scan-size limit.*Other\/5\.md/);
+    expect(f.snapshot.body).not.toContain('^reader-');
+  });
+
+  it('bounds diagnostics to three file examples without exposing note contents', async () => {
+    const f = await fixture();
+    for (let i = 0; i < 6; i++)
+      await f.vault.create(`Other/${i}.md`, '---\nfileClass: [\n---\nPrivate body');
+    const error = await f.keep().catch((error: Error) => error);
+    expect(error).toBeInstanceOf(Error);
+    const message = (error as Error).message;
+    expect(message).toContain('Other/0.md');
+    expect(message).toContain('Other/2.md');
+    expect(message).not.toContain('Other/3.md');
+    expect(message).toContain('3 additional lookup problems');
+    expect(message).not.toContain('Private body');
+  });
+
+  it('includes lookup diagnostics when the source was saved but no card was created', async () => {
+    const f = await fixture();
+    f.validate.mockImplementationOnce(async () => {
+      await f.vault.create('Other/Too large.md', 'x'.repeat(200_001));
+    });
+    await expect(f.keep()).rejects.toThrow(
+      /Source retained, but clipping lookup is incomplete.*200 KB note-size limit.*Other\/Too large\.md/,
+    );
+    expect(f.snapshot.body).toContain('^reader-');
+    expect(f.vault.file('Nodes/Streets shape our choices.md')).toBeUndefined();
+  });
+
   it('rechecks invalidated post-write coverage and reuses a concurrently created clipping', async () => {
     const f = await fixture('Streets shape our choices. ^existing', 'feed');
     const scan = f.clippings.scan.bind(f.clippings);
@@ -299,7 +368,7 @@ describe('guarded clipping capture', () => {
       if (++scans > 1) f.bump();
       return result;
     });
-    await expect(f.keep()).rejects.toThrow(/Source retained, but clipping lookup is incomplete/);
+    await expect(f.keep()).rejects.toThrow(/changed during all 3 lookup attempts/);
     expect(scans).toBe(4); // One preflight, then at most three post-write attempts.
     expect(process).toHaveBeenCalledOnce();
     expect(f.snapshot.body).toContain('^reader-');

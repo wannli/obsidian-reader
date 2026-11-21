@@ -1,5 +1,5 @@
 import { TFile, type App } from 'obsidian';
-import { ClippingStore } from '../core/clipping-store';
+import { ClippingStore, type ClippingChange } from '../core/clipping-store';
 import { clippingMember, clippingOrigin } from '../core/clippings';
 import { readDocument } from '../core/document';
 import { linkPath, excludedReaderPath, type Properties } from '../core/model';
@@ -11,11 +11,13 @@ export class ReaderClippings extends ClippingStore<TFile> {
   constructor(app: App, store: ArticleStore<TFile>, nodes: ReaderNodes, signal: AbortSignal) {
     let revision = 0,
       settingsKey = JSON.stringify(nodes.settingsSnapshot());
+    let lastChange: ClippingChange | undefined;
     const currentRevision = () => {
       const key = JSON.stringify(nodes.settingsSnapshot());
       if (key !== settingsKey) {
         settingsKey = key;
         revision++;
+        lastChange = { event: 'settings' };
       }
       return revision;
     };
@@ -25,6 +27,7 @@ export class ReaderClippings extends ClippingStore<TFile> {
     super(store, {
       bindings,
       revision: currentRevision,
+      lastChange: () => lastChange,
       candidates: (source) =>
         app.vault
           .getMarkdownFiles()
@@ -67,24 +70,29 @@ export class ReaderClippings extends ClippingStore<TFile> {
         return nodes.prepareClipping(request);
       },
     });
-    const refs = ['create', 'modify', 'rename', 'delete'].map((event) =>
+    const refs = (['create', 'modify', 'rename', 'delete'] as const).map((event) =>
       app.vault.on(event as 'modify', (file) => {
         if (!(file instanceof TFile)) {
           // A folder move can change relative-link resolution without per-child events.
           if (event === 'rename' || event === 'delete') {
             revision++;
+            lastChange = { event, path: file.path };
             observed.clear();
           }
           return;
         }
         if (!file.path.endsWith('.md') && event !== 'rename' && event !== 'delete') return;
         revision++;
+        lastChange = { event, path: file.path };
         observed.delete(file);
         if (event === 'delete' || !file.path.endsWith('.md')) dirty.delete(file);
         else dirty.add(file);
       }),
     );
-    const metadata = app.metadataCache.on('changed', () => revision++);
+    const metadata = app.metadataCache.on('changed', (file) => {
+      revision++;
+      lastChange = { event: 'metadata', path: file.path };
+    });
     const dispose = () => {
       for (const ref of refs) app.vault.offref(ref);
       app.metadataCache.offref(metadata);
