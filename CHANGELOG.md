@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.30.3](https://github.com/wannli/obsidian-reader/compare/0.30.2...0.30.3) (2026-11-21)
+
+
+### Fixed
+
+* **reader:** explain blocked clipping lookups ([ad3cee5](https://github.com/wannli/obsidian-reader/commit/ad3cee577b71a899c1632968eec8ff3adf533724))
+* **reader:** separate clipping capture from deletion protection ([0ed9d74](https://github.com/wannli/obsidian-reader/commit/0ed9d748588825528a51be2fdd75ab6fc0291f39))
+
+
+### Refactored
+
+* **reader:** prune unused topic picker and index bookkeeping ([9f3b893](https://github.com/wannli/obsidian-reader/commit/9f3b893a685f371bfeb7288ee7863ee4fcbf898e))
+* **reader:** remove obsolete paging and error metadata ([0ed8c75](https://github.com/wannli/obsidian-reader/commit/0ed8c753511b33cc3a78f2f022630f7e9d183188))
+
 ## [0.30.2](https://github.com/wannli/obsidian-reader/compare/0.30.1...0.30.2) (2026-11-21)
 
 
