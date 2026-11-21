@@ -432,21 +432,6 @@ body.is-mobile.reader-mobile-active .mobile-navbar {
 .reader-document mark a {
   color: inherit;
 }
-.reader-node-classes {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--size-4-2);
-  color: var(--text-muted);
-}
-.reader-node-class {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--size-2-2);
-}
-.reader-node-class .svg-icon {
-  width: 1em;
-  height: 1em;
-}
 .reader-actions {
   grid-template-columns: repeat(5, 44px);
 }
@@ -866,15 +851,6 @@ dialog.reader-image-viewer,
   display: block;
   min-width: 0;
   overflow-wrap: anywhere;
-}
-.reader-highlight-picker .reader-highlight-picker-result-meta {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: var(--size-2-1) var(--size-4-2);
-  min-width: 0;
-  font-size: 0.8em;
-  color: var(--text-muted);
 }
 .reader-highlight-picker-result-path {
   flex: 1 1 12ch;

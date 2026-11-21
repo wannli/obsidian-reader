@@ -1066,7 +1066,6 @@ describe('guarded highlight collection', () => {
     expect(partial.annotationSaved).toBe(false);
     expect(partial.snapshot.properties.status).toBe('later');
     expect(partial.snapshot.body).toBe(snapshot.body);
-    expect(partial.savedSnapshot).toBe(partial.snapshot);
     expect(partial.snapshot.raw).toBe(await vault.read(source));
     expect(await vault.read(target)).not.toContain('## Highlights');
   });

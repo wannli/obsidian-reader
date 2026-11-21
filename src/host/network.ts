@@ -3,7 +3,6 @@ import type { Response } from '../content/extract';
 import { WorkQueue } from '../core/work';
 
 export class NetworkOverflowError extends Error {
-  readonly retryable = true;
   constructor() {
     super('Reader network backlog is full. Retry when pending requests finish.');
     this.name = 'NetworkOverflowError';

@@ -360,7 +360,7 @@ export class ReadingSurface {
       const last = (this.pageCount() - 1) * (this.columnWidth() + GAP),
         extent = this.viewport.scrollWidth;
       // Integer column metrics can put the nominal last page beyond scrollLeft's
-      // fractional, clamped limit. Bound by the scroller, not rounded canPage().
+      // fractional, clamped limit. Bound by the scroller, not a rounded page index.
       // An unmeasured extent must not turn the start of a long article into its end.
       const end =
         extent > 0 ? Math.min(last, Math.max(0, extent - this.viewport.clientWidth)) : last;
@@ -378,14 +378,6 @@ export class ReadingSurface {
     return direction === -1
       ? this.viewport.scrollTop <= 1
       : this.viewport.scrollTop + this.viewport.clientHeight >= this.viewport.scrollHeight - 1;
-  }
-
-  canPage(direction: -1 | 1): boolean {
-    if (this.dead || !this.paged) return false;
-    // A rounded phantom column must not trap Next after the guarded endpoint is reached.
-    if (direction === 1 && this.atBoundary(1)) return false;
-    const current = Math.round(this.viewport.scrollLeft / (this.columnWidth() + GAP));
-    return direction < 0 ? current > 0 : current < this.pageCount() - 1;
   }
 
   private invalidateEnd(): void {

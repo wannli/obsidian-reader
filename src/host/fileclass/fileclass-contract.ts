@@ -1,7 +1,5 @@
 /** Normalized public Fileclass data. No upstream implementation classes are imported. */
-export class MetadataPendingError extends Error {
-  readonly writeSucceeded = true;
-}
+export class MetadataPendingError extends Error {}
 
 export interface ClassInfo {
   name: string;

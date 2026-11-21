@@ -44,9 +44,6 @@ vi.mock('../src/reader/surface', () => ({
     restore() {}
     flush() {}
     dispose() {}
-    canPage() {
-      return false;
-    }
   },
 }));
 vi.mock('obsidian', () => ({
@@ -587,7 +584,7 @@ describe('topic-filter view integration', () => {
     const f = fixture();
     const file = f.add('Reading/Inbox/A.md', 'body');
     f.probe.snapshot = { file, path: file.path, body: 'body', properties: { type: 'article' } };
-    f.probe.surface = { canPage: () => false, setTopics: vi.fn() };
+    f.probe.surface = { setTopics: vi.fn() };
     f.probe.actions = document.createElement('nav');
     f.view.contentEl.append(f.probe.actions);
     f.probe.topicFilter = { label: 'body', terms: ['body'] };

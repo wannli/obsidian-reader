@@ -118,13 +118,11 @@ it.each([299.6, 300.4, 366, 719.25])(
     expect(current.flow.style.columnWidth).toBe(`${width}px`);
     for (let step = 1; step <= 8; step++) {
       expect(current.atBoundary(1)).toBe(false);
-      expect(current.canPage(1)).toBe(true);
       current.page(1);
       expect(current.viewport.scrollLeft).toBeCloseTo(Math.min(step * stride, maxLeft()));
     }
     expect(maxLeft() - current.viewport.scrollLeft).toBeLessThan(1);
     expect(current.atBoundary(1)).toBe(true);
-    expect(current.canPage(1)).toBe(false);
     const end = current.viewport.scrollLeft;
     current.page(1);
     expect(current.viewport.scrollLeft).toBe(end);
@@ -185,15 +183,10 @@ it.each([299.6, 300, 300.4])(
     const { current, maxLeft } = fixture(usedWidth);
     expect(current.atBoundary(-1)).toBe(true);
     expect(current.atBoundary(1)).toBe(false);
-    expect(current.canPage(-1)).toBe(false);
-    expect(current.canPage(1)).toBe(true);
     for (let i = 0; i < 6; i++) current.page(1);
     expect(current.viewport.scrollLeft).toBeCloseTo(maxLeft);
     expect(current.atBoundary(-1)).toBe(false);
     expect(current.atBoundary(1)).toBe(true);
-    // The same reached endpoint must let both keyboard and existing Next routing advance.
-    expect(current.canPage(1)).toBe(false);
-    expect(current.canPage(-1)).toBe(true);
     const reached = current.viewport.scrollLeft;
     current.page(1);
     expect(current.viewport.scrollLeft).toBe(reached);
@@ -211,7 +204,6 @@ it.each([299.6, 300, 300.4])(
     current.viewport.scrollLeft = maxLeft - 4;
     expect(current.atBoundary(1)).toBe(false);
     expect(current.atBoundary(-1)).toBe(false);
-    if (usedWidth <= 300) expect(current.canPage(1)).toBe(false);
   },
 );
 
@@ -225,11 +217,9 @@ it.each([
     const { current, maxLeft } = fixture(usedWidth, { columns });
     current.viewport.scrollLeft = maxLeft - 4;
     expect(current.atBoundary(1)).toBe(false);
-    expect(current.canPage(1)).toBe(true);
     current.page(1);
     expect(current.viewport.scrollLeft).toBeCloseTo(maxLeft);
     expect(current.atBoundary(1)).toBe(true);
-    expect(current.canPage(1)).toBe(false);
   },
 );
 
@@ -238,30 +228,24 @@ it('uses viewport extent to cap a nominal endpoint, not flow overflow alone', ()
   metrics.flowWidth += 400;
   current.viewport.scrollLeft = maxLeft - 4;
   expect(current.atBoundary(1)).toBe(false);
-  expect(current.canPage(1)).toBe(true);
   current.viewport.scrollLeft = maxLeft;
   expect(current.atBoundary(1)).toBe(true);
-  expect(current.canPage(1)).toBe(false);
 });
 
 it('does not turn an unready or pending-restore phantom page into an advance', () => {
   const { current, maxLeft } = fixture(300.4, { ready: false });
   current.viewport.scrollLeft = maxLeft;
   expect(current.atBoundary(1)).toBe(false);
-  expect(current.canPage(1)).toBe(true);
   current.setBody('Synthetic article text.', '');
   expect(current.atBoundary(1)).toBe(true);
-  expect(current.canPage(1)).toBe(false);
   const range = document.createRange();
   range.selectNodeContents(current.body);
   document.getSelection()!.addRange(range);
   current.restore('missing marker');
   expect(current.atBoundary(1)).toBe(false);
-  expect(current.canPage(1)).toBe(true);
   document.getSelection()!.removeAllRanges();
   document.dispatchEvent(new Event('selectionchange'));
   expect(current.atBoundary(1)).toBe(true);
-  expect(current.canPage(1)).toBe(false);
 });
 
 it('does not require paging into trailing clearance beyond the nominal last column', () => {
@@ -271,7 +255,6 @@ it('does not require paging into trailing clearance beyond the nominal last colu
   expect(current.atBoundary(1)).toBe(false);
   current.viewport.scrollLeft = lastColumn;
   expect(current.atBoundary(1)).toBe(true);
-  expect(current.canPage(1)).toBe(false);
 });
 
 it('retains the nominal bound when the scroll extent has not been measured', () => {

@@ -92,7 +92,6 @@ it('reports only settled, actually reached paged article boundaries, not a round
   expect(surface.atBoundary(-1)).toBe(true);
   expect(surface.atBoundary(1)).toBe(false);
   surface.viewport.scrollLeft = 500;
-  expect(surface.canPage(1)).toBe(false); // Existing paging rounds; boundary evidence must not.
   expect(surface.atBoundary(1)).toBe(false);
   expect(surface.atBoundary(-1)).toBe(false);
   surface.viewport.scrollLeft = 664;
@@ -411,11 +410,9 @@ it('updates title deduplication with deferred rendering without replacing select
 it('pages only authored content and the optional title, with no reserved footer column', () => {
   columns = 2;
   fixture().setBody(markdown, '');
-  expect(surface.canPage(-1)).toBe(false);
-  expect(surface.canPage(1)).toBe(true);
+  expect(surface.viewport.scrollLeft).toBe(0);
   surface.page(1);
-  expect(surface.canPage(1)).toBe(false);
-  expect(surface.canPage(-1)).toBe(true);
+  expect(surface.viewport.scrollLeft).toBe(332);
   surface.page(1);
   expect(surface.viewport.scrollLeft).toBe(332);
   expect(surface.flow.textContent).not.toContain('End of article');

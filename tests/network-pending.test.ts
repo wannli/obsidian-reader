@@ -90,7 +90,7 @@ it('bounds only waiting network jobs, joins at capacity, and releases capacity o
   expect(client.get('https://example.com/hold-0', accept)).toBe(active[0]);
   const overflow = await observe(client.get('https://example.com/overflow', accept));
   expect(overflow).toBeInstanceOf(NetworkOverflowError);
-  expect(overflow).toMatchObject({ retryable: true, message: expect.stringContaining('Retry') });
+  expect(overflow).toMatchObject({ message: expect.stringContaining('Retry') });
   expect(vi.getTimerCount()).toBe(4); // No overflow timer or native call.
   client.stop();
   client.stop();

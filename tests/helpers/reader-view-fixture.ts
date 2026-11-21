@@ -217,7 +217,6 @@ vi.mock('../../src/reader/surface', () => ({
     setTitle = (title: string) => {
       this.title.textContent = title;
     };
-    canPage = vi.fn(() => false);
     atBoundary = vi.fn(() => false);
     selectionValue?: unknown;
     marker?: string;

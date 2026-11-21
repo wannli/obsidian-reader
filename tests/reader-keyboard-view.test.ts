@@ -405,7 +405,6 @@ describe('article keyboard boundaries', () => {
       c = await f.note('Reading/Inbox/C.md');
     await f.view.openArticle(b.path, true);
     f.probe.surface.atBoundary.mockReturnValue(false);
-    f.probe.surface.canPage.mockReturnValue(true);
     expect(f.view.contentEl.querySelector(`[aria-label="${label} article"]`)).toBeNull();
     const event = new KeyboardEvent('keydown', { key, cancelable: true });
     f.view.key(event);
@@ -567,7 +566,6 @@ describe('article keyboard boundaries', () => {
         const end = direction === 1 ? maxLeft : 0;
         surface.viewport.scrollLeft = direction === 1 ? maxLeft - 4 : 4;
         expect(surface.atBoundary(direction)).toBe(false);
-        expect(surface.canPage(direction)).toBe(false); // Keys must still finish the page.
         const step = new KeyboardEvent('keydown', { key, cancelable: true });
         f.view.key(step);
         await f.probe.operations;
@@ -962,7 +960,6 @@ describe('article keyboard boundaries', () => {
       if (kind !== 'middle' && kind !== 'rtl') surface.viewport.scrollLeft = geometry.end;
       if (kind === 'near-last-half-page') {
         surface.viewport.scrollLeft = geometry.end - (geometry.width + 32) * 0.4;
-        expect(surface.canPage(1)).toBe(false);
       }
       geometry.defer = true;
       if (kind === 'rtl') surface.viewport.style.direction = 'rtl';

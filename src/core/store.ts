@@ -113,9 +113,6 @@ export interface HighlightCollectionManyOptions extends Omit<
 export class PartialCollectionError<File extends NoteFile> extends Error {
   readonly completedDestinationPaths: readonly string[];
   readonly completedRemovalPaths: readonly string[];
-  get savedSnapshot(): Snapshot<File> {
-    return this.snapshot;
-  }
   constructor(
     readonly snapshot: Snapshot<File>,
     readonly destinationPath: string,
