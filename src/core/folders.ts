@@ -49,7 +49,3 @@ export function validateFolders(input: unknown): ReaderFolders {
     throw new Error('Feed subscriptions cannot be created inside Templates or .trash.');
   return Object.freeze(folders);
 }
-
-export function isWithinFolder(path: string, folder: string): boolean {
-  return folder === '' || path.startsWith(`${folder}/`);
-}

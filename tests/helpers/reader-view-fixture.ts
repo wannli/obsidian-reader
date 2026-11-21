@@ -24,7 +24,6 @@ afterAll(() => dom.teardown(globalThis));
 
 const mocks = vi.hoisted(() => ({
   choose: vi.fn(),
-  topics: vi.fn(),
   notice: vi.fn(),
   input: vi.fn(),
   confirmWebLink: vi.fn(),
@@ -171,7 +170,6 @@ vi.mock('obsidian', () => {
 
 vi.mock('../../src/host/dialogs', () => ({
   choose: mocks.choose,
-  chooseTopics: mocks.topics,
   input: mocks.input,
   confirmWebLink: mocks.confirmWebLink,
 }));
@@ -310,7 +308,6 @@ beforeEach(() => {
   Platform.isMobile = false;
   mocks.choose.mockReset().mockResolvedValue(null);
   mocks.highlightPicker.mockReset().mockResolvedValue(null);
-  mocks.topics.mockResolvedValue(null);
 });
 
 afterEach(() => {

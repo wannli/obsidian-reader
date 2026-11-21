@@ -3,7 +3,6 @@ import {
   defaultFolders,
   folderKeys,
   folderPath,
-  isWithinFolder,
   validateFolders,
   type ReaderFolders,
 } from '../src/core/folders';
@@ -145,13 +144,9 @@ describe('independent Reader folders', () => {
     }
   }
 
-  it('uses a segment boundary, allowing siblings with shared prefixes', () => {
+  it('accepts capture folders with shared prefixes', () => {
     expect(validateFolders({ ...separateFolders, articles: 'Capture later' }).articles).toBe(
       'Capture later',
     );
-    expect(isWithinFolder('Capture/a.md', 'Capture')).toBe(true);
-    expect(isWithinFolder('Capture/nested/a.md', 'Capture')).toBe(true);
-    expect(isWithinFolder('Capture later/a.md', 'Capture')).toBe(false);
-    expect(isWithinFolder('Capture.md', 'Capture')).toBe(false);
   });
 });

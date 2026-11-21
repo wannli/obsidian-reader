@@ -27,7 +27,6 @@ interface Ranked {
 /** Fileclass membership is authoritative; search never asks the source or metadata cache. */
 export class NodeIndex {
   private entries = new Map<string, Cached>();
-  private labelCounts = new Map<string, number>();
   private ordered?: Cached[];
   private generation = 0;
   private disposed = false;
@@ -45,7 +44,6 @@ export class NodeIndex {
     const generation = ++this.generation;
     this.requests.clear();
     const changes = (this.changes = new Map<string, Cached | undefined>());
-    const counts = new Map<string, number>();
     let entries = new Map<string, Cached>(),
       published = true;
     try {
@@ -64,24 +62,18 @@ export class NodeIndex {
           file,
           classNames([...(previous?.entry.classes ?? []), ...classes]),
         );
-        this.countLabels(previous, -1, counts);
-        this.countLabels(entry, 1, counts);
         entries.set(file.path, entry);
       }
     } catch {
       entries = new Map();
-      counts.clear();
       published = false;
     }
     if (generation !== this.generation) return false;
     for (const [path, entry] of changes) {
-      this.countLabels(entries.get(path), -1, counts);
-      this.countLabels(entry, 1, counts);
       if (entry) entries.set(path, entry);
       else entries.delete(path);
     }
     this.entries = entries;
-    this.labelCounts = counts;
     this.ordered = undefined;
     this.changes = undefined;
     return published;
@@ -126,7 +118,6 @@ export class NodeIndex {
     this.requests.clear();
     this.changes = this.ordered = undefined;
     this.entries.clear();
-    this.labelCounts.clear();
   }
   dispose(): void {
     this.disposed = true;
@@ -136,11 +127,6 @@ export class NodeIndex {
     return [...this.entries.values()]
       .filter(({ entry, path }) => this.current(entry.file, path))
       .map((item) => item.entry);
-  }
-
-  /** Snapshot-only lookup; host mutations reconcile deletions and renames, never row rendering. */
-  isAmbiguous(label: string): boolean {
-    return (this.labelCounts.get(label.trim().toLocaleLowerCase()) ?? 0) > 1;
   }
 
   search(query: string, limit = 20, type?: string): NodeHit[] {
@@ -181,18 +167,9 @@ export class NodeIndex {
     return hits.sort(ranked).map((item) => item.hit);
   }
 
-  private countLabels(entry: Cached | undefined, delta: number, counts = this.labelCounts): void {
-    for (const label of new Set(entry?.lower.map((label) => label.trim()) ?? [])) {
-      const count = (counts.get(label) ?? 0) + delta;
-      if (count > 0) counts.set(label, count);
-      else counts.delete(label);
-    }
-  }
   private put(path: string, entry?: Cached): void {
-    this.countLabels(this.entries.get(path), -1);
     if (entry) this.entries.set(path, entry);
     else this.entries.delete(path);
-    this.countLabels(entry, 1);
     this.changes?.set(path, entry);
     this.ordered = undefined;
   }

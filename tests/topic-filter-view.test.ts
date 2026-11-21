@@ -13,12 +13,11 @@ const dom = await vi.hoisted(async () => {
   return builtinEnvironments.jsdom.setup(globalThis, {});
 });
 afterAll(() => dom.teardown(globalThis));
-const mocks = vi.hoisted(() => ({ filter: vi.fn(), topics: vi.fn(), highlightHost: vi.fn() }));
+const mocks = vi.hoisted(() => ({ filter: vi.fn(), highlightHost: vi.fn() }));
 vi.mock('../src/host/topic-filter-dialog', () => ({ chooseTopicFilter: mocks.filter }));
 vi.mock('../src/host/highlight-picker', () => ({ chooseHighlightHost: mocks.highlightHost }));
 vi.mock('../src/host/dialogs', () => ({
   choose: vi.fn(),
-  chooseTopics: mocks.topics,
   confirmWebLink: vi.fn(),
 }));
 vi.mock('../src/reader/surface', () => ({
@@ -70,7 +69,6 @@ vi.mock('obsidian', () => ({
 beforeEach(() => {
   document.body.replaceChildren();
   mocks.filter.mockReset();
-  mocks.topics.mockReset();
   mocks.highlightHost.mockReset().mockResolvedValue(null);
   vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => {
     queueMicrotask(() => callback(0));
@@ -241,7 +239,6 @@ describe('topic-filter view integration', () => {
     expect(f.host.store.collectHighlight).not.toHaveBeenCalled();
     expect(f.host.store.setRelatedNodes).not.toHaveBeenCalled();
     expect(mocks.highlightHost).not.toHaveBeenCalled();
-    expect(mocks.topics).not.toHaveBeenCalled();
     expect([...f.files].map(([path, file]) => [path, file.raw])).toEqual(originalBytes);
     const filter = f.view.contentEl.querySelector('[aria-label="Filter by topic"]')!;
     expect(filter.getAttribute('aria-pressed')).toBe('true');
@@ -272,7 +269,6 @@ describe('topic-filter view integration', () => {
     expect(f.host.ingestion.acquire).not.toHaveBeenCalled();
     expect(f.host.capture).not.toHaveBeenCalled();
     expect(mocks.filter).not.toHaveBeenCalled();
-    expect(mocks.topics).not.toHaveBeenCalled();
     expect([...f.files].map(([path, file]) => [path, file.raw])).toEqual(before);
   });
 
@@ -659,7 +655,6 @@ describe('topic-filter view integration', () => {
     expect(f.host.store.annotate).not.toHaveBeenCalled();
     expect(f.host.store.collectHighlight).not.toHaveBeenCalled();
     expect(api.createNodeForLink).not.toHaveBeenCalled();
-    expect(mocks.topics).not.toHaveBeenCalled();
     expect(mocks.filter).not.toHaveBeenCalled();
     expect(f.host.ingestion.acquire).not.toHaveBeenCalled();
   });

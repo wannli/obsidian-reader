@@ -262,7 +262,6 @@ describe('public article commands', () => {
     const before = await f.vault.read(article);
     for (const id of ['move', 'topics', 'open-markdown']) expect(command(id)).toBe(true);
     expect(mocks.choose).not.toHaveBeenCalled();
-    expect(mocks.topics).not.toHaveBeenCalled();
     expect(f.leaf.setViewState).not.toHaveBeenCalled();
     mocks.choose.mockResolvedValue('Later');
     command('move', false);
@@ -278,7 +277,6 @@ describe('public article commands', () => {
       expect.any(Object),
       expect.objectContaining({ title: 'Related notes', actionLabel: 'Apply', multiple: true }),
     );
-    expect(mocks.topics).not.toHaveBeenCalled();
     f.vault.bytes.set(article, '---\ntype: other\n---\nUnchanged authored words.');
     await f.view.changed({ path: article.path });
     expect(command('move')).toBe(false);

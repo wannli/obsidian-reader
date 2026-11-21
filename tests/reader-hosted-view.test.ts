@@ -1517,7 +1517,6 @@ describe('hosted highlight UI integration', () => {
     const legacy = await f.note('Topics/Legacy.md', 'An ordinary legacy topic.', 'topic');
     (f.app as any).plugins = undefined;
     await expect(f.probe.topics()).rejects.toThrow(/requires Fileclass.*API v1/);
-    expect(mocks.topics).not.toHaveBeenCalled();
     await f.view.readingList();
     const { chooseTopicFilter } = await import('../src/host/topic-filter-dialog');
     vi.mocked(chooseTopicFilter).mockResolvedValueOnce(null);
