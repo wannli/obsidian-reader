@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.30.2](https://github.com/wannli/obsidian-reader/compare/0.30.1...0.30.2) (2026-11-21)
+
+
+### Fixed
+
+* **reader:** reconcile clipping coverage after source writes ([b9cf4ad](https://github.com/wannli/obsidian-reader/commit/b9cf4ade9977f8dae31ece172ca73a3ea5d58ff1))
+
 ## [0.30.1](https://github.com/wannli/obsidian-reader/compare/0.30.0...0.30.1) (2026-11-21)
 
 
