@@ -131,6 +131,29 @@ it('keeps unconfigured capture non-mutating and offers one-time setup without re
   await f.probe.operations;
   expect(f.vault.files.size).toBe(2);
 });
+it('keeps incomplete background lookup quiet but explains a blocked Keep without writing', async () => {
+  const f = await fixture();
+  vi.spyOn(f.host.clippings!, 'scan').mockResolvedValue({
+    items: [],
+    referenced: false,
+    complete: false,
+    revision: 0,
+  });
+  f.view.refreshArticleControls();
+  await vi.waitFor(() =>
+    expect(f.view.contentEl.querySelector('[data-clipping-coverage="incomplete"]')).not.toBeNull(),
+  );
+  expect(f.view.contentEl.querySelector('.reader-status')?.textContent).toBe('');
+  const before = await f.vault.read(f.article);
+  await f.select();
+  passageButton(f.view, 'Keep passage').click();
+  await f.probe.operations.catch(() => {});
+  expect(f.view.contentEl.querySelector('[role="alert"]')?.textContent).toContain(
+    'Clipping lookup is incomplete',
+  );
+  expect(f.vault.files.size).toBe(1);
+  expect(await f.vault.read(f.article)).toBe(before);
+});
 it('does not implicitly save an unconfirmed selection when leaving Reader', async () => {
   const f = await fixture();
   await f.select();

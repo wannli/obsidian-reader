@@ -38,7 +38,7 @@ describe('contextual five-button article bar', () => {
       [
         'Back to list',
         'Highlight mode',
-        'Related notes',
+        'Trash article and advance',
         'Archive and advance',
         'More article actions',
       ],
@@ -57,7 +57,13 @@ describe('contextual five-button article bar', () => {
     [
       false,
       true,
-      ['Back to list', 'Previous page', 'Next page', 'Highlight mode', 'More article actions'],
+      [
+        'Back to list',
+        'Previous page',
+        'Next page',
+        'Trash article and advance',
+        'More article actions',
+      ],
     ],
     [
       true,
@@ -92,30 +98,64 @@ describe('contextual five-button article bar', () => {
     f.store.catalog.update(path, { type: 'article', status: 'later' });
     f.probe.queue = 'Later';
     await f.view.openArticle(path, true);
-    expect(labels(f)).not.toContain('Trash article and advance');
+    expect(labels(f)).toContain('Trash article and advance');
     expect(labels(f)).toContain('Highlight mode');
   });
 
-  it('groups reading tools and disposition separately from Trash, without duplicating primary actions', async () => {
+  it('groups secondary reading tools and disposition without duplicating primary actions', async () => {
     const f = await fixture(false, true);
     more(f).click();
     expect([...mocks.menus.at(-1)!.keys()]).toEqual([
+      'Highlight mode',
       'Create node',
       'Related notes',
       '---',
       'Save to Later and advance',
       'Archive and advance',
-      'Trash article and advance',
     ]);
-    // Map-based fixture coalesces separators; the real menu has both boundaries.
+    // Check the real separator call, not just the fixture's map entry.
     const menu = f.probe.articleMenu;
     const separator = vi.spyOn(Object.getPrototypeOf(menu), 'addSeparator');
     menu.hide();
     more(f).click();
-    expect(separator).toHaveBeenCalledTimes(2);
+    expect(separator).toHaveBeenCalledTimes(1);
     expect(more(f).getAttribute('aria-haspopup')).toBe('menu');
     expect(more(f).getAttribute('aria-expanded')).toBe('true');
   });
+
+  it.each([false, true])(
+    'keeps guarded deletion directly reachable across queues (paged=%s)',
+    async (paged) => {
+      const f = hostFixture();
+      f.host.paged = paged;
+      for (const status of ['inbox', 'later', 'feed', 'archive'] as const) {
+        for (const protectedBody of [false, true]) {
+          const article = await f.note(`Articles/${status}-${protectedBody}.md`);
+          await f.vault.process(article, () =>
+            createDocument(
+              { type: 'article', status },
+              protectedBody ? '==Saved words==' : 'Plain words',
+            ),
+          );
+          f.store.catalog.update(article.path, { type: 'article', status });
+          await f.view.openArticle(article.path, true);
+          const button = f.view.contentEl.querySelector<HTMLButtonElement>(
+            '.reader-actions > button[data-reader-key="t"]',
+          )!;
+          expect(button).not.toBeNull();
+          expect(button.getAttribute('aria-label')).toBe(
+            protectedBody ? 'Archive protected article and advance' : 'Trash article and advance',
+          );
+          button.click();
+          await f.probe.operations;
+          if (protectedBody) {
+            expect(f.vault.trashed).not.toContain(article.path);
+            expect((await f.store.read(article.path)).properties.status).toBe('archive');
+          } else expect(f.vault.trashed).toContain(article.path);
+        }
+      }
+    },
+  );
 
   it('keeps optional Connect in More without growing the bar and rechecks its availability', async () => {
     const f = await fixture();
@@ -180,8 +220,8 @@ describe('contextual five-button article bar', () => {
     expect(document.activeElement).toBe(button);
     expect(button.getAttribute('aria-expanded')).toBe('false');
     button.click();
-    const stale = mocks.menus.at(-1)!.get('Trash article and advance')!;
-    const finish = vi.spyOn(f.probe, 'finish');
+    const stale = mocks.menus.at(-1)!.get('Save to Later and advance')!;
+    const finish = vi.spyOn(f.probe, 'changeStatus');
     f.view.showList();
     stale();
     await Promise.resolve();

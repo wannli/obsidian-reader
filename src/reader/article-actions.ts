@@ -1,7 +1,7 @@
 /** Visible slots only; all omitted article actions remain in More and on their shortcuts. */
 export function articleActionKeys(feed: boolean, paged: boolean): readonly string[] {
-  if (paged) return ['b', 'z', 'x', feed ? 't' : 'h'];
-  return feed ? ['b', 'l', 'a', 't'] : ['b', 'h', 'r', 'a'];
+  if (paged) return ['b', 'z', 'x', 't'];
+  return feed ? ['b', 'l', 'a', 't'] : ['b', 'h', 't', 'a'];
 }
 
 export interface ArticleAction {

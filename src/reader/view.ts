@@ -1603,17 +1603,6 @@ export class ReaderView extends ItemView {
     );
     more.setAttribute('aria-haspopup', 'menu');
     more.setAttribute('aria-expanded', 'false');
-    const guidance = this.actions.createDiv({ cls: 'reader-action-guidance' });
-    guidance.createDiv({
-      text: 'Later / Archive / Trash → next article (list at end).',
-    });
-    if (feed) {
-      const retention = guidance.createEl('details');
-      retention.createEl('summary', { text: 'Feed: reading alone does not keep it.' });
-      retention.createDiv({
-        text: 'Choose Later or Archive to keep this one. Highlights and related notes move it to Later. Unprotected Feed articles can expire a calendar month after publication (or filename date), not import.',
-      });
-    }
     this.setupTapHighlighter();
     this.updateStatus();
     this.refreshClippings();
@@ -1812,8 +1801,10 @@ export class ReaderView extends ItemView {
           return;
         surface.setClippings(scan.items);
         this.status?.querySelector('[data-reader-clipping-status]')?.remove();
+        // Incomplete lookup is not an unfinished user action. Keep reports a blocked
+        // capture at its action boundary; passive reading should stay quiet.
         const message = !scan.complete
-          ? 'Clipping coverage is incomplete. Some saved passages may not be shown; new Keep is blocked until coverage is complete.'
+          ? ''
           : scan.items.some((item) => !item.location)
             ? 'Some clippings no longer match their exact source. Their saved quotations are unchanged.'
             : scan.items.some((item) => clippingOverlaps(item, scan.items))

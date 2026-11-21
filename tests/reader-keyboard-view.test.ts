@@ -461,7 +461,7 @@ describe('article keyboard boundaries', () => {
       'Back to list',
       'Previous page',
       'Next page',
-      'Highlight mode',
+      'Delete',
       'More article actions',
     ]);
     expect(column.classList.contains('reader-has-page-actions')).toBe(true);

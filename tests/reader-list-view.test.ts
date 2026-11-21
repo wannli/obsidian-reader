@@ -242,17 +242,17 @@ describe('bounded Reader UI', () => {
       ];
       expect(
         buttons.map((button) => button.querySelector('svg')?.getAttribute('data-icon')),
-      ).toEqual(['arrow-left', 'highlighter', 'tags', 'archive', 'ellipsis']);
+      ).toEqual(['arrow-left', 'highlighter', 'trash-2', 'archive', 'ellipsis']);
       expect(buttons.map((button) => button.getAttribute('aria-label'))).toEqual([
         'Back to list',
         'Highlight mode',
-        'Related notes',
+        'Trash article and advance',
         'Archive and advance',
         'More article actions',
       ]);
       expect(setTooltip).toHaveBeenCalledWith(buttons[0], 'Back to list (B)');
       expect(setTooltip).toHaveBeenCalledWith(buttons[1], 'Highlight mode (H)');
-      expect(setTooltip).toHaveBeenCalledWith(buttons[2], 'Related notes (R)');
+      expect(setTooltip).toHaveBeenCalledWith(buttons[2], 'Trash article and advance (T)');
       expect(setTooltip).toHaveBeenCalledWith(buttons[3], 'Archive and advance (A)');
       expect(buttons.every((button) => !button.hasAttribute('title'))).toBe(true);
       expect(setTooltip).toHaveBeenCalledWith(buttons[4], 'More article actions');

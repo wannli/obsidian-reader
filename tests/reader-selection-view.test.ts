@@ -124,7 +124,7 @@ describe('automatic selection event ownership', () => {
     expect([...actions.querySelectorAll('button')].map(actionName)).toEqual([
       'Back to list',
       'Highlight mode',
-      'Related notes',
+      'Archive protected',
       'Archive and advance',
       'More article actions',
     ]);

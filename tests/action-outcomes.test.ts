@@ -59,7 +59,7 @@ describe('failed deletion outcomes', () => {
   );
 });
 
-describe('visible status and retention guidance', () => {
+describe('quiet article controls', () => {
   it.each([false, true])(
     'preserves five controls, mode isolation and measured clearance (paged=%s)',
     async (paged) => {
@@ -68,11 +68,7 @@ describe('visible status and retention guidance', () => {
       const article = await f.note('Reading/Stream/A.md');
       await f.view.openArticle(article.path, true);
       const guidance = () => f.view.contentEl.querySelector('.reader-action-guidance');
-      expect(guidance()?.textContent).toContain('next article (list at end)');
-      expect(guidance()?.querySelector('summary')?.textContent).toContain(
-        'reading alone does not keep it',
-      );
-      expect(guidance()?.textContent).toContain('calendar month after publication');
+      expect(guidance()).toBeNull();
       expect(f.view.contentEl.querySelectorAll('.reader-actions > button')).toHaveLength(5);
       Object.defineProperty(f.probe.actions, 'offsetHeight', { value: 180 });
       f.probe.tapHighlighter.refreshActions();
@@ -84,7 +80,7 @@ describe('visible status and retention guidance', () => {
       articleAction(f.view, 'Highlight mode');
       expect(guidance()).toBeNull();
       f.view.contentEl.querySelector<HTMLButtonElement>('[aria-label="Done"]')!.click();
-      expect(guidance()).not.toBeNull();
+      expect(guidance()).toBeNull();
     },
   );
 
@@ -98,7 +94,7 @@ describe('visible status and retention guidance', () => {
     await f.view.openArticle(article.path, true);
     const before = await f.vault.read(article);
     f.view.refreshArticleControls();
-    expect(f.view.contentEl.querySelector('.reader-action-guidance details')).not.toBeNull();
+    expect(f.view.contentEl.querySelector('.reader-action-guidance')).toBeNull();
     expect(await f.vault.read(article)).toBe(before);
   });
 });

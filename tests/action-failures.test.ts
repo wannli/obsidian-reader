@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { hostFixture } from './helpers/reader-view-fixture';
+import { hostFixture, articleAction } from './helpers/reader-view-fixture';
 import { describe, expect, it, vi } from 'vitest';
 import { readDocument } from '../src/core/document';
 
@@ -68,11 +68,11 @@ describe('local actionable Reader failures', () => {
     expect(trash).toHaveBeenCalledOnce();
   });
 
-  it('makes missing Fileclass visible from the real Related notes button', async () => {
+  it('makes missing Fileclass visible from Related notes in More', async () => {
     const f = await fixture();
     vi.spyOn(console, 'error').mockImplementation(() => {});
     const before = await f.vault.read(f.article);
-    f.view.contentEl.querySelector<HTMLButtonElement>('[aria-label="Related notes"]')!.click();
+    articleAction(f.view, 'Related notes');
     await settled(f);
     expect(alert(f)?.textContent).toMatch(/Related notes:.*requires Fileclass/);
     expect(await f.vault.read(f.article)).toBe(before);

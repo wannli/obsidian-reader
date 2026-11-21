@@ -587,7 +587,7 @@ describe('topic-filter view integration', () => {
     expect(f.view.contentEl.textContent).not.toContain('Filtering articles…');
   });
 
-  it('preserves Related notes without a separate article filter banner', () => {
+  it('preserves secondary Related notes without a separate article filter banner', () => {
     const f = fixture();
     const file = f.add('Reading/Inbox/A.md', 'body');
     f.probe.snapshot = { file, path: file.path, body: 'body', properties: { type: 'article' } };
@@ -597,7 +597,9 @@ describe('topic-filter view integration', () => {
     f.probe.topicFilter = { label: 'body', terms: ['body'] };
     const topics = vi.spyOn(f.probe, 'topics').mockResolvedValue(undefined);
     f.probe.controls();
-    (f.view.contentEl.querySelector('[aria-label="Related notes"]') as HTMLButtonElement).click();
+    const action = f.probe.articleCommands.find((action: { key: string }) => action.key === 'r');
+    expect(action.label).toBe('Related notes');
+    f.probe.runArticleAction(action);
     expect(topics).toHaveBeenCalledOnce();
     expect(f.view.contentEl.querySelector('[aria-label="Clear topic filter"]')).toBeNull();
     expect(f.view.contentEl.querySelector('.reader-topic-filter-state')).toBeNull();
