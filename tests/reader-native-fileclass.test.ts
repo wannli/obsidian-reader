@@ -543,6 +543,109 @@ async function clippingAdapterFixture(before?: (f: ReturnType<typeof fixture>) =
 }
 
 describe('clipping Fileclass compatibility', () => {
+  it.each(['source', 'unrelated'] as const)(
+    'finishes capture when delayed %s metadata arrives during the final source validation',
+    async (changed) => {
+      const f = await clippingAdapterFixture(async (f) => {
+        const file = f.files.get('Articles/Source.md');
+        const raw = createDocument({ type: 'article', status: 'inbox' }, 'Saved words.');
+        f.bytes.set(file.path, raw);
+        file.stat.size = raw.length;
+        f.frontmatter.set(file.path, readDocument(raw).properties);
+        await f.app.vault.create('Ordinary/Other.md', 'Unrelated writing.');
+      });
+      const create = f.store.vault.create.bind(f.store.vault);
+      const validate = f.store.validate.bind(f.store);
+      vi.spyOn(f.store.vault, 'create').mockImplementationOnce(async (...args) => {
+        expect(f.source.body).toMatch(/\^reader-/);
+        vi.spyOn(f.store, 'validate').mockImplementationOnce(async (source) => {
+          await validate(source);
+          f.metadataEvents.fire(
+            'changed',
+            changed === 'source' ? source.file : f.files.get('Ordinary/Other.md'),
+          );
+        });
+        return create(...args);
+      });
+      try {
+        await expect(f.keep()).resolves.toMatchObject({ created: true });
+        expect((await f.keep()).created).toBe(false);
+        expect(f.source.body.match(/\^reader-/g)).toHaveLength(1);
+      } finally {
+        f.lifetime.abort();
+      }
+    },
+  );
+  it.each(['edit', 'duplicate', 'cancel', 'churn'] as const)(
+    'does not dispatch a new card when final validation encounters %s',
+    async (change) => {
+      const f = await clippingAdapterFixture();
+      const create = f.store.vault.create.bind(f.store.vault);
+      const validate = f.store.validate.bind(f.store);
+      let validations = 0;
+      vi.spyOn(f.store.vault, 'create').mockImplementationOnce(async (...args) => {
+        vi.spyOn(f.store, 'validate').mockImplementation(async (source) => {
+          await validate(source);
+          validations++;
+          if (change === 'churn') f.metadataEvents.fire('changed', source.file);
+          else if (validations === 1) {
+            if (change === 'edit') {
+              await f.store.vault.process(source.file, (raw) => raw.replace('Saved', 'Edited'));
+            } else if (change === 'duplicate') {
+              await f.app.vault.create(
+                'Cards/Concurrent.md',
+                clippingMarkdown(
+                  { property: 'fileClass', type: 'topic' },
+                  '[[Articles/Source#^source]]',
+                  'Saved words.',
+                ),
+              );
+            } else f.lifetime.abort();
+          }
+        });
+        return create(...args);
+      });
+      try {
+        const expected = {
+          edit: /note changed/i,
+          duplicate: /now exists at.*Cards\/Concurrent/,
+          cancel: /cancelled/i,
+          churn: /all 3 lookup attempts/,
+        };
+        await expect(f.keep()).rejects.toThrow(expected[change]);
+        expect(f.files.has('Nodes/Saved words.md')).toBe(false);
+        expect(validations).toBeLessThanOrEqual(4);
+        if (change === 'edit') expect(f.bytes.get(f.source.path)).toContain('Edited words.');
+        if (change === 'duplicate') expect(f.files.has('Cards/Concurrent.md')).toBe(true);
+      } finally {
+        f.lifetime.abort();
+      }
+    },
+  );
+
+  it('reconciles metadata again at the second native create guard without replaying source writes', async () => {
+    const f = await clippingAdapterFixture(async (f) => {
+      const file = f.files.get('Articles/Source.md');
+      const raw = createDocument({ type: 'article', status: 'inbox' }, 'Saved words.');
+      f.bytes.set(file.path, raw);
+      file.stat.size = raw.length;
+      f.frontmatter.set(file.path, readDocument(raw).properties);
+    });
+    const create = f.store.vault.create.bind(f.store.vault);
+    const process = vi.spyOn(f.store.vault, 'process');
+    vi.spyOn(f.store.vault, 'create').mockImplementationOnce(async (path, raw, guard) => {
+      await guard?.(); // Native Vault.create checks before and after preparing its folder.
+      f.metadataEvents.fire('changed', f.source.file);
+      return create(path, raw, guard);
+    });
+    try {
+      await expect(f.keep()).resolves.toMatchObject({ created: true });
+      expect(process).toHaveBeenCalledTimes(1);
+    } finally {
+      f.lifetime.abort();
+    }
+  });
+
   it('keeps passages despite an ordinary note with an unresolved origin, but preserves deletion protection', async () => {
     const f = await clippingAdapterFixture(async (f) => {
       const raw = createDocument({ origin: '[[Missing source]]' }, 'Unrelated personal writing.');

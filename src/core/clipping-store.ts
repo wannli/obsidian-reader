@@ -298,28 +298,32 @@ export class ClippingStore<File extends NoteFile> {
     active();
     await prepared.validate();
     active();
-    const finalScan = await this.scanForCapture(source, signal, active);
-    active();
-    if (!finalScan.complete)
-      throw new Error(
-        `Source retained, but clipping lookup is incomplete. No card was created. ${finalScan.diagnostic}`,
-      );
-    if (
-      finalScan.items.some(
-        (item) =>
-          !item.location &&
-          item.quote.replace(/\s+/gu, ' ').trim() === plan.quote.replace(/\s+/gu, ' ').trim(),
+    const existingCard = (scan: ClippingScan): string | undefined => {
+      if (!scan.complete)
+        throw new Error(
+          `Source retained, but clipping lookup is incomplete. No card was created. ${scan.diagnostic}`,
+        );
+      if (
+        scan.items.some(
+          (item) =>
+            !item.location &&
+            item.quote.replace(/\s+/gu, ' ').trim() === plan.quote.replace(/\s+/gu, ' ').trim(),
+        )
       )
-    )
-      throw new Error(
-        'Source retained, but an existing clipping has an unresolved match. Inspect its source reference before retrying.',
+        throw new Error(
+          'Source retained, but an existing clipping has an unresolved match. Inspect its source reference before retrying.',
+        );
+      const matches = scan.items.filter(
+        (item) => item.location && sameClipping(item.location, desired),
       );
-    const raced = finalScan.items.filter(
-      (item) => item.location && sameClipping(item.location, desired),
-    );
-    if (raced.length === 1) return { snapshot: source, path: raced[0].path, created: false };
-    if (raced.length > 1)
-      throw new Error('Source retained, but several cards now match. No new card was created.');
+      if (matches.length > 1)
+        throw new Error('Source retained, but several cards now match. No new card was created.');
+      return matches[0]?.path;
+    };
+    let finalScan = await this.scanForCapture(source, signal, active);
+    active();
+    const raced = existingCard(finalScan);
+    if (raced) return { snapshot: source, path: raced, created: false };
     const title = clippingTitle(plan.quote);
     let path = `${prepared.folder}/${title}.md`;
     for (
@@ -337,8 +341,22 @@ export class ClippingStore<File extends NoteFile> {
         active();
         await this.articles.validate(source);
         active();
+        if (this.port.revision() !== finalScan.revision) {
+          // Native create may invoke this guard more than once. Reconcile fresh
+          // bytes and duplicate coverage, never replay the source write or ignore
+          // a revision change merely because its last event was metadata.
+          finalScan = await this.scanForCapture(source, signal, active);
+          active();
+          const existing = existingCard(finalScan);
+          if (existing)
+            throw new Error(
+              `A clipping for this passage now exists at ${diagnosticPath(existing)}. No new card was created.`,
+            );
+        }
         if (this.port.revision() !== finalScan.revision)
-          throw new Error('The vault changed before card creation. Recheck before retrying.');
+          throw new Error(
+            `The vault changed before card creation.${this.changeDiagnostic()} Recheck before retrying.`,
+          );
         dispatched = true;
       });
       active();
