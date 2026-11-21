@@ -5,6 +5,7 @@ import { readDocument } from './document';
 import { linkPath } from './model';
 import {
   readClipping,
+  clippingMember,
   clippingOrigin,
   clippingMarkdown,
   clippingTitle,
@@ -84,7 +85,11 @@ export class ClippingStore<File extends NoteFile> {
       ? ` Last change: ${change.event}${change.path ? ` in ${diagnosticPath(change.path)}` : ''}.`
       : '';
   }
-  async scan(snapshot: Snapshot<File>, signal: AbortSignal): Promise<ClippingScan> {
+  async scan(
+    snapshot: Snapshot<File>,
+    signal: AbortSignal,
+    purpose: 'protection' | 'capture' = 'protection',
+  ): Promise<ClippingScan> {
     const revision = this.port.revision(),
       items: ArticleClipping[] = [],
       problems: string[] = [];
@@ -137,6 +142,11 @@ export class ClippingStore<File extends NoteFile> {
         failure = 'Could not parse frontmatter';
         const doc = readDocument(raw);
         failure = 'Could not inspect clipping';
+        // Capture deduplicates typed clippings; deletion must also protect ordinary
+        // origin references, including former clippings whose type was edited away.
+        // Keep unreadable/uninspected candidates uncertain in both cases.
+        if (purpose === 'capture' && !clippingMember(doc.properties, this.port.bindings()))
+          continue;
         const source =
           clippingOrigin(doc.properties.origin)?.path ??
           (typeof doc.properties.origin === 'string' ? linkPath(doc.properties.origin) : undefined);
@@ -214,7 +224,7 @@ export class ClippingStore<File extends NoteFile> {
         { file: snapshot.file, path: snapshot.path, bytes: snapshot.raw.length },
         snapshot.raw,
       );
-      const scan = await this.scan(snapshot, signal);
+      const scan = await this.scan(snapshot, signal, 'capture');
       active();
       if (scan.revision === this.port.revision()) return scan;
       // Only an invalidated scan is retried. Stable missing/oversized coverage still blocks.

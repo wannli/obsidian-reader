@@ -543,6 +543,43 @@ async function clippingAdapterFixture(before?: (f: ReturnType<typeof fixture>) =
 }
 
 describe('clipping Fileclass compatibility', () => {
+  it('keeps passages despite an ordinary note with an unresolved origin, but preserves deletion protection', async () => {
+    const f = await clippingAdapterFixture(async (f) => {
+      const raw = createDocument({ origin: '[[Missing source]]' }, 'Unrelated personal writing.');
+      await f.app.vault.create('Ordinary/Unrelated.md', raw);
+      f.frontmatter.set('Ordinary/Unrelated.md', readDocument(raw).properties);
+    });
+    try {
+      const before = f.bytes.get('Ordinary/Unrelated.md');
+      expect((await f.clippings.scan(f.source, f.lifetime.signal)).complete).toBe(false);
+      await expect(f.keep()).resolves.toMatchObject({ created: true });
+      await expect(f.keep()).resolves.toMatchObject({ created: false });
+      expect(f.bytes.get('Ordinary/Unrelated.md')).toBe(before);
+      expect(await f.store.trash(f.source)).toBe('archived-protected');
+    } finally {
+      f.lifetime.abort();
+    }
+  });
+
+  it('still blocks capture for a clipping with an unresolved source', async () => {
+    const f = await clippingAdapterFixture(async (f) => {
+      const raw = clippingMarkdown(
+        { property: 'fileClass', type: 'topic' },
+        '[[Missing source#^source]]',
+        'Saved words.',
+      );
+      await f.app.vault.create('Cards/Unresolved.md', raw);
+      f.frontmatter.set('Cards/Unresolved.md', readDocument(raw).properties);
+    });
+    try {
+      const before = f.bytes.get(f.source.path);
+      await expect(f.keep()).rejects.toThrow(/Could not resolve origin in.*Cards\/Unresolved/);
+      expect(f.bytes.get(f.source.path)).toBe(before);
+      expect(f.files.has('Nodes/Saved words.md')).toBe(false);
+    } finally {
+      f.lifetime.abort();
+    }
+  });
   it('creates and verifies a card through the real host adapter and public Fileclass bridge', async () => {
     const f = await clippingAdapterFixture();
     try {
