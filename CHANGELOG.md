@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.30.4](https://github.com/wannli/obsidian-reader/compare/0.30.3...0.30.4) (2026-11-21)
+
+
+### Fixed
+
+* **reader:** reconcile clipping lookup at final creation guard ([217cff6](https://github.com/wannli/obsidian-reader/commit/217cff68f478818e5556a129165796b6e0f0c574))
+
 ## [0.30.3](https://github.com/wannli/obsidian-reader/compare/0.30.2...0.30.3) (2026-11-21)
 
 
