@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.30.1](https://github.com/wannli/obsidian-reader/compare/0.30.0...0.30.1) (2026-11-21)
+
+
+### Fixed
+
+* **reader:** exclude indexed plain notes from clipping scans ([79298be](https://github.com/wannli/obsidian-reader/commit/79298bec7eeecb68a070fe55cecaee0e90003a17))
+* **reader:** quiet passive warnings and restore direct trash ([f0747f8](https://github.com/wannli/obsidian-reader/commit/f0747f8a7eadd9cc56078898f8f770c3a2a4910d))
+
 ## [0.30.0](https://github.com/wannli/obsidian-reader/compare/0.29.0...0.30.0) (2026-11-20)
 
 
