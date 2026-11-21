@@ -581,6 +581,89 @@ describe('clipping Fileclass compatibility', () => {
     }
   });
 
+  it.each(['many', 'large'] as const)(
+    'keeps passages with %s fully indexed ordinary notes without frontmatter',
+    async (size) => {
+      const f = await clippingAdapterFixture(async (f) => {
+        const count = size === 'many' ? 210 : 1;
+        for (let i = 0; i < count; i++) {
+          await f.app.vault.create(
+            `Ordinary/${i}.md`,
+            size === 'large' ? 'Personal writing.\n'.repeat(15_000) : 'Personal writing.',
+          );
+        }
+      });
+      // Native Obsidian supplies a cache object without frontmatter for these notes.
+      const cache = f.app.metadataCache.getFileCache.bind(f.app.metadataCache);
+      vi.spyOn(f.app.metadataCache, 'getFileCache').mockImplementation((file) =>
+        file.path.startsWith('Ordinary/') ? { sections: [] } : cache(file),
+      );
+      try {
+        vi.mocked(f.app.vault.read).mockClear();
+        await expect(f.keep()).resolves.toMatchObject({ created: true });
+        expect(
+          vi
+            .mocked(f.app.vault.read)
+            .mock.calls.some(([file]) => file.path.startsWith('Ordinary/')),
+        ).toBe(false);
+        expect((await f.keep()).created).toBe(false);
+      } finally {
+        f.lifetime.abort();
+      }
+    },
+  );
+
+  it('still blocks capture when an oversized note genuinely has no metadata cache', async () => {
+    const f = await clippingAdapterFixture(async (f) => {
+      await f.app.vault.create('Unindexed.md', 'Unknown content.\n'.repeat(15_000));
+    });
+    const cache = f.app.metadataCache.getFileCache.bind(f.app.metadataCache);
+    vi.spyOn(f.app.metadataCache, 'getFileCache').mockImplementation((file) =>
+      file.path === 'Unindexed.md' ? null : cache(file),
+    );
+    try {
+      const before = f.bytes.get(f.source.path);
+      await expect(f.keep()).rejects.toThrow(/Clipping lookup is incomplete/);
+      expect(f.bytes.get(f.source.path)).toBe(before);
+      expect(f.files.has('Nodes/Saved words.md')).toBe(false);
+    } finally {
+      f.lifetime.abort();
+    }
+  });
+
+  it.each(['unindexed', 'modified'] as const)(
+    'discovers an existing clipping in a %s note rather than creating a duplicate',
+    async (state) => {
+      const f = await clippingAdapterFixture(async (f) => {
+        await f.app.vault.create('Cards/Existing.md', 'Ordinary writing.');
+      });
+      const cache = f.app.metadataCache.getFileCache.bind(f.app.metadataCache);
+      vi.spyOn(f.app.metadataCache, 'getFileCache').mockImplementation((file) =>
+        file.path === 'Cards/Existing.md'
+          ? state === 'unindexed'
+            ? null
+            : { sections: [] }
+          : cache(file),
+      );
+      const card = f.files.get('Cards/Existing.md');
+      const raw = clippingMarkdown(
+        { property: 'fileClass', type: 'topic' },
+        '[[Articles/Source#^source]]',
+        'Saved words.',
+      );
+      f.bytes.set(card.path, raw);
+      card.stat.size = raw.length;
+      if (state === 'modified') f.vaultEvents.fire('modify', card);
+      try {
+        expect(await f.keep()).toMatchObject({ created: false, path: card.path });
+        expect((await f.keep()).created).toBe(false);
+        expect(f.files.has('Nodes/Saved words.md')).toBe(false);
+      } finally {
+        f.lifetime.abort();
+      }
+    },
+  );
+
   it('does not trust a stale origin cache after native modification, and retains fresh discovery evidence', async () => {
     const f = await clippingAdapterFixture(async (f) => {
       const raw = clippingMarkdown(

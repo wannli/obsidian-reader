@@ -30,8 +30,11 @@ export class ReaderClippings extends ClippingStore<TFile> {
           .getMarkdownFiles()
           .filter((file) => {
             if (excludedReaderPath(file.path)) return false;
+            const cache = app.metadataCache.getFileCache(file);
+            // An indexed note without YAML is known not to contain a clipping binding
+            // or origin. Only an absent cache (or a live edit) needs a bounded raw read.
             const properties =
-              observed.get(file) ?? app.metadataCache.getFileCache(file)?.frontmatter;
+              observed.get(file) ?? (cache ? (cache.frontmatter ?? {}) : undefined);
             if (dirty.has(file) || !properties) return true;
             const origin =
               clippingOrigin(properties.origin)?.path ??
