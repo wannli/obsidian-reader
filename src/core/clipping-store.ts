@@ -144,6 +144,31 @@ export class ClippingStore<File extends NoteFile> {
     void work.then(clear, clear);
     return work;
   }
+  /** Reconcile metadata lag without retrying writes or trusting an old source snapshot. */
+  private async scanForCapture(
+    snapshot: Snapshot<File>,
+    signal: AbortSignal,
+    active: () => void,
+  ): Promise<ClippingScan> {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      active();
+      const revision = this.port.revision();
+      await this.articles.validate(snapshot);
+      active();
+      // A native metadata event may arrive after our source write. Revalidate if
+      // anything changed during the read; never replace newer evidence with old bytes.
+      if (revision !== this.port.revision()) continue;
+      this.port.observed?.(
+        { file: snapshot.file, path: snapshot.path, bytes: snapshot.raw.length },
+        snapshot.raw,
+      );
+      const scan = await this.scan(snapshot, signal);
+      active();
+      if (scan.revision === this.port.revision()) return scan;
+      // Only an invalidated scan is retried. Stable missing/oversized coverage still blocks.
+    }
+    return { items: [], referenced: false, complete: false, revision: this.port.revision() };
+  }
   private async perform(
     snapshot: Snapshot<File>,
     selection: HighlightSelection,
@@ -164,10 +189,7 @@ export class ClippingStore<File extends NoteFile> {
       check();
       prepared.check();
     };
-    active();
-    await this.articles.validate(snapshot);
-    active();
-    const scan = await this.scan(snapshot, signal);
+    const scan = await this.scanForCapture(snapshot, signal, active);
     active();
     if (!scan.complete)
       throw new Error(
@@ -208,7 +230,7 @@ export class ClippingStore<File extends NoteFile> {
     active();
     await prepared.validate();
     active();
-    const finalScan = await this.scan(source, signal);
+    const finalScan = await this.scanForCapture(source, signal, active);
     active();
     if (!finalScan.complete)
       throw new Error('Source retained, but clipping lookup is incomplete. No card was created.');

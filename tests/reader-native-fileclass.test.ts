@@ -559,6 +559,64 @@ describe('clipping Fileclass compatibility', () => {
     }
   });
 
+  it('creates a clipping after adding a paragraph reference to a large source article', async () => {
+    const f = await clippingAdapterFixture(async (f) => {
+      const file = f.files.get('Articles/Source.md');
+      const raw = createDocument(
+        { type: 'article', status: 'inbox' },
+        'Saved words.\n\n' + 'Background text. '.repeat(13_000),
+      );
+      f.bytes.set(file.path, raw);
+      file.stat.size = raw.length;
+      f.frontmatter.set(file.path, readDocument(raw).properties);
+    });
+    try {
+      const saved = await f.keep();
+      expect(saved.created).toBe(true);
+      expect(f.source.body).toMatch(/Saved words\. \^reader-/u);
+      expect(f.files.has(saved.path)).toBe(true);
+      expect((await f.keep()).created).toBe(false);
+    } finally {
+      f.lifetime.abort();
+    }
+  });
+
+  it('creates a clipping when delayed source metadata arrives during the post-write lookup', async () => {
+    const f = await clippingAdapterFixture(async (f) => {
+      const file = f.files.get('Articles/Source.md');
+      const raw = createDocument({ type: 'article', status: 'inbox' }, 'Saved words.');
+      f.bytes.set(file.path, raw);
+      file.stat.size = raw.length;
+      f.frontmatter.set(file.path, readDocument(raw).properties);
+      const reference = createDocument(
+        { fileClass: 'Other', origin: '[[Articles/Source]]' },
+        'An existing reference, not a clipping.',
+      );
+      await f.app.vault.create('Cards/Reference.md', reference);
+      f.frontmatter.set('Cards/Reference.md', readDocument(reference).properties);
+    });
+    const scan = f.clippings.scan.bind(f.clippings);
+    let scans = 0;
+    vi.spyOn(f.clippings, 'scan').mockImplementation(async (...args) => {
+      if (++scans === 2) {
+        const read = f.app.vault.read.bind(f.app.vault);
+        vi.mocked(f.app.vault.read).mockImplementationOnce(async (file) => {
+          f.metadataEvents.fire('changed', f.source.file);
+          return read(file);
+        });
+      }
+      return scan(...args);
+    });
+    try {
+      const saved = await f.keep();
+      expect(saved.created).toBe(true);
+      expect(f.source.body).toMatch(/Saved words\. \^reader-/u);
+      expect(f.files.has(saved.path)).toBe(true);
+    } finally {
+      f.lifetime.abort();
+    }
+  });
+
   it('scopes bounded discovery to the source, rather than reading every clipping in the vault', async () => {
     const f = await clippingAdapterFixture(async (f) => {
       for (let i = 0; i < 210; i++) {

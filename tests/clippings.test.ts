@@ -267,6 +267,95 @@ describe('guarded clipping capture', () => {
     await expect(f.keep()).rejects.toThrow(/incomplete/);
     expect(f.snapshot.body).not.toContain('^reader-');
   });
+  it('rechecks invalidated post-write coverage and reuses a concurrently created clipping', async () => {
+    const f = await fixture('Streets shape our choices. ^existing', 'feed');
+    const scan = f.clippings.scan.bind(f.clippings);
+    const process = vi.spyOn(f.vault, 'process');
+    let scans = 0;
+    vi.spyOn(f.clippings, 'scan').mockImplementation(async (...args) => {
+      const result = await scan(...args);
+      if (++scans === 2) {
+        await f.vault.create(
+          'Cards/Concurrent.md',
+          clippingMarkdown(binding, '[[Articles/City#^existing]]', 'Streets shape our choices.'),
+        );
+        f.bump();
+      }
+      return result;
+    });
+    expect(await f.keep()).toMatchObject({ created: false, path: 'Cards/Concurrent.md' });
+    expect(scans).toBe(3);
+    expect(process).toHaveBeenCalledOnce();
+    expect(f.vault.files.size).toBe(2);
+  });
+
+  it('bounds post-write reconciliation when the vault keeps changing and never replays the source write', async () => {
+    const f = await fixture();
+    const scan = f.clippings.scan.bind(f.clippings);
+    const process = vi.spyOn(f.vault, 'process');
+    let scans = 0;
+    vi.spyOn(f.clippings, 'scan').mockImplementation(async (...args) => {
+      const result = await scan(...args);
+      if (++scans > 1) f.bump();
+      return result;
+    });
+    await expect(f.keep()).rejects.toThrow(/Source retained, but clipping lookup is incomplete/);
+    expect(scans).toBe(4); // One preflight, then at most three post-write attempts.
+    expect(process).toHaveBeenCalledOnce();
+    expect(f.snapshot.body).toContain('^reader-');
+    expect(f.vault.files.size).toBe(1);
+  });
+
+  it('rejects real source edits during reconciliation instead of creating from stale words', async () => {
+    const f = await fixture();
+    const scan = f.clippings.scan.bind(f.clippings);
+    let scans = 0;
+    vi.spyOn(f.clippings, 'scan').mockImplementation(async (...args) => {
+      const result = await scan(...args);
+      if (++scans === 2) {
+        await f.vault.process(f.file, (raw) => raw.replace('Streets', 'Edited streets'));
+        f.bump();
+      }
+      return result;
+    });
+    await expect(f.keep()).rejects.toThrow(/note changed/i);
+    expect(await f.vault.read(f.file)).toContain('Edited streets');
+    expect(f.vault.files.size).toBe(1);
+  });
+
+  it('never installs old source evidence when a change races source validation', async () => {
+    const f = await fixture();
+    const validate = f.articles.validate.bind(f.articles);
+    f.port.observed = vi.fn();
+    vi.spyOn(f.articles, 'validate').mockImplementationOnce(async (snapshot) => {
+      await validate(snapshot);
+      await f.vault.process(f.file, (raw) => raw.replace('Streets', 'Edited streets'));
+      f.bump();
+    });
+    await expect(f.keep()).rejects.toThrow(/note changed/i);
+    expect(f.port.observed).not.toHaveBeenCalled();
+    expect(await f.vault.read(f.file)).toContain('Edited streets');
+    expect(f.vault.files.size).toBe(1);
+  });
+
+  it('cancels reconciliation without another lookup or card creation', async () => {
+    const f = await fixture();
+    const scan = f.clippings.scan.bind(f.clippings);
+    let scans = 0;
+    vi.spyOn(f.clippings, 'scan').mockImplementation(async (...args) => {
+      const result = await scan(...args);
+      if (++scans === 2) {
+        f.bump();
+        f.controller.abort();
+      }
+      return result;
+    });
+    await expect(f.keep()).rejects.toThrow(/cancelled/);
+    expect(scans).toBe(2);
+    expect(f.snapshot.body).toContain('^reader-');
+    expect(f.vault.files.size).toBe(1);
+  });
+
   it('archives a clipping-referenced source on Reader Delete even after its card loses its type or quotation', async () => {
     const f = await fixture();
     const kept = await f.keep(),
