@@ -23,7 +23,7 @@
   },
   "dependencies": {
     "defuddle": "0.19.6",
-    "dompurify": "3.4.17",
+    "dompurify": "3.4.18",
     "entities": "9.0.0",
     "marked": "^18.2.0",
     "yaml": "^2.8.1"
