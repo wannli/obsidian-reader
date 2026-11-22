@@ -15,6 +15,7 @@ import { createDocument, patchProperties, readDocument } from '../src/core/docum
 import type { Properties } from '../src/core/model';
 import { Ingestion } from '../src/host/ingestion';
 import { ObsidianVault, watchLibrary, type LibraryChange } from '../src/host/vault';
+import { diagnosticStorage } from '../src/host/diagnostic-storage';
 
 vi.mock('obsidian', () => {
   class TFile {
@@ -206,6 +207,66 @@ function fixture() {
     },
   };
 }
+describe('synced diagnostic Markdown storage', () => {
+  const path = 'Reader Diagnostics/errors-device.md';
+  it('creates and processes ordinary tracked vault files instead of hidden adapter writes', async () => {
+    const f = fixture();
+    const storage = diagnosticStorage(f.app, () => true);
+    await storage.mkdir('Reader Diagnostics');
+    await storage.write(path, 'first');
+    const file = f.files.get(path) as TFile;
+    file.stat = { size: 5, mtime: 1, ctime: 1 };
+    expect(await storage.stat(path)).toEqual({ size: 5 });
+    expect(await storage.read(path)).toBe('first');
+    await storage.write(path, 'second');
+    expect(f.bytes.get(file)).toBe('second');
+    expect(f.vault.create).toHaveBeenCalledWith(path, 'first');
+    expect(f.vault.process).toHaveBeenCalledTimes(1);
+  });
+  it('guards current bytes and file identity at the mutation boundary', async () => {
+    const f = fixture();
+    const file = f.note(path, 'first');
+    const storage = diagnosticStorage(f.app, () => true);
+    await storage.read(path);
+    f.hooks.process = async () => {
+      f.bytes.set(file, 'concurrent edit');
+    };
+    await expect(storage.write(path, 'replacement')).rejects.toThrow('changed');
+    expect(f.bytes.get(file)).toBe('concurrent edit');
+    f.hooks.process = undefined;
+    await storage.read(path);
+    const replacement = f.note(path, 'different file');
+    await expect(storage.write(path, 'replacement')).rejects.toThrow('changed');
+    expect(f.bytes.get(replacement)).toBe('different file');
+  });
+  it('protects dirty editors and stops mutations after unload', async () => {
+    const f = fixture();
+    const file = f.note(path, 'first');
+    let active = true;
+    const storage = diagnosticStorage(f.app, () => active);
+    await storage.read(path);
+    f.open(file, 'unsaved edits', 'source');
+    await expect(storage.write(path, 'replacement')).rejects.toThrow('editor');
+    expect(f.bytes.get(file)).toBe('first');
+    active = false;
+    await expect(storage.write('Reader Diagnostics/errors-other.md', 'new')).rejects.toThrow(
+      'stopped',
+    );
+    expect(f.vault.create).not.toHaveBeenCalled();
+  });
+  it('refuses a folder at the file path or an unobserved existing note', async () => {
+    const f = fixture();
+    const storage = diagnosticStorage(f.app, () => true);
+    f.folder(path);
+    await expect(storage.stat(path)).rejects.toThrow('occupied');
+    await expect(storage.write(path, 'new')).rejects.toThrow();
+    f.note('Reader Diagnostics/errors-other.md', 'authored text');
+    await expect(storage.write('Reader Diagnostics/errors-other.md', 'new')).rejects.toThrow(
+      'changed',
+    );
+  });
+});
+
 type Fixture = ReturnType<typeof fixture>;
 function libraryFixture() {
   const f = fixture(),

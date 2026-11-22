@@ -25,12 +25,15 @@ import {
 } from './core/status-folders';
 import { Network } from './host/network';
 import {
+  DIAGNOSTIC_DIRECTORY,
+  diagnosticDeviceId,
   installReaderDiagnostics,
   isReaderError,
   logReaderError,
   readerBreadcrumb,
   ReaderDiagnostics,
 } from './host/diagnostics';
+import { diagnosticStorage } from './host/diagnostic-storage';
 import { SavedSettingsError } from './host/action-feedback';
 import { readDocument } from './core/document';
 import { ArticleStore } from './core/store';
@@ -140,27 +143,36 @@ export default class ReaderPlugin extends Plugin {
     if (!this.signal.aborted) logReaderError(error);
   }
   async onload(): Promise<void> {
-    // Plugin storage uses the vault adapter, including on mobile; never Node APIs.
+    // Ordinary Markdown vault writes participate in normal sync; IDs stay device-local.
     if (this.manifest?.dir && this.app.vault.adapter) {
-      this.stopDiagnostics = installReaderDiagnostics(
-        new ReaderDiagnostics(this.app.vault.adapter, `${this.manifest.dir}/logs`, {
-          reader: this.manifest.version,
-          obsidian: apiVersion,
-          platform: Platform.isIosApp
-            ? 'ios'
-            : Platform.isAndroidApp
-              ? 'android'
-              : Platform.isMacOS
-                ? 'macos'
-                : Platform.isWin
-                  ? 'windows'
-                  : Platform.isLinux
-                    ? 'linux'
-                    : Platform.isMobile
-                      ? 'mobile'
-                      : 'desktop',
-        }),
-      );
+      try {
+        this.stopDiagnostics = installReaderDiagnostics(
+          new ReaderDiagnostics(
+            diagnosticStorage(this.app, () => !this.unloaded),
+            DIAGNOSTIC_DIRECTORY,
+            {
+              reader: this.manifest.version,
+              obsidian: apiVersion,
+              platform: Platform.isIosApp
+                ? 'ios'
+                : Platform.isAndroidApp
+                  ? 'android'
+                  : Platform.isMacOS
+                    ? 'macos'
+                    : Platform.isWin
+                      ? 'windows'
+                      : Platform.isLinux
+                        ? 'linux'
+                        : Platform.isMobile
+                          ? 'mobile'
+                          : 'desktop',
+            },
+            diagnosticDeviceId(),
+          ),
+        );
+      } catch {
+        console.error('[Reader] Diagnostic logging could not start.');
+      }
       this.registerDomEvent(window, 'error', (event: ErrorEvent) => {
         if (isReaderError(event.error)) logReaderError(event.error, 'runtime.error');
       });

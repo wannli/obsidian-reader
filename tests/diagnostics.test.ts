@@ -1,5 +1,6 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
+  diagnosticDeviceId,
   installReaderDiagnostics,
   isReaderError,
   logReaderError,
@@ -9,8 +10,19 @@ import {
   type DiagnosticStorage,
 } from '../src/host/diagnostics';
 
-function fixture() {
-  const files = new Map<string, string>();
+const currentPath = 'Reader Diagnostics/errors-mobile-test-device.md';
+const previousPath = 'Reader Diagnostics/errors-mobile-test-device.previous.md';
+const parseEntries = (content: string) =>
+  content
+    .split('\n')
+    .filter((line) => line.startsWith('{'))
+    .map((line) => JSON.parse(line));
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+});
+
+function fixture(device = 'mobile-test-device', files = new Map<string, string>()) {
   const storage: DiagnosticStorage = {
     exists: vi.fn(async (path) => files.has(path)),
     mkdir: vi.fn(async (path) => {
@@ -24,17 +36,17 @@ function fixture() {
       files.set(path, data);
     }),
   };
-  const logger = new ReaderDiagnostics(storage, 'plugin/logs', {
-    reader: '1.0',
-    obsidian: '1.12',
-    platform: 'mobile',
-  });
-  const entries = () =>
-    (files.get('plugin/logs/errors.jsonl') ?? '')
-      .trim()
-      .split('\n')
-      .filter(Boolean)
-      .map((line) => JSON.parse(line));
+  const logger = new ReaderDiagnostics(
+    storage,
+    'Reader Diagnostics',
+    {
+      reader: '1.0',
+      obsidian: '1.12',
+      platform: 'mobile',
+    },
+    device,
+  );
+  const entries = () => parseEntries(files.get(`Reader Diagnostics/errors-${device}.md`) ?? '');
   return { logger, files, storage, entries };
 }
 
@@ -95,28 +107,36 @@ describe('persistent Reader diagnostics', () => {
   });
   it('preserves previous sessions and rotates with both files bounded in UTF-8 bytes', async () => {
     const { logger, files, entries } = fixture();
-    files.set('plugin/logs/errors.jsonl', JSON.stringify({ previousSession: true }) + '\n');
-    logger.error('first');
+    logger.error('previous session');
     await logger.flush();
-    expect(entries()[0]).toEqual({ previousSession: true });
+    const resumed = fixture('mobile-test-device', files).logger;
+    resumed.error('first');
+    await resumed.flush();
+    expect(entries()[0].message).toBe('previous session');
+    expect(entries()[1].session).not.toBe(entries()[0].session);
     for (let batch = 0; batch < 4; batch++) {
       for (let i = 0; i < 64; i++) logger.error(`${batch}-${i} ${'界'.repeat(2000)}`);
       await logger.flush();
     }
-    expect(files.has('plugin/logs/errors.previous.jsonl')).toBe(true);
+    expect(files.has(previousPath)).toBe(true);
     for (const [path, value] of files) {
       expect(new TextEncoder().encode(value).length).toBeLessThanOrEqual(256 * 1024);
-      if (path.endsWith('.jsonl'))
-        for (const line of value.trim().split('\n')) expect(() => JSON.parse(line)).not.toThrow();
+      if (path.endsWith('.md')) {
+        expect(value).toContain('# Reader errors (mobile-test-device)');
+        expect(parseEntries(value).length).toBeGreaterThan(0);
+      }
     }
   });
-  it('never reads an oversized externally modified log', async () => {
-    const { logger, files, storage, entries } = fixture();
-    files.set('plugin/logs/errors.jsonl', 'x'.repeat(300_000));
-    logger.error('recover');
-    await logger.flush();
-    expect(storage.read).not.toHaveBeenCalled();
-    expect(entries()).toHaveLength(1);
+  it('preserves oversized or user-authored files rather than overwriting them', async () => {
+    for (const value of ['x'.repeat(300_000), '# My personal note\n']) {
+      const { logger, files, storage } = fixture();
+      vi.spyOn(console, 'error').mockImplementation(() => {});
+      files.set(currentPath, value);
+      logger.error('recover');
+      await logger.flush();
+      expect(storage.write).not.toHaveBeenCalled();
+      expect(files.get(currentPath)).toBe(value);
+    }
   });
   it('serializes overlapping writes without losing incoming records', async () => {
     const { logger, storage, entries } = fixture();
@@ -160,6 +180,69 @@ describe('persistent Reader diagnostics', () => {
     expect(entries()).toHaveLength(1);
     expect(entries()[0].trail[0].operation).toBe('article.open');
     consoleError.mockRestore();
+  });
+  it('keeps distinct device files and rotations isolated in a shared vault', async () => {
+    const files = new Map<string, string>();
+    const first = fixture('ios-first-device', files);
+    const second = fixture('linux-second-device', files);
+    first.logger.error('phone error');
+    second.logger.error('desktop error');
+    await Promise.all([first.logger.flush(), second.logger.flush()]);
+    expect(first.entries()[0]).toMatchObject({
+      message: 'phone error',
+      device: 'ios-first-device',
+    });
+    expect(second.entries()[0]).toMatchObject({
+      message: 'desktop error',
+      device: 'linux-second-device',
+    });
+    const secondBytes = files.get('Reader Diagnostics/errors-linux-second-device.md');
+    for (let batch = 0; batch < 3; batch++) {
+      for (let i = 0; i < 64; i++) first.logger.error(`${batch}-${i} ${'界'.repeat(2000)}`);
+      await first.logger.flush();
+    }
+    expect(files.has('Reader Diagnostics/errors-ios-first-device.previous.md')).toBe(true);
+    expect(files.get('Reader Diagnostics/errors-linux-second-device.md')).toBe(secondBytes);
+  });
+  it('retains an edited log and an unrelated rotation destination', async () => {
+    const { logger, files, storage } = fixture();
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    logger.error('first');
+    await logger.flush();
+    files.set(currentPath, files.get(currentPath)! + 'My own writing\n');
+    const edited = files.get(currentPath);
+    logger.error('second');
+    await logger.flush();
+    expect(files.get(currentPath)).toBe(edited);
+    files.set(currentPath, edited!.replace('My own writing\n', ''));
+    files.set(previousPath, '# Personal note\n');
+    for (let batch = 0; batch < 3; batch++) {
+      for (let i = 0; i < 64; i++) logger.error(`${batch}-${i} ${'界'.repeat(2000)}`);
+      await logger.flush();
+    }
+    expect(files.get(previousPath)).toBe('# Personal note\n');
+    expect(storage.write).not.toHaveBeenCalledWith(previousPath, expect.anything());
+  });
+  it('uses stable local-only random device IDs, not synced settings or hardware identifiers', () => {
+    const values = new Map<string, string>();
+    vi.stubGlobal('localStorage', {
+      getItem: (key: string) => values.get(key),
+      setItem: (key: string, value: string) => values.set(key, value),
+    });
+    const first = diagnosticDeviceId();
+    expect(first).toMatch(/^[a-f0-9]{32}$/);
+    expect(diagnosticDeviceId()).toBe(first);
+    values.clear();
+    expect(diagnosticDeviceId()).not.toBe(first);
+    vi.stubGlobal('localStorage', {
+      getItem: () => {
+        throw Error('blocked');
+      },
+      setItem: () => {
+        throw Error('blocked');
+      },
+    });
+    expect(diagnosticDeviceId()).not.toBe(diagnosticDeviceId());
   });
   it('only attributes global errors with Reader stack frames', () => {
     const error = new Error('broken');

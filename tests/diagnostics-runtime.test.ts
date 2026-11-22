@@ -1,12 +1,13 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import { runtimeFixture } from './helpers/folder-runtime';
+import * as storage from '../src/host/diagnostic-storage';
 
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
 
-it('connects plugin reporting and attributed runtime errors to vault adapter logs, then stops on unload', async () => {
+it('connects plugin reporting to device-specific Markdown logs, then stops on unload', async () => {
   const { plugin, app } = await runtimeFixture();
   const files = new Map<string, string>();
   app.vault.adapter = {
@@ -20,6 +21,7 @@ it('connects plugin reporting and attributed runtime errors to vault adapter log
       files.set(path, value);
     }),
   };
+  vi.spyOn(storage, 'diagnosticStorage').mockReturnValue(app.vault.adapter);
   plugin.manifest = { dir: '.custom/plugins/obsidian-reader', version: 'test-version' };
   plugin.loadReader = vi.fn(async () => {});
   const listeners = new Map<string, (event: any) => void>();
@@ -34,12 +36,18 @@ it('connects plugin reporting and attributed runtime errors to vault adapter log
   listeners.get('error')!({ error });
   listeners.get('unhandledrejection')!({ reason: error });
   listeners.get('error')!({ error: new Error('Unrelated failure') });
-  const path = '.custom/plugins/obsidian-reader/logs/errors.jsonl';
-  await vi.waitFor(() => expect(files.get(path)).toContain('runtime.unhandled-rejection'));
+  await vi.waitFor(() =>
+    expect([...files.values()].join('')).toContain('runtime.unhandled-rejection'),
+  );
+  const path = [...files.keys()].find((path) =>
+    /Reader Diagnostics\/errors-[a-f0-9]{32}\.md$/.test(path),
+  )!;
+  expect(path).toBeTruthy();
+  expect(storage.diagnosticStorage).toHaveBeenCalledWith(app, expect.any(Function));
   const entries = files
     .get(path)!
-    .trim()
     .split('\n')
+    .filter((line) => line.startsWith('{'))
     .map((line) => JSON.parse(line));
   expect(entries.map((entry) => entry.operation)).toEqual([
     'reader',

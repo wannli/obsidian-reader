@@ -11,8 +11,29 @@ interface Environment {
   obsidian: string;
   platform: string;
 }
+export const DIAGNOSTIC_DIRECTORY = 'Reader Diagnostics';
+const DEVICE_KEY = 'obsidian-reader:diagnostics-device';
 const MAX_BYTES = 256 * 1024;
 const encoder = new TextEncoder();
+
+/** Device-local only: never put this ID in synced plugin settings or Markdown frontmatter. */
+export function diagnosticDeviceId(): string {
+  try {
+    const stored = localStorage.getItem(DEVICE_KEY);
+    if (stored && /^[a-f0-9]{32}$/.test(stored)) return stored;
+  } catch {
+    /* A private-storage device gets a fresh namespace each launch. */
+  }
+  const bytes = new Uint8Array(16);
+  crypto.getRandomValues(bytes);
+  const id = [...bytes].map((byte) => byte.toString(16).padStart(2, '0')).join('');
+  try {
+    localStorage.setItem(DEVICE_KEY, id);
+  } catch {
+    /* Still collision-safe without persistence. */
+  }
+  return id;
+}
 
 /** Defense in depth, not a guarantee that arbitrary third-party error prose is anonymous. */
 export function redactDiagnostic(value: string): string {
@@ -64,7 +85,36 @@ export class ReaderDiagnostics {
     private storage: DiagnosticStorage,
     private directory: string,
     private environment: Environment,
-  ) {}
+    private device: string,
+  ) {
+    if (!/^[a-z0-9-]{1,80}$/.test(device)) throw new Error('Invalid diagnostic device ID.');
+  }
+  private get header(): string {
+    return `<!-- Reader diagnostic log: ${this.device}; format=1 -->\n# Reader errors (${this.device})\n\n`;
+  }
+  private async readLog(path: string): Promise<string> {
+    const stat = await this.storage.stat(path);
+    if (!stat) return this.header;
+    if (stat.size > MAX_BYTES) throw new Error('Diagnostic file is too large; preserved it.');
+    const content = await this.storage.read(path);
+    if (encoder.encode(content).length > MAX_BYTES)
+      throw new Error('Diagnostic file grew; preserved it.');
+    if (!content.startsWith(this.header))
+      throw new Error('Diagnostic path contains other content.');
+    const body = content.slice(this.header.length);
+    const blocks = body.match(/```json\n[^\n]+\n```\n\n/g) ?? [];
+    if (blocks.join('') !== body) throw new Error('Diagnostic file was edited; preserved it.');
+    for (const block of blocks) {
+      const entry: unknown = JSON.parse(block.split('\n')[1]!);
+      if (
+        !entry ||
+        typeof entry !== 'object' ||
+        typeof (entry as Record<string, unknown>).operation !== 'string'
+      )
+        throw new Error('Diagnostic file was edited; preserved it.');
+    }
+    return content;
+  }
   breadcrumb(operation: string): void {
     if (this.stopped) return;
     this.trail.push({
@@ -86,6 +136,7 @@ export class ReaderDiagnostics {
       this.pending.set(key, {
         at: new Date().toISOString(),
         session: this.session,
+        device: this.device,
         ...this.environment,
         operation: context,
         ...details,
@@ -119,18 +170,19 @@ export class ReaderDiagnostics {
       });
     this.dropped = 0;
     if (!(await this.storage.exists(this.directory))) await this.storage.mkdir(this.directory);
-    const path = `${this.directory}/errors.jsonl`;
-    const stat = await this.storage.stat(path);
-    let content = stat && stat.size <= MAX_BYTES ? await this.storage.read(path) : '';
+    const path = `${this.directory}/errors-${this.device}.md`;
+    const previous = `${this.directory}/errors-${this.device}.previous.md`;
+    let content = await this.readLog(path);
     let size = encoder.encode(content).length;
     for (const record of records) {
-      const line = JSON.stringify(record) + '\n';
+      const line = '```json\n' + JSON.stringify(record) + '\n```\n\n';
       const lineSize = encoder.encode(line).length;
       if (size + lineSize > MAX_BYTES) {
-        // Only rotate bounded content, never an externally enlarged file.
-        if (content) await this.storage.write(`${this.directory}/errors.previous.jsonl`, content);
-        content = '';
-        size = 0;
+        // Verify both destinations belong to this logger before replacing either.
+        await this.readLog(previous);
+        await this.storage.write(previous, content);
+        content = this.header;
+        size = encoder.encode(content).length;
       }
       content += line;
       size += lineSize;
