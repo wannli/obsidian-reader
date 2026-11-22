@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.32.0](https://github.com/wannli/obsidian-reader/compare/0.31.0...0.32.0) (2026-11-22)
+
+
+### Added
+
+* **reader:** add Inbox to experimental Feed triage ([c5f22c3](https://github.com/wannli/obsidian-reader/commit/c5f22c36fb4d19cf76935c2d60afab0e27fa72f7))
+
 ## [0.31.0](https://github.com/wannli/obsidian-reader/compare/0.30.4...0.31.0) (2026-11-22)
 
 
