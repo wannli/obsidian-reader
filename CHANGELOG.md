@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.33.0](https://github.com/wannli/obsidian-reader/compare/0.32.0...0.33.0) (2026-11-22)
+
+
+### Added
+
+* persist bounded Reader error diagnostics ([7fe574b](https://github.com/wannli/obsidian-reader/commit/7fe574b58f612f7912476b00b6491c9c335efabe))
+
 ## [0.32.0](https://github.com/wannli/obsidian-reader/compare/0.31.0...0.32.0) (2026-11-22)
 
 
