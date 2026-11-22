@@ -1,4 +1,5 @@
 import {
+  apiVersion,
   FileView,
   MarkdownView,
   Notice,
@@ -23,7 +24,13 @@ import {
   type ResolvedStatusFolders,
 } from './core/status-folders';
 import { Network } from './host/network';
-import { logReaderError } from './host/diagnostics';
+import {
+  installReaderDiagnostics,
+  isReaderError,
+  logReaderError,
+  readerBreadcrumb,
+  ReaderDiagnostics,
+} from './host/diagnostics';
 import { SavedSettingsError } from './host/action-feedback';
 import { readDocument } from './core/document';
 import { ArticleStore } from './core/store';
@@ -55,6 +62,7 @@ export default class ReaderPlugin extends Plugin {
     return this.runtime.ingestion;
   }
   private unloaded = false;
+  private stopDiagnostics?: () => void;
   private network = new Network();
   private folderSaves = new SerialWrites<string>();
   private viewWrites = new Set<Promise<unknown>>();
@@ -132,6 +140,44 @@ export default class ReaderPlugin extends Plugin {
     if (!this.signal.aborted) logReaderError(error);
   }
   async onload(): Promise<void> {
+    // Plugin storage uses the vault adapter, including on mobile; never Node APIs.
+    if (this.manifest?.dir && this.app.vault.adapter) {
+      this.stopDiagnostics = installReaderDiagnostics(
+        new ReaderDiagnostics(this.app.vault.adapter, `${this.manifest.dir}/logs`, {
+          reader: this.manifest.version,
+          obsidian: apiVersion,
+          platform: Platform.isIosApp
+            ? 'ios'
+            : Platform.isAndroidApp
+              ? 'android'
+              : Platform.isMacOS
+                ? 'macos'
+                : Platform.isWin
+                  ? 'windows'
+                  : Platform.isLinux
+                    ? 'linux'
+                    : Platform.isMobile
+                      ? 'mobile'
+                      : 'desktop',
+        }),
+      );
+      this.registerDomEvent(window, 'error', (event: ErrorEvent) => {
+        if (isReaderError(event.error)) logReaderError(event.error, 'runtime.error');
+      });
+      this.registerDomEvent(window, 'unhandledrejection', (event: PromiseRejectionEvent) => {
+        if (isReaderError(event.reason))
+          logReaderError(event.reason, 'runtime.unhandled-rejection');
+      });
+    }
+    readerBreadcrumb('plugin.load');
+    try {
+      await this.loadReader();
+    } catch (error) {
+      logReaderError(error, 'plugin.load');
+      throw error;
+    }
+  }
+  private async loadReader(): Promise<void> {
     const data = await this.loadData();
     if (this.unloaded) return;
     let folders = defaultFolders;
@@ -930,6 +976,7 @@ export default class ReaderPlugin extends Plugin {
     }
   }
   private async tick(syncFeeds = false, recover = false, forceMaintenance = false): Promise<void> {
+    if (syncFeeds) readerBreadcrumb('feeds.refresh');
     const signal = this.signal,
       ingestion = this.ingestion;
     if (signal.aborted || document.visibilityState !== 'visible') return;
@@ -1009,6 +1056,7 @@ export default class ReaderPlugin extends Plugin {
     if (!signal.aborted) await view.openArticle(path);
   }
   async openList(queue?: Queue): Promise<ReaderView> {
+    readerBreadcrumb(`list.open.${queue ?? 'current'}`);
     const signal = this.signal;
     if (signal.aborted) throw new Error('Reader is paused.');
     const existing = this.app.workspace.getActiveViewOfType(ReaderView);
@@ -1050,6 +1098,7 @@ export default class ReaderPlugin extends Plugin {
     );
   }
   capture(): void {
+    readerBreadcrumb('capture.open');
     const signal = this.signal,
       store = this.store;
     if (signal.aborted) return;
@@ -1161,6 +1210,8 @@ export default class ReaderPlugin extends Plugin {
     }
   }
   onunload(): void {
+    this.stopDiagnostics?.();
+    this.stopDiagnostics = undefined;
     this.unbindNodes?.();
     this.unbindNodes = undefined;
     this.typedNotes?.dispose();

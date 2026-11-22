@@ -6,6 +6,7 @@ const runtime = vi.hoisted(() => ({
   notices: [] as string[],
 }));
 vi.mock('obsidian', () => ({
+  apiVersion: '1.12.7',
   FileView: class {},
   MarkdownView: class {},
   TFile: class {},

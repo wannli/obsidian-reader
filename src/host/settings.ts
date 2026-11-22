@@ -43,7 +43,7 @@ export function showFeeds(
           this.failures.delete(key);
         } catch (error) {
           if (this.closed || signal.aborted) return;
-          logReaderError(error);
+          logReaderError(error, `feeds.${label}`);
           // A native write can finish before rejecting. Observe fresh bytes, never roll back.
           let uncertain = false;
           if (key !== 'sync') {
@@ -165,7 +165,7 @@ export class ReaderSettings extends PluginSettingTab {
   display(): void {
     const epoch = ++this.displayEpoch;
     const report = (element: HTMLElement, action: string, error: unknown) => {
-      logReaderError(error);
+      logReaderError(error, `settings.${action}`);
       if (epoch === this.displayEpoch)
         element.textContent = `${actionFailure(action, error)} Review the values and apply again.`;
     };

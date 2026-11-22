@@ -18,6 +18,7 @@ import { isSourceLinkPlaceholder } from '../core/capture-placeholder';
 import { SerialWrites, WorkQueue } from '../core/work';
 import { assertSafeExternalText } from '../content/security';
 import { Network } from './network';
+import { logReaderError, readerBreadcrumb } from './diagnostics';
 
 class CancelledFeed extends Error {
   constructor() {
@@ -238,6 +239,7 @@ export class Ingestion {
     return failures;
   }
   private async refresh(feed: Subscription, guard = this.feedGuard(feed)): Promise<void> {
+    readerBreadcrumb('feed.refresh');
     try {
       await guard.validate();
       const data = await this.loadFeed(feed.url, true, guard.check);
@@ -272,6 +274,7 @@ export class Ingestion {
     } catch (error) {
       if (!this.active || error instanceof CancelledFeed) return;
       guard.check();
+      logReaderError(error, 'feed.refresh');
       try {
         await this.feedError(
           feed,
@@ -280,6 +283,7 @@ export class Ingestion {
         );
       } catch (saveError) {
         if (!this.active || saveError instanceof CancelledFeed) return;
+        logReaderError(saveError, 'feed.save-error');
         throw new Error(
           `${String(error)}; could not save the subscription error: ${String(saveError)}`,
         );
@@ -336,6 +340,7 @@ export class Ingestion {
     );
   }
   acquire(path: string, foreground = false): Promise<void> {
+    readerBreadcrumb('article.acquire');
     return this.work.enqueue(
       `article:${path}`,
       async () => {
@@ -377,12 +382,14 @@ export class Ingestion {
           await this.store.acquire(snapshot, result.markdown, result.title, proof);
         } catch (error) {
           if (this.active) {
+            logReaderError(error, 'article.acquire');
             try {
               await this.store.error(
                 snapshot,
                 error instanceof Error ? error.message : String(error),
               );
-            } catch {
+            } catch (saveError) {
+              if (this.active) logReaderError(saveError, 'article.save-error');
               /* A newer note wins. */
             }
           }

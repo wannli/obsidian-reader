@@ -59,7 +59,7 @@ import {
   type HostedHighlight,
 } from '../core/hosted-highlights';
 import { choose, confirmWebLink } from '../host/dialogs';
-import { logReaderError } from '../host/diagnostics';
+import { logReaderError, readerBreadcrumb } from '../host/diagnostics';
 import { actionFailure, inlineFailure, inlineOutcome } from '../host/action-feedback';
 import { connectNodes, type RelationField } from '../host/node-relations';
 import type { Ingestion } from '../host/ingestion';
@@ -456,7 +456,7 @@ export class ReaderView extends ItemView {
     }
   }
   private error(error: unknown): void {
-    if (!this.host.signal.aborted) logReaderError(error);
+    if (!this.host.signal.aborted) logReaderError(error, 'view');
   }
   private reportActionFailure(action: string, error: unknown, generation = this.generation): void {
     if (this.stopping || this.host.signal.aborted || generation !== this.generation) return;
@@ -476,13 +476,14 @@ export class ReaderView extends ItemView {
     this.contentEl.prepend(this.actionOutcome);
   }
   private async userAction(label: string, action: () => void | Promise<void>): Promise<void> {
+    readerBreadcrumb(`action.${label}`);
     const generation = this.generation;
     try {
       await action();
       if (generation === this.generation) this.actionError?.remove();
     } catch (error) {
       this.reportActionFailure(label, error, generation);
-      this.error(error);
+      if (!this.host.signal.aborted) logReaderError(error, `action.${label}`);
     }
   }
   private button(
@@ -1135,6 +1136,7 @@ export class ReaderView extends ItemView {
     subpath?: string,
   ): Promise<void> {
     if (signal?.aborted) return;
+    readerBreadcrumb('article.open');
     const request = ++this.opening;
     this.loadingPath = path;
     let token: number | undefined,

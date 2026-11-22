@@ -181,19 +181,20 @@ export class CaptureController {
       return signal.aborted ? null : record;
     } catch (error) {
       if (error instanceof LinkFailure) {
-        if (created) logReaderError(`Created ${created.path}; linking failed. The note was kept.`);
+        if (created) logReaderError(error.original, 'typed-note.link-failed.note-kept');
         throw error.original;
       }
       if (created) {
         if (this.active) {
           const retained = this.app.vault.getAbstractFileByPath(created.path) === created;
           logReaderError(
-            `${retained ? `Kept ${created.path}${linked ? ' and its link' : ''}` : 'The created note was moved, replaced or deleted'}. ${String(error)}`,
+            error,
+            `typed-note.${retained ? (linked ? 'note-and-link-kept' : 'note-kept') : 'note-changed'}`,
           );
         }
         return signal.aborted ? null : (record ?? null);
       }
-      if (!signal.aborted && this.active) logReaderError(`Reader typed notes: ${String(error)}`);
+      if (!signal.aborted && this.active) logReaderError(error, 'typed-note.create');
       return null;
     }
   }
