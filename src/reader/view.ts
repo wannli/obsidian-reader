@@ -1531,6 +1531,14 @@ export class ReaderView extends ItemView {
         run: () => this.finish('delete'),
       },
     ];
+    if (this.snapshot.properties.status !== 'inbox')
+      commands.splice(4, 0, {
+        key: '',
+        label: 'Move to Inbox and advance',
+        icon: 'inbox',
+        group: 'disposition',
+        run: () => this.changeStatus('Inbox'),
+      });
     if (this.surface.paged) {
       for (const [key, label, direction] of [
         ['z', 'Previous page', -1],
@@ -2525,7 +2533,7 @@ export class ReaderView extends ItemView {
       (path) => !!this.host.store.catalog.article(path) && !attention?.has(path),
     );
   }
-  private async changeStatus(destination: 'Later' | 'Archive'): Promise<void> {
+  private async changeStatus(destination: 'Inbox' | 'Later' | 'Archive'): Promise<void> {
     this.cancelNodeCreation();
     const snapshot = this.snapshot,
       generation = this.generation,

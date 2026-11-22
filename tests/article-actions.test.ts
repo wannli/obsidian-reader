@@ -88,6 +88,66 @@ describe('contextual five-button article bar', () => {
     expect(mocks.menuShown).toHaveBeenCalledOnce();
   });
 
+  it.each([
+    ['feed', false],
+    ['feed', true],
+    ['later', false],
+    ['later', true],
+    ['archive', false],
+    ['archive', true],
+  ] as const)('moves %s to Inbox without relocating the file (paged=%s)', async (status, paged) => {
+    const f = hostFixture();
+    f.host.paged = paged;
+    // Deliberately disagree with the folder: availability follows YAML status.
+    const article = await f.note('Reading/Inbox/A.md');
+    await f.vault.process(article, () =>
+      createDocument({ type: 'article', status, custom: 'preserved' }, 'Authored words'),
+    );
+    f.store.catalog.update(article.path, { type: 'article', status });
+    await f.view.openArticle(article.path, true);
+    expect(labels(f)).toHaveLength(5);
+    more(f).click();
+    mocks.menus.at(-1)!.get('Move to Inbox and advance')!();
+    await f.probe.operations;
+    const saved = await f.store.read(article.path);
+    expect(saved.properties.status).toBe('inbox');
+    expect(saved.properties.custom).toBe('preserved');
+    expect(saved.body).toBe('Authored words');
+    expect(article.path).toBe('Reading/Inbox/A.md');
+    expect(f.host.ingestion.acquire).toHaveBeenCalledWith(article.path);
+    expect(f.view.file).toBeUndefined();
+  });
+
+  it('does not offer Move to Inbox for an Inbox article', async () => {
+    const f = hostFixture();
+    const article = await f.note('Reading/Inbox/A.md');
+    await f.view.openArticle(article.path, true);
+    more(f).click();
+    expect(mocks.menus.at(-1)!.has('Move to Inbox and advance')).toBe(false);
+  });
+
+  it('advances within the original queue after moving to Inbox', async () => {
+    const f = hostFixture();
+    const article = await f.note('Reading/Stream/A.md');
+    const next = await f.note('Reading/Stream/B.md');
+    await f.view.readingList('Feed');
+    await f.view.openArticle(article.path, true);
+    articleAction(f.view, 'Move to Inbox and advance');
+    await f.probe.operations;
+    expect((await f.store.read(article.path)).properties.status).toBe('inbox');
+    expect(f.view.file).toBe(next);
+  });
+
+  it('stays on the article when moving to Inbox fails', async () => {
+    const f = await fixture(true);
+    vi.spyOn(f.store, 'move').mockRejectedValue(new Error('Status write failed'));
+    articleAction(f.view, 'Move to Inbox and advance');
+    await expect(f.probe.operations).rejects.toThrow('Status write failed');
+    expect(f.view.file).toBe(f.article);
+    expect((await f.store.read(f.article.path)).properties.status).toBe('feed');
+    expect(f.host.ingestion.acquire).not.toHaveBeenCalled();
+  });
+
   it('uses YAML status rather than folder membership or the browsing queue', async () => {
     const f = hostFixture();
     const path = 'Reading/Stream/A.md';
@@ -110,6 +170,7 @@ describe('contextual five-button article bar', () => {
       'Create node',
       'Related notes',
       '---',
+      'Move to Inbox and advance',
       'Save to Later and advance',
       'Archive and advance',
     ]);
