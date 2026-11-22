@@ -69,7 +69,7 @@ test('only Release checks the actual tag once before publishing', async () => {
 test('main pushes prepare drafts, then check exact-tag drafts before publication', () => {
   assert.match(release, /push:\n    branches: \[main\]/);
   assert.match(release, /actions\/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1/);
-  assert.match(release, /jdx\/mise-action@b44d12e7d0d8ee7461bb893e1b1993500433185b/);
+  assert.match(release, /jdx\/mise-action@90f833d396d0cc3674b631d2d225e306476c303a/);
   assert.match(release, /googleapis\/release-please-action@v5/);
   assert.match(release, /group: reader-release\n  cancel-in-progress: false/);
   assert.match(release, /if: \$\{\{ !inputs\.existing_tag \}\}/);
