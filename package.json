@@ -25,7 +25,7 @@
     "defuddle": "0.19.6",
     "dompurify": "3.4.17",
     "entities": "9.0.0",
-    "marked": "^18.2.0",
+    "marked": "^18.2.1",
     "yaml": "^2.8.1"
   },
   "devDependencies": {
