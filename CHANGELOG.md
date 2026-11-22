@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.31.0](https://github.com/wannli/obsidian-reader/compare/0.30.4...0.31.0) (2026-11-22)
+
+
+### Added
+
+* **reader:** add move to Inbox article action ([f054047](https://github.com/wannli/obsidian-reader/commit/f054047813f12b3d49606d21b67d81227bc3ba3b))
+
+
+### Fixed
+
+* **content:** validate preserved code blank lines with current marked ([6c73ade](https://github.com/wannli/obsidian-reader/commit/6c73ade2b5b6a547766c38310847fc4d88ae0ad7))
+* **reader:** recognize native properties paragraph links ([70262a1](https://github.com/wannli/obsidian-reader/commit/70262a16ae7fb1c1a39a68787e464fc3b20ef171))
+
 ## [0.30.4](https://github.com/wannli/obsidian-reader/compare/0.30.3...0.30.4) (2026-11-21)
 
 
