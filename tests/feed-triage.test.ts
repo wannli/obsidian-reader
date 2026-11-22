@@ -92,6 +92,48 @@ it('keeps Enter opening the selected article with touch triage enabled', async (
   f.view.key(new KeyboardEvent('keydown', { key: 'Enter', cancelable: true }));
   expect(open).toHaveBeenCalledWith(file.path, true);
 });
+it('Inbox retains the selected article in place, acquires text, and advances without opening', async () => {
+  const f = hostFixture();
+  const first = await f.note('Reading/Stream/A.md', 'Saved **article** text.');
+  const second = await f.note('Reading/Stream/B.md');
+  saveTriageFlag('feedTouchActions', true);
+  f.view.showList('Feed');
+  const open = vi.spyOn(f.view, 'openArticle').mockResolvedValue();
+  action(f, 'Inbox').click();
+  await f.probe.operations;
+  expect(f.store.catalog.article(first.path)?.queue).toBe('Inbox');
+  expect(await f.vault.read(first)).toContain('Saved **article** text.');
+  expect(f.vault.file(first.path)).toBe(first);
+  expect(f.host.ingestion.acquire).toHaveBeenCalledWith(first.path);
+  expect(f.probe.listSelectedPath).toBe(second.path);
+  expect(open).not.toHaveBeenCalled();
+  action(f, 'Inbox').click();
+  await f.probe.operations;
+  expect(f.store.catalog.article(second.path)?.queue).toBe('Inbox');
+  for (const name of ['Open', 'Inbox', 'Later', 'Next', 'Delete'])
+    expect(action(f, name).disabled).toBe(true);
+});
+it('keeps the selected Feed article when moving to Inbox fails', async () => {
+  const f = hostFixture();
+  const first = await f.note('Reading/Stream/A.md');
+  await f.note('Reading/Stream/B.md');
+  const before = await f.vault.read(first);
+  saveTriageFlag('feedTouchActions', true);
+  f.view.showList('Feed');
+  const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+  vi.spyOn(f.store, 'move').mockRejectedValue(new Error('Disk full'));
+  action(f, 'Inbox').click();
+  await f.probe.operations.catch(() => {});
+  await Promise.resolve();
+  expect(await f.vault.read(first)).toBe(before);
+  expect(f.probe.listSelectedPath).toBe(first.path);
+  expect(f.host.ingestion.acquire).not.toHaveBeenCalled();
+  expect(action(f, 'Inbox').disabled).toBe(false);
+  expect(f.view.contentEl.querySelector('.reader-action-error')?.textContent).toContain(
+    'Disk full',
+  );
+  log.mockRestore();
+});
 it('Later advances using existing writes, and Delete protects annotated articles', async () => {
   const f = hostFixture();
   const first = await f.note('Reading/Stream/A.md');
@@ -107,7 +149,7 @@ it('Later advances using existing writes, and Delete protects annotated articles
   await f.probe.operations;
   expect(f.store.catalog.article(second.path)?.queue).toBe('Archive');
   expect(f.vault.trashed).toEqual([]);
-  for (const name of ['Open', 'Later', 'Next', 'Delete'])
+  for (const name of ['Open', 'Inbox', 'Later', 'Next', 'Delete'])
     expect(action(f, name).disabled).toBe(true);
 });
 it('Next extends the mounted list at the pagination boundary', async () => {

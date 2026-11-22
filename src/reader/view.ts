@@ -653,6 +653,7 @@ export class ReaderView extends ItemView {
             if (this.listSelectedPath) return this.openArticle(this.listSelectedPath, true);
           },
         ],
+        ['Inbox', () => this.actOnListArticle('i')],
         ['Later', () => this.actOnListArticle('l')],
         [
           'Next',
@@ -878,7 +879,7 @@ export class ReaderView extends ItemView {
           : Math.max(0, Math.min(rows.length - 1, index + (key === 'j' ? 1 : -1)));
     this.selectListRow(rows[next], true);
   }
-  private actOnListArticle(action: 'l' | 'a' | 't'): Promise<void> {
+  private actOnListArticle(action: 'i' | 'l' | 'a' | 't'): Promise<void> {
     if (this.operating) return Promise.resolve();
     const path = this.listSelectedPath;
     const row = this.listRows().find((item) => item.dataset.readerPath === path);
@@ -922,10 +923,10 @@ export class ReaderView extends ItemView {
           if (outcome === 'archived-protected' && !this.snapshot && row.isConnected)
             this.reportProtectedArchive();
         } else {
-          const destination = action === 'l' ? 'Later' : 'Archive';
+          const destination = action === 'i' ? 'Inbox' : action === 'l' ? 'Later' : 'Archive';
           const moved = await this.host.store.move(snapshot, destination, guard);
-          if (action === 'l') {
-            new Notice('Saved to Later');
+          if (action === 'l') new Notice('Saved to Later');
+          if (destination === 'Inbox' || destination === 'Later') {
             void this.host.ingestion.acquire(moved.path).catch((error) => this.error(error));
           }
         }
