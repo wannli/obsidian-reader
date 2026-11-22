@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.33.1](https://github.com/wannli/obsidian-reader/compare/0.33.0...0.33.1) (2026-11-22)
+
+
+### Fixed
+
+* sync diagnostic Markdown in device-specific files ([02cafcf](https://github.com/wannli/obsidian-reader/commit/02cafcf373bc9f55fe360cd465aff8e78de4ca46))
+
 ## [0.33.0](https://github.com/wannli/obsidian-reader/compare/0.32.0...0.33.0) (2026-11-22)
 
 
