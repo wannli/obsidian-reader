@@ -231,6 +231,21 @@ async function fixture() {
       hooks.processors.forEach((processor) => processor(root, { sourcePath: context }));
     return link;
   };
+  const propertyLink = (href: string, entry = origin) => {
+    const row = document.createElement('div');
+    row.className = 'metadata-property';
+    row.dataset.propertyKey = 'origin';
+    const value = document.createElement('div');
+    value.className = 'metadata-property-value';
+    const link = document.createElement('div');
+    link.className = 'metadata-link-inner internal-link';
+    link.dataset.href = href;
+    link.textContent = 'Article title';
+    value.append(link);
+    row.append(value);
+    entry.native.containerEl.append(row);
+    return link;
+  };
   const click = (link: HTMLElement, options: MouseEventInit = {}, open = true, entry = origin) => {
     if (open)
       link.addEventListener(
@@ -259,6 +274,7 @@ async function fixture() {
     activate,
     addPane,
     anchor,
+    propertyLink,
     click,
     writes,
   };
@@ -292,6 +308,35 @@ describe('public native paragraph intent in actual plugin routing', () => {
     );
     expect(f.writes).not.toHaveBeenCalled();
   });
+
+  it.each(['same-pane', 'new-pane', 'nested-target'] as const)(
+    'forwards the paragraph from a native Properties div link (%s)',
+    async (mode) => {
+      const f = await fixture();
+      const link = f.propertyLink('Reading/Later/Decision rules#^paragraph');
+      const destination = mode === 'new-pane' ? f.addPane() : f.origin;
+      let target: HTMLElement = link;
+      if (mode === 'nested-target') {
+        target = document.createElement('span');
+        target.textContent = 'Article title';
+        link.replaceChildren(target);
+      }
+      const event = f.click(
+        target,
+        mode === 'new-pane' ? { metaKey: true } : {},
+        true,
+        destination,
+      );
+      await settle();
+      expect(event.defaultPrevented).toBe(false);
+      expect(f.resolve).toHaveBeenCalledWith('Reading/Later/Decision rules', f.source.path);
+      expect(destination.leaf.setViewState).toHaveBeenCalledExactlyOnceWith(
+        readerState(f.article, '#^paragraph'),
+      );
+      if (mode === 'new-pane') expect(f.origin.leaf.setViewState).not.toHaveBeenCalled();
+      expect(f.writes).not.toHaveBeenCalled();
+    },
+  );
 
   it('resolves an origin Properties anchor against its containing native pane, not the active pane', async () => {
     const f = await fixture();
@@ -519,17 +564,22 @@ describe('public native paragraph intent in actual plugin routing', () => {
     );
   });
 
-  it('never uses a known fragment to bypass dirty native editor bytes', async () => {
-    const f = await fixture();
-    f.origin.editor.getValue.mockReturnValue('Unsaved editor text');
-    f.click(f.anchor('Reading/Later/Decision rules#^paragraph'));
-    await settle();
-    expect(f.origin.leaf.setViewState).not.toHaveBeenCalled();
-    f.origin.editor.getValue.mockReturnValue(f.memory.bytes.get(f.article)!);
-    f.metadata('changed', f.article);
-    await settle();
-    expect(f.origin.leaf.setViewState).toHaveBeenCalledWith(readerState(f.article, '#^paragraph'));
-  });
+  it.each(['anchor', 'propertyLink'] as const)(
+    'never uses a known %s fragment to bypass dirty native editor bytes',
+    async (kind) => {
+      const f = await fixture();
+      f.origin.editor.getValue.mockReturnValue('Unsaved editor text');
+      f.click(f[kind]('Reading/Later/Decision rules#^paragraph'));
+      await settle();
+      expect(f.origin.leaf.setViewState).not.toHaveBeenCalled();
+      f.origin.editor.getValue.mockReturnValue(f.memory.bytes.get(f.article)!);
+      f.metadata('changed', f.article);
+      await settle();
+      expect(f.origin.leaf.setViewState).toHaveBeenCalledWith(
+        readerState(f.article, '#^paragraph'),
+      );
+    },
+  );
 
   it.each(['native-selection', 'ephemeral-jump'])(
     'leaves unobservable Ctrl/programmatic paragraph navigation native after %s during a read',
@@ -561,29 +611,35 @@ describe('public native paragraph intent in actual plugin routing', () => {
     },
   );
 
-  it('respects an already-active public native selection even when the DOM selection is collapsed', async () => {
-    const f = await fixture();
-    expect(document.getSelection()?.isCollapsed).not.toBe(false);
-    f.origin.editor.getSelection.mockReturnValue('Native block');
-    f.click(f.anchor('Reading/Later/Decision rules#^paragraph'));
-    await settle();
-    expect(f.origin.leaf.setViewState).not.toHaveBeenCalled();
-  });
+  it.each(['anchor', 'propertyLink'] as const)(
+    'respects an already-active native selection after a %s click even when the DOM selection is collapsed',
+    async (kind) => {
+      const f = await fixture();
+      expect(document.getSelection()?.isCollapsed).not.toBe(false);
+      f.origin.editor.getSelection.mockReturnValue('Native block');
+      f.click(f[kind]('Reading/Later/Decision rules#^paragraph'));
+      await settle();
+      expect(f.origin.leaf.setViewState).not.toHaveBeenCalled();
+    },
+  );
 
-  it('preserves the explicit Open Markdown exemption even after a paragraph-link click', async () => {
-    const f = await fixture();
-    const reader = new ReaderView(f.origin.leaf as never, {} as never);
-    Object.assign(reader, { file: f.article });
-    f.origin.native.file = f.article;
-    f.origin.leaf.view = reader;
-    await f.plugin.edit(reader, f.article);
-    f.click(f.anchor('Reading/Later/Decision rules#^paragraph'));
-    f.metadata('changed', f.article);
-    await settle();
-    expect(f.origin.leaf.setViewState).toHaveBeenCalledExactlyOnceWith({
-      type: 'markdown',
-      state: { file: f.article.path, mode: 'source' },
-      active: true,
-    });
-  });
+  it.each(['anchor', 'propertyLink'] as const)(
+    'preserves the explicit Open Markdown exemption even after a %s click',
+    async (kind) => {
+      const f = await fixture();
+      const reader = new ReaderView(f.origin.leaf as never, {} as never);
+      Object.assign(reader, { file: f.article });
+      f.origin.native.file = f.article;
+      f.origin.leaf.view = reader;
+      await f.plugin.edit(reader, f.article);
+      f.click(f[kind]('Reading/Later/Decision rules#^paragraph'));
+      f.metadata('changed', f.article);
+      await settle();
+      expect(f.origin.leaf.setViewState).toHaveBeenCalledExactlyOnceWith({
+        type: 'markdown',
+        state: { file: f.article.path, mode: 'source' },
+        active: true,
+      });
+    },
+  );
 });

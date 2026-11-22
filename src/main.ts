@@ -585,7 +585,10 @@ export default class ReaderPlugin extends Plugin {
     if (this.signal.aborted || event.defaultPrevented || (event.button !== 0 && event.button !== 1))
       return;
     const target = event.target instanceof Element ? event.target : null;
-    const anchor = target?.closest<HTMLAnchorElement>('a.internal-link');
+    // Native Properties links are divs, unlike rendered Markdown anchors.
+    const anchor = target?.closest<HTMLElement>(
+      'a.internal-link, .metadata-property-value .internal-link[data-href]',
+    );
     if (!anchor) return;
     let sourcePath: string | undefined;
     for (let element: Element | null = anchor; element; element = element.parentElement) {
