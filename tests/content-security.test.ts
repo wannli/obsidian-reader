@@ -108,12 +108,22 @@ describe('publisher content is passive in persisted Markdown', () => {
       '$value',
     ]);
     expect(markdown).toContain('\treturn value;  \n    \n    ```'); // Literal tabs/trailing blank line survive in source.
-    // Marked's list renderer expands tabs and trims one trailing blank line; the stored code does not.
-    expect(doc.querySelector('pre code')?.textContent).toBe(
-      literal.replace(/\t/g, '    ').replace(/\n$/, ''),
-    );
+    // The list renderer expands tabs but preserves trailing blank lines.
+    expect(doc.querySelector('pre code')?.textContent).toBe(literal.replace(/\t/g, '    '));
     expect(doc.querySelector('pre code')?.className).toBe('');
   });
+  it.each(['', '\n', '\n\n', 'one', 'one\n', 'one\n\n', 'one\n\n\n'])(
+    'preserves literal trailing blank lines in standalone and nested code: %j',
+    async (literal) => {
+      const pre = `<pre><code>${literal}</code></pre>`;
+      for (const html of [pre, `<blockquote>${pre}</blockquote>`, `<ul><li>${pre}</li></ul>`]) {
+        const markdown = await toMarkdown(html, base);
+        const code = render(markdown).querySelector('pre code');
+        expect(code?.textContent).toBe(literal.endsWith('\n') ? literal : literal + '\n');
+        expect(code?.className).toBe('');
+      }
+    },
+  );
   it('fails closed when a converter layout cannot preserve a literal code block', async () => {
     await expect(
       toMarkdown('<ol start="123"><li><p>Intro</p><pre>literal</pre></li></ol>', base),

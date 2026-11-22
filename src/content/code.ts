@@ -59,11 +59,16 @@ export function preserveCode(root: DocumentFragment): (markdown: string) => stri
     walkTokens(Lexer.lex(markdown), (token) => {
       if (token.type === 'code') emitted.push(token.text);
     });
-    // Markdown list lexers expand tabs; source tabs above remain literal, never rewritten.
-    const comparable = (value: string): string => value.replace(/\t/g, '    ');
+    // Compare rendered code semantics: list lexers expand tabs and fenced code
+    // renders with a terminal newline. Do not trim additional trailing blank lines;
+    // the stored source above retains literal tabs and whitespace unchanged.
+    const comparable = (value: string): string => {
+      const text = value.replace(/\t/g, '    ');
+      return text.endsWith('\n') ? text : text + '\n';
+    };
     if (
       emitted.length !== blocks.length ||
-      blocks.some((code, i) => comparable(code.replace(/\n$/, '')) !== comparable(emitted[i]))
+      blocks.some((code, i) => comparable(code) !== comparable(emitted[i]))
     )
       return cannotPreserve();
     return markdown;
