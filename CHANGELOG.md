@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.34.0](https://github.com/wannli/obsidian-reader/compare/0.33.1...0.34.0) (2026-11-23)
+
+
+### Added
+
+* **diagnostics:** trace acquisition and protected archive decisions ([9f4cf91](https://github.com/wannli/obsidian-reader/commit/9f4cf910d9812d8945d9051f1c2513cadc079c80))
+
+
+### Fixed
+
+* **reader:** refuse uncertain clipping deletion without archiving ([2300b26](https://github.com/wannli/obsidian-reader/commit/2300b26bfcf890537c4c372da3e6ed82036a6f8b))
+* **tooling:** recognize aliased script paths on macos ([696d5c3](https://github.com/wannli/obsidian-reader/commit/696d5c34041918b632471da633ad79f58fbb7f79))
+
 ## [0.33.1](https://github.com/wannli/obsidian-reader/compare/0.33.0...0.33.1) (2026-11-22)
 
 
