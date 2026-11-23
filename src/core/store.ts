@@ -56,8 +56,12 @@ export function protectedArticle(body: string, properties: Properties): boolean 
   );
 }
 
-function protectionReason(snapshot: Snapshot<NoteFile>, annotated: boolean): string {
-  if (!annotated) return 'clipping-reference-or-uncertain';
+function protectionReason(
+  snapshot: Snapshot<NoteFile>,
+  annotated: boolean,
+  clippingReason: 'clipping-reference' | 'clipping-uncertain',
+): string {
+  if (!annotated) return clippingReason;
   const topics = snapshot.properties.topics;
   if (
     topics !== undefined &&
@@ -167,7 +171,7 @@ export class ArticleStore<File extends NoteFile> {
   private active = true;
   private clippingProtection?: (
     snapshot: Snapshot<File>,
-  ) => Promise<{ protected: boolean; guard(): void }>;
+  ) => Promise<{ referenced: boolean; complete: boolean; guard(): void }>;
   /** Generation-local, read-only incoming-reference authority; never persisted. */
   protectClippings(authority: NonNullable<ArticleStore<File>['clippingProtection']>): void {
     this.clippingProtection = authority;
@@ -1089,11 +1093,17 @@ export class ArticleStore<File extends NoteFile> {
     const annotated = protectedArticle(snapshot.body, snapshot.properties);
     const protection =
       !annotated && this.clippingProtection ? await this.clippingProtection(snapshot) : undefined;
-    if (annotated || protection?.protected) {
-      const reason = protectionReason(snapshot, annotated);
+    if (annotated || protection?.referenced) {
+      const reason = protectionReason(snapshot, annotated, 'clipping-reference');
       await this.move(snapshot, 'Archive', guard);
       this.diagnose(`article.trash.archived.${reason}`, snapshot.path);
       return 'archived-protected';
+    }
+    if (protection && !protection.complete) {
+      this.diagnose('article.trash.blocked.clipping-uncertain', snapshot.path);
+      throw new Error(
+        'Could not verify related clipping references. The article was not deleted or archived. Check unresolved origin links, unreadable or oversized notes, and retry when the vault settles.',
+      );
     }
     const current = () => {
       guard();
@@ -1174,8 +1184,14 @@ export class ArticleStore<File extends NoteFile> {
           !annotated && this.clippingProtection
             ? await this.clippingProtection(snapshot)
             : undefined;
-        if (annotated || protection?.protected) {
-          const reason = protectionReason(snapshot, annotated);
+        // Automatic expiry remains fail-closed: uncertain clipping coverage archives
+        // expired Feed articles rather than risking the loss of related notes.
+        if (annotated || protection?.referenced || (protection && !protection.complete)) {
+          const reason = protectionReason(
+            snapshot,
+            annotated,
+            protection?.referenced ? 'clipping-reference' : 'clipping-uncertain',
+          );
           await this.move(snapshot, 'Archive', guard);
           this.diagnose(`article.expire.archived.${reason}`, snapshot.path);
           result.promoted++;

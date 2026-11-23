@@ -445,7 +445,7 @@ describe('guarded clipping capture', () => {
     expect(await f.articles.trash(f.snapshot)).toBe('archived-protected');
     expect(f.vault.trashed).toEqual([]);
   });
-  it('retains uncertain origin resolution independently of schema membership or setup', async () => {
+  it('refuses deletion on uncertain origin resolution independently of schema membership or setup', async () => {
     const f = await fixture();
     const kept = await f.keep();
     await f.vault.process(f.vault.file(kept.path)!, (raw) =>
@@ -454,7 +454,60 @@ describe('guarded clipping capture', () => {
     vi.spyOn(f.port, 'bindings').mockReturnValue([]);
     vi.spyOn(f.vault, 'resolveLink').mockReturnValue(undefined);
     expect((await f.clippings.scan(f.snapshot, f.controller.signal)).complete).toBe(false);
+    await expect(f.articles.trash(f.snapshot)).rejects.toThrow(
+      /Could not verify related clipping references/,
+    );
+    expect((await f.articles.read(f.file.path)).properties.status).toBe('inbox');
+    expect(f.vault.trashed).toEqual([]);
+  });
+  it.each(['inbox', 'feed', 'later', 'archive'])(
+    'leaves %s untouched when an unrelated orphan makes clipping coverage incomplete',
+    async (status) => {
+      const f = await fixture('Plain publisher text.', status);
+      await f.vault.create(
+        'Other/Orphan.md',
+        '---\nfileClass: Other\norigin: "[[Missing]]"\n---\nPrivate authored text',
+      );
+      const before = f.snapshot.raw;
+      const scan = await f.clippings.scan(f.snapshot, f.controller.signal);
+      expect(scan).toMatchObject({ referenced: false, complete: false });
+      await expect(f.articles.trash(f.snapshot)).rejects.toThrow(
+        /Could not verify related clipping references.*not deleted or archived/u,
+      );
+      expect(await f.vault.read(f.file)).toBe(before);
+      expect(f.articles.catalog.article(f.file.path)?.queue).toBe(
+        status === 'inbox'
+          ? 'Inbox'
+          : status === 'feed'
+            ? 'Feed'
+            : status === 'later'
+              ? 'Later'
+              : 'Archive',
+      );
+      expect(f.vault.trashed).toEqual([]);
+    },
+  );
+  it('archives a confirmed reference even when an unrelated origin prevents complete coverage', async () => {
+    const f = await fixture('Plain publisher text.', 'feed');
+    await f.vault.create('Other/Linked.md', '---\norigin: "[[Articles/City]]"\n---\n');
+    await f.vault.create('Other/Orphan.md', '---\norigin: "[[Missing]]"\n---\n');
+    expect(await f.clippings.scan(f.snapshot, f.controller.signal)).toMatchObject({
+      referenced: true,
+      complete: false,
+    });
     expect(await f.articles.trash(f.snapshot)).toBe('archived-protected');
+    expect((await f.articles.read(f.file.path)).properties.status).toBe('archive');
+    expect(f.vault.trashed).toEqual([]);
+  });
+  it('still archives an expired Feed article when unrelated clipping coverage is incomplete', async () => {
+    const f = await fixture('Plain publisher text.', 'feed');
+    await f.vault.create('Other/Orphan.md', '---\norigin: "[[Missing]]"\n---\n');
+    expect(await f.articles.expire(new Date('2026-11-20'))).toEqual({
+      deleted: 0,
+      retained: 0,
+      promoted: 1,
+    });
+    expect((await f.articles.read(f.file.path)).properties.status).toBe('archive');
     expect(f.vault.trashed).toEqual([]);
   });
   it('archives an expired Feed source with a clipping origin rather than trashing it', async () => {

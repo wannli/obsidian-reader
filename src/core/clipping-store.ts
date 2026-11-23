@@ -71,7 +71,8 @@ export class ClippingStore<File extends NoteFile> {
     articles.protectClippings(async (snapshot) => {
       const scan = await this.scan(snapshot, new AbortController().signal);
       return {
-        protected: scan.referenced || !scan.complete,
+        referenced: scan.referenced,
+        complete: scan.complete,
         guard: () => {
           if (scan.revision !== port.revision())
             throw new Error('Clipping references changed before deletion. The source was kept.');
