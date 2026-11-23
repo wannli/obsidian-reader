@@ -1,4 +1,4 @@
-import { constants } from 'node:fs';
+import { constants, realpathSync } from 'node:fs';
 import { lstat, mkdir, open, readdir, realpath } from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -185,5 +185,9 @@ export function localDay(date = new Date()) {
 }
 
 export function isMain(url) {
-  return Boolean(process.argv[1]) && resolve(process.argv[1]) === fileURLToPath(url);
+  // macOS exposes temp paths as both /var and /private/var; Node may canonicalize
+  // import.meta.url while argv retains the alias. Compare the same file identity.
+  return (
+    Boolean(process.argv[1]) && realpathSync(process.argv[1]) === realpathSync(fileURLToPath(url))
+  );
 }
