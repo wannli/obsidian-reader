@@ -31,6 +31,7 @@ import {
   isReaderError,
   logReaderError,
   readerBreadcrumb,
+  readerTrace,
   ReaderDiagnostics,
 } from './host/diagnostics';
 import { diagnosticStorage } from './host/diagnostic-storage';
@@ -519,6 +520,10 @@ export default class ReaderPlugin extends Plugin {
       this.network,
       (change) => this.changed(change),
       (message) => this.notice(message),
+      (operation, path, error) => {
+        readerTrace(operation, path);
+        if (error) logReaderError(error, operation, path);
+      },
     );
     if (this.typedNotes)
       this.clippingService = new ReaderClippings(
@@ -960,6 +965,7 @@ export default class ReaderPlugin extends Plugin {
         return;
     }
     this.attempted.add(file.path);
+    readerTrace('article.acquire.recovery', file.path);
     const signal = this.signal;
     void this.ingestion.acquire(file.path).catch((error) => {
       if (!signal.aborted) this.notice(error);

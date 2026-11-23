@@ -18,7 +18,7 @@ import { isSourceLinkPlaceholder } from '../core/capture-placeholder';
 import { SerialWrites, WorkQueue } from '../core/work';
 import { assertSafeExternalText } from '../content/security';
 import { Network } from './network';
-import { logReaderError, readerBreadcrumb } from './diagnostics';
+import { logReaderError, readerBreadcrumb, readerTrace } from './diagnostics';
 
 class CancelledFeed extends Error {
   constructor() {
@@ -240,6 +240,7 @@ export class Ingestion {
   }
   private async refresh(feed: Subscription, guard = this.feedGuard(feed)): Promise<void> {
     readerBreadcrumb('feed.refresh');
+    readerTrace('feed.refresh.start', feed.path);
     try {
       await guard.validate();
       const data = await this.loadFeed(feed.url, true, guard.check);
@@ -271,10 +272,12 @@ export class Ingestion {
         );
       }
       await this.feedError(feed, undefined, guard.check);
+      readerTrace('feed.refresh.saved', feed.path);
     } catch (error) {
       if (!this.active || error instanceof CancelledFeed) return;
       guard.check();
-      logReaderError(error, 'feed.refresh');
+      readerTrace('feed.refresh.failed', feed.path);
+      logReaderError(error, 'feed.refresh', feed.path);
       try {
         await this.feedError(
           feed,
@@ -283,7 +286,7 @@ export class Ingestion {
         );
       } catch (saveError) {
         if (!this.active || saveError instanceof CancelledFeed) return;
-        logReaderError(saveError, 'feed.save-error');
+        logReaderError(saveError, 'feed.save-error', feed.path);
         throw new Error(
           `${String(error)}; could not save the subscription error: ${String(saveError)}`,
         );
@@ -341,13 +344,17 @@ export class Ingestion {
   }
   acquire(path: string, foreground = false): Promise<void> {
     readerBreadcrumb('article.acquire');
+    readerTrace(foreground ? 'article.acquire.foreground' : 'article.acquire.background', path);
     return this.work.enqueue(
       `article:${path}`,
       async () => {
         this.assert();
         if (typeof navigator !== 'undefined' && !navigator.onLine) return;
         const snapshot = await this.store.read(path);
-        if (hasAnnotations(snapshot.body, snapshot.properties)) return;
+        if (hasAnnotations(snapshot.body, snapshot.properties)) {
+          readerTrace('article.acquire.skipped-annotated', path);
+          return;
+        }
         try {
           const url = webUrl(text(snapshot.properties.url));
           let proof: string | undefined;
@@ -359,15 +366,25 @@ export class Ingestion {
             const feed = feedPath
               ? (this.store.catalog.feed(feedPath) ?? this.store.catalog.feed(`${feedPath}.md`))
               : undefined;
-            if (!feed) return;
+            if (!feed) {
+              readerTrace('article.acquire.skipped-no-feed-proof', path);
+              return;
+            }
             const source = (await this.loadFeed(feed.url)).items.find(
               (item) => item.url === url && item.excerpt,
             );
-            if (!source) return;
+            if (!source) {
+              readerTrace('article.acquire.skipped-no-excerpt', path);
+              return;
+            }
             proof = await feedMarkdown(source);
-            if (proof !== snapshot.body) return; // No ownership guess, even after restart.
+            if (proof !== snapshot.body) {
+              readerTrace('article.acquire.skipped-excerpt-changed', path);
+              return; // No ownership guess, even after restart.
+            }
           }
           this.assert();
+          readerTrace('article.acquire.extract', path);
           const result = await extract(url, async (source, accept) => {
             this.assert();
             // Shared native slots can outlive this generation. Guard both queued
@@ -379,17 +396,20 @@ export class Ingestion {
           this.assert();
           assertSafeExternalText(result.title);
           assertSafeExternalText(result.markdown);
+          readerTrace('article.acquire.commit', path);
           await this.store.acquire(snapshot, result.markdown, result.title, proof);
+          readerTrace('article.acquire.saved', path);
         } catch (error) {
           if (this.active) {
-            logReaderError(error, 'article.acquire');
+            readerTrace('article.acquire.failed', path);
+            logReaderError(error, 'article.acquire', path);
             try {
               await this.store.error(
                 snapshot,
                 error instanceof Error ? error.message : String(error),
               );
             } catch (saveError) {
-              if (this.active) logReaderError(saveError, 'article.save-error');
+              if (this.active) logReaderError(saveError, 'article.save-error', path);
               /* A newer note wins. */
             }
           }

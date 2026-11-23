@@ -6,6 +6,7 @@ import {
   logReaderError,
   ReaderDiagnostics,
   readerBreadcrumb,
+  readerTrace,
   redactDiagnostic,
   type DiagnosticStorage,
 } from '../src/host/diagnostics';
@@ -73,6 +74,53 @@ describe('persistent Reader diagnostics', () => {
     expect(entries()[0].stack).not.toContain('source text');
     expect(entries()[0].trail).toHaveLength(12);
     expect(entries()[0].trail[0].operation).toBe('action.8');
+  });
+  it('persists correlated, bounded stage and outcome traces without exposing note paths', async () => {
+    const { logger, entries } = fixture();
+    const stop = installReaderDiagnostics(logger);
+    try {
+      readerTrace('article.acquire.start', 'Reading/Private.md');
+      readerTrace('article.acquire.extract', 'Reading/Private.md');
+      readerTrace('article.acquire.failed', 'Reading/Private.md');
+      readerTrace('article.expire.archived.body-annotation', 'Reading/Another.md');
+      await logger.flush();
+      expect(entries().map((entry) => entry.operation)).toEqual([
+        'article.acquire.start',
+        'article.acquire.extract',
+        'article.acquire.failed',
+        'article.expire.archived.body-annotation',
+      ]);
+      expect(entries()[0].note).toBe(entries()[1].note);
+      expect(entries()[0].note).not.toBe(entries()[3].note);
+      expect(JSON.stringify(entries())).not.toContain('Private.md');
+      expect(JSON.stringify(entries())).not.toContain('Another.md');
+    } finally {
+      stop();
+    }
+  });
+  it('bounds persistent tracing during large recovery bursts', async () => {
+    const { logger, entries } = fixture();
+    for (let i = 0; i < 400; i++) logger.trace('article.acquire.recovery', `Reading/${i}.md`);
+    await logger.flush();
+    expect(entries()).toHaveLength(64);
+    expect(new Set(entries().map((entry) => entry.note)).size).toBe(64);
+  });
+  it('reserves room for a later protected-trash decision after startup tracing is exhausted', async () => {
+    const { logger, entries } = fixture();
+    for (let i = 0; i < 400; i++) logger.trace('article.acquire.start', `Reading/${i}.md`);
+    logger.trace('article.trash.archived.topics', 'Reading/surprise.md');
+    await logger.flush();
+    expect(entries().at(-1)?.operation).toBe('article.trash.archived.topics');
+    expect(JSON.stringify(entries())).not.toContain('surprise.md');
+  });
+  it('keeps a note-correlated error when a burst of traces fills the queue', async () => {
+    const { logger, entries } = fixture();
+    for (let i = 0; i < 64; i++) logger.trace('article.acquire.start', `Reading/${i}.md`);
+    logger.error(new Error('Extraction failed'), 'article.acquire', 'Reading/63.md');
+    await logger.flush();
+    const error = entries().find((entry) => entry.message === 'Extraction failed');
+    expect(error?.note).toBe(entries().at(-2)?.note);
+    expect(entries()).toHaveLength(64);
   });
   it('redacts URLs, credentials, note paths, quoted values and multiline parser excerpts', async () => {
     const { logger, entries } = fixture();

@@ -59,7 +59,7 @@ import {
   type HostedHighlight,
 } from '../core/hosted-highlights';
 import { choose, confirmWebLink } from '../host/dialogs';
-import { logReaderError, readerBreadcrumb } from '../host/diagnostics';
+import { logReaderError, readerBreadcrumb, readerTrace } from '../host/diagnostics';
 import { actionFailure, inlineFailure, inlineOutcome } from '../host/action-feedback';
 import { connectNodes, type RelationField } from '../host/node-relations';
 import type { Ingestion } from '../host/ingestion';
@@ -920,7 +920,11 @@ export class ReaderView extends ItemView {
       };
       try {
         if (action === 't') {
-          const outcome = await this.host.store.trash(snapshot, guard);
+          readerTrace('article.trash.list-action', snapshot.path);
+          const outcome = await this.host.store.trash(snapshot, guard).catch((error: unknown) => {
+            logReaderError(error, 'article.trash.failed', snapshot.path);
+            throw error;
+          });
           if (outcome === 'archived-protected' && !this.snapshot && row.isConnected)
             this.reportProtectedArchive();
         } else {
@@ -2555,7 +2559,14 @@ export class ReaderView extends ItemView {
       const next = await this.readableNeighbour(1);
       if (!this.current(snapshot, generation) || this.stopping || this.host.signal.aborted) return;
       const moved = destination ? await this.host.store.move(snapshot, destination) : undefined;
-      const outcome = action === 'delete' ? await this.host.store.trash(snapshot) : undefined;
+      if (action === 'delete') readerTrace('article.trash.article-action', snapshot.path);
+      const outcome =
+        action === 'delete'
+          ? await this.host.store.trash(snapshot).catch((error: unknown) => {
+              logReaderError(error, 'article.trash.failed', snapshot.path);
+              throw error;
+            })
+          : undefined;
       if (!this.current(snapshot, generation) || this.stopping) return;
       if (destination === 'Later') new Notice('Saved to Later');
       if (moved && (destination === 'Inbox' || destination === 'Later'))

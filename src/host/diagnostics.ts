@@ -80,6 +80,9 @@ export class ReaderDiagnostics {
   private running?: Promise<void>;
   private stopped = false;
   private dropped = 0;
+  private traces = 0;
+  private decisions = 0;
+  private noteIds = new Map<string, string>();
   private session = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
   constructor(
     private storage: DiagnosticStorage,
@@ -123,27 +126,80 @@ export class ReaderDiagnostics {
     });
     if (this.trail.length > 12) this.trail.shift();
   }
-  error(error: unknown, operation = 'reader'): void {
+  /** Session-scoped random IDs correlate stages without persisting vault paths or URLs. */
+  private noteId(path: string): string {
+    let id = this.noteIds.get(path);
+    if (!id) {
+      if (this.noteIds.size >= 512) return 'untracked';
+      const bytes = new Uint8Array(8);
+      crypto.getRandomValues(bytes);
+      id = [...bytes].map((byte) => byte.toString(16).padStart(2, '0')).join('');
+      this.noteIds.set(path, id);
+    }
+    return id;
+  }
+  trace(operation: string, path: string): void {
+    const decision =
+      operation.startsWith('article.trash.') || operation.startsWith('article.expire.');
+    if (this.stopped || (decision ? this.decisions : this.traces) >= 256) return;
+    if (this.pending.size >= 64 && decision) {
+      const routine = [...this.pending.entries()].find(
+        ([, record]) =>
+          record.kind === 'trace' &&
+          !String(record.operation).startsWith('article.trash.') &&
+          !String(record.operation).startsWith('article.expire.'),
+      );
+      if (routine) this.pending.delete(routine[0]);
+    }
+    if (this.pending.size >= 64) return;
+    if (decision) this.decisions++;
+    else this.traces++;
+    this.pending.set(
+      `trace:${decision ? 'decision' : 'routine'}:${decision ? this.decisions : this.traces}`,
+      {
+        at: new Date().toISOString(),
+        session: this.session,
+        device: this.device,
+        ...this.environment,
+        operation: redactDiagnostic(operation).slice(0, 100),
+        note: this.noteId(path),
+        kind: 'trace',
+      },
+    );
+    this.schedule();
+  }
+  error(error: unknown, operation = 'reader', path?: string): void {
     if (this.stopped) return;
     const details = errorDetails(error),
       context = redactDiagnostic(operation).slice(0, 100);
-    const key = JSON.stringify([context, details]);
+    const note = path ? this.noteId(path) : undefined;
+    const key = JSON.stringify([context, details, note]);
     const previous = this.pending.get(key);
     if (previous) {
       previous.count = Number(previous.count) + 1;
       previous.lastAt = new Date().toISOString();
-    } else if (this.pending.size < 64) {
+    } else {
+      if (this.pending.size >= 64) {
+        const trace = [...this.pending.keys()].find((candidate) => candidate.startsWith('trace:'));
+        if (trace) this.pending.delete(trace);
+      }
+      if (this.pending.size >= 64) {
+        this.dropped++;
+        this.schedule();
+        return;
+      }
       this.pending.set(key, {
         at: new Date().toISOString(),
         session: this.session,
         device: this.device,
         ...this.environment,
         operation: context,
+        ...(note ? { note } : {}),
         ...details,
         count: 1,
         trail: [...this.trail],
       });
-    } else this.dropped++;
+    }
     this.schedule();
   }
   private schedule(): void {
@@ -207,9 +263,20 @@ export function installReaderDiagnostics(logger: ReaderDiagnostics): () => void 
 export function readerBreadcrumb(operation: string): void {
   active?.breadcrumb(operation);
 }
-export function logReaderError(error: unknown, operation = 'reader'): void {
+export function readerTrace(operation: string, path: string): void {
+  try {
+    active?.trace(operation, path);
+  } catch {
+    // Diagnostics must never interrupt a guarded article mutation.
+  }
+}
+export function logReaderError(error: unknown, operation = 'reader', path?: string): void {
   console.error('[Reader]', error);
-  active?.error(error, operation);
+  try {
+    active?.error(error, operation, path);
+  } catch {
+    // Console reporting remains available even if persistent diagnostics fail.
+  }
 }
 /** Attribution is deliberately narrow: unrelated plugin errors are not collected. */
 export function isReaderError(error: unknown): boolean {

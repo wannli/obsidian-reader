@@ -11,7 +11,7 @@ import {
   replaceBody,
   savePosition,
 } from './document';
-import { hasAnnotations } from './annotations';
+import { hasAnnotations, hasPropertyAnnotations } from './annotations';
 import {
   deletedUrls,
   linkPath,
@@ -54,6 +54,24 @@ export function protectedArticle(body: string, properties: Properties): boolean 
       topics !== '' &&
       (!Array.isArray(topics) || topics.length > 0))
   );
+}
+
+function protectionReason(snapshot: Snapshot<NoteFile>, annotated: boolean): string {
+  if (!annotated) return 'clipping-reference-or-uncertain';
+  const topics = snapshot.properties.topics;
+  if (
+    topics !== undefined &&
+    topics !== null &&
+    topics !== '' &&
+    (!Array.isArray(topics) || topics.length > 0)
+  )
+    return 'topics';
+  try {
+    if (hasPropertyAnnotations(snapshot.properties)) return 'property-annotation';
+  } catch {
+    return 'annotation-uncertain';
+  }
+  return 'body-annotation';
 }
 
 export interface NoteFile {
@@ -167,6 +185,11 @@ export class ArticleStore<File extends NoteFile> {
   constructor(
     readonly vault: VaultPort<File>,
     folders: ReaderFolders = defaultFolders,
+    private readonly diagnose: (
+      operation: string,
+      path: string,
+      error?: unknown,
+    ) => void = () => {},
   ) {
     this.catalog = new Catalog(folders);
     this.folders = this.catalog.folders;
@@ -1067,7 +1090,9 @@ export class ArticleStore<File extends NoteFile> {
     const protection =
       !annotated && this.clippingProtection ? await this.clippingProtection(snapshot) : undefined;
     if (annotated || protection?.protected) {
+      const reason = protectionReason(snapshot, annotated);
       await this.move(snapshot, 'Archive', guard);
+      this.diagnose(`article.trash.archived.${reason}`, snapshot.path);
       return 'archived-protected';
     }
     const current = () => {
@@ -1075,6 +1100,7 @@ export class ArticleStore<File extends NoteFile> {
       protection?.guard();
     };
     await this.rss.run('rss', () => this.trashNote(snapshot, current, true));
+    this.diagnose('article.trash.trashed', snapshot.path);
     return 'trashed';
   }
   private trashNote(
@@ -1134,6 +1160,7 @@ export class ArticleStore<File extends NoteFile> {
       if (!publicationBefore(article.published, cutoff, filenameDay(article.path))) continue;
       const file = this.vault.file(article.path);
       if (!file || this.busy(file) || inUse(file)) {
+        this.diagnose('article.expire.retained.unavailable-or-in-use', article.path);
         result.retained++;
         continue;
       }
@@ -1148,7 +1175,9 @@ export class ArticleStore<File extends NoteFile> {
             ? await this.clippingProtection(snapshot)
             : undefined;
         if (annotated || protection?.protected) {
+          const reason = protectionReason(snapshot, annotated);
           await this.move(snapshot, 'Archive', guard);
+          this.diagnose(`article.expire.archived.${reason}`, snapshot.path);
           result.promoted++;
         } else if (
           publicationBefore(snapshot.properties.published, cutoff, filenameDay(snapshot.path))
@@ -1176,9 +1205,11 @@ export class ArticleStore<File extends NoteFile> {
                 throw new ChangedNote('Article is no longer eligible for expiry.');
             },
           );
+          this.diagnose('article.expire.trashed', snapshot.path);
           result.deleted++;
         }
-      } catch {
+      } catch (error) {
+        this.diagnose('article.expire.retained.error', article.path, error);
         result.retained++;
       }
     }

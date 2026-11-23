@@ -37,12 +37,13 @@ export class FolderRuntime {
     network: Network,
     changed: (change: LibraryChange) => void,
     notice: (message: string) => void,
+    diagnose: (operation: string, path: string, error?: unknown) => void = () => {},
   ): void {
     if (this.stopped || this.store) throw new Error('Reader folder runtime cannot restart.');
     const signal = this.signal;
     try {
       this.vault = new ObsidianVault(app, () => !signal.aborted);
-      this.store = new ArticleStore(this.vault, folders);
+      this.store = new ArticleStore(this.vault, folders, diagnose);
       this.store.setStatusFolders(statusFolders);
       this.ingestion = new Ingestion(
         this.store,

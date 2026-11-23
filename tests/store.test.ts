@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { Lexer } from 'marked';
 import { Catalog, ReadingQueue } from '../src/core/catalog';
 import { addHighlight, locateSelection } from '../src/core/annotations';
-import { ChangedNote, readDocument, replaceBody } from '../src/core/document';
+import { ChangedNote, patchProperties, readDocument, replaceBody } from '../src/core/document';
 import { ArticleStore } from '../src/core/store';
 import { SerialWrites, WorkQueue } from '../src/core/work';
 import { gate, MemoryVault } from './helpers/memory-vault';
@@ -216,6 +216,39 @@ describe('guarded article operations', () => {
     const saved = await store.position(file.path, 'A meaningful passage.');
     expect(saved.body).toContain('external edit');
     expect(saved.properties.bookmark).toBe('A meaningful passage.');
+  });
+  it('traces the protected reason for explicit trash and Feed expiry without logging note contents', async () => {
+    const vault = new MemoryVault();
+    const events: { operation: string; path: string }[] = [];
+    const store = new ArticleStore(vault, undefined, (operation, path) =>
+      events.push({ operation, path }),
+    );
+    const topic = await store.capture({
+      url: 'https://example.com/topic',
+      body: 'Publisher prose.',
+      queue: 'Feed',
+      published: '2026-08-01',
+    });
+    await vault.process(topic, (raw) => patchProperties(raw, { topics: ['[[Topics/Test]]'] }));
+    const topicSnapshot = await store.read(topic.path);
+    expect(await store.trash(topicSnapshot)).toBe('archived-protected');
+    expect(events.at(-1)?.operation).toBe('article.trash.archived.topics');
+    const annotated = await store.capture({
+      url: 'https://example.com/highlight',
+      body: 'An ==annotation==.',
+      queue: 'Feed',
+      published: '2026-08-01',
+    });
+    expect(await store.expire(new Date('2026-10-13'))).toEqual({
+      deleted: 0,
+      promoted: 1,
+      retained: 0,
+    });
+    expect(events.at(-1)).toEqual({
+      operation: 'article.expire.archived.body-annotation',
+      path: annotated.path,
+    });
+    expect(JSON.stringify(events)).not.toContain('Publisher prose');
   });
   it('expiry promotes source-authored annotations, ignores publisher links, and uses recoverable trash', async () => {
     const { store, vault } = await setup();
