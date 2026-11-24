@@ -52,9 +52,12 @@ export function clippingMarks(root: HTMLElement, items: readonly ArticleClipping
       selected.splitText(to - from);
       const mark = root.ownerDocument.createElement('mark');
       mark.dataset.readerClipping = item.path;
-      mark.title = 'Open clipping';
+      mark.title = 'Clipping actions';
       mark.tabIndex = 0;
-      mark.setAttribute('role', 'link');
+      mark.setAttribute('role', 'button');
+      mark.setAttribute('aria-label', 'Clipping actions');
+      mark.setAttribute('aria-haspopup', 'menu');
+      mark.setAttribute('aria-expanded', 'false');
       selected.replaceWith(mark);
       mark.append(selected);
     }

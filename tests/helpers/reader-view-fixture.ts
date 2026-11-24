@@ -27,6 +27,7 @@ const mocks = vi.hoisted(() => ({
   notice: vi.fn(),
   input: vi.fn(),
   confirmWebLink: vi.fn(),
+  confirmClippingDeletion: vi.fn(),
   highlightPicker: vi.fn(),
   menus: [] as Map<string, () => void>[],
   menuShown: vi.fn(),
@@ -172,6 +173,7 @@ vi.mock('../../src/host/dialogs', () => ({
   choose: mocks.choose,
   input: mocks.input,
   confirmWebLink: mocks.confirmWebLink,
+  confirmClippingDeletion: mocks.confirmClippingDeletion,
 }));
 
 vi.mock('../../src/host/highlight-picker', () => ({ chooseHighlightHost: mocks.highlightPicker }));

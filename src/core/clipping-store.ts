@@ -80,6 +80,57 @@ export class ClippingStore<File extends NoteFile> {
       };
     });
   }
+  /** Bind explicit deletion to the exact clipping the user is about to confirm. */
+  async prepareDelete(
+    source: Snapshot<File>,
+    path: string,
+    signal: AbortSignal,
+  ): Promise<{
+    path: string;
+    trash(guard: () => void): Promise<void>;
+  }> {
+    const vault = this.articles.vault;
+    const check = () => {
+      if (signal.aborted) throw new Error('Clipping deletion cancelled.');
+      if (this.pending)
+        throw new Error('A clipping capture is still settling. Wait before deleting.');
+      if (source.file.path !== source.path || vault.file(source.path) !== source.file)
+        throw new Error('The source article changed. Reopen it before deleting a clipping.');
+    };
+    check();
+    const candidate = this.port.candidates(source).find((item) => item.path === path);
+    if (!candidate || candidate.file === source.file || candidate.bytes > 200_000)
+      throw new Error('This clipping cannot be safely inspected. Open its Markdown note.');
+    const file = candidate.file;
+    const raw = await vault.read(file);
+    const validate = (current: string) => {
+      check();
+      if (
+        file.path !== path ||
+        vault.file(path) !== file ||
+        current !== raw ||
+        current.length > 200_000
+      )
+        throw new Error('The clipping changed. Nothing was deleted; inspect it and try again.');
+      const clipping = readClipping(current, this.port.bindings());
+      const origin = clipping && clippingOrigin(clipping.origin);
+      if (!origin || vault.resolveLink?.(origin.path, path) !== source.file)
+        throw new Error('This note is no longer a clipping of this article. Nothing was deleted.');
+    };
+    validate(raw);
+    vault.assertWritable(file, raw);
+    return {
+      path,
+      trash: async (guard) => {
+        guard();
+        validate(raw);
+        await vault.trash(file, (current) => {
+          guard();
+          validate(current);
+        });
+      },
+    };
+  }
   private changeDiagnostic(): string {
     const change = this.port.lastChange?.();
     return change

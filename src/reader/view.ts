@@ -58,7 +58,7 @@ import {
   replacePassageHosts,
   type HostedHighlight,
 } from '../core/hosted-highlights';
-import { choose, confirmWebLink } from '../host/dialogs';
+import { choose, confirmClippingDeletion, confirmWebLink } from '../host/dialogs';
 import { logReaderError, readerBreadcrumb, readerTrace } from '../host/diagnostics';
 import { actionFailure, inlineFailure, inlineOutcome } from '../host/action-feedback';
 import { connectNodes, type RelationField } from '../host/node-relations';
@@ -284,7 +284,7 @@ export class ReaderView extends ItemView {
             ? event.target.closest<HTMLElement>('[data-reader-clipping]')
             : undefined;
         if (
-          event.key !== 'Enter' ||
+          (event.key !== 'Enter' && event.key !== ' ') ||
           event.repeat ||
           event.ctrlKey ||
           event.metaKey ||
@@ -300,9 +300,7 @@ export class ReaderView extends ItemView {
         event.preventDefault();
         event.stopPropagation();
         this.cancelNodeCreation();
-        void this.userAction('Open clipping', () =>
-          openExistingNote(this.app, mark.dataset.readerClipping!, this.snapshot!.path),
-        );
+        this.showClippingActions(mark);
       },
       options,
     );
@@ -1955,15 +1953,97 @@ export class ReaderView extends ItemView {
       return false;
     event.preventDefault();
     this.cancelNodeCreation();
-    void this.userAction('Open clipping', () =>
-      openExistingNote(
-        this.app,
-        mark.dataset.readerClipping!,
-        this.snapshot!.path,
-        event.button === 1 || event.ctrlKey || event.metaKey,
-      ),
-    );
+    if (event.button === 1 || event.ctrlKey || event.metaKey) {
+      void this.userAction('Open clipping', () =>
+        openExistingNote(this.app, mark.dataset.readerClipping!, this.snapshot!.path, true),
+      );
+    } else this.showClippingActions(mark, event);
     return true;
+  }
+  private showClippingActions(mark: HTMLElement, event?: MouseEvent): void {
+    const source = this.snapshot,
+      generation = this.generation,
+      path = mark.dataset.readerClipping;
+    if (!source || !path || this.stopping || this.host.signal.aborted) return;
+    this.articleMenu?.hide();
+    const menu = new Menu();
+    this.articleMenu = menu;
+    mark.setAttribute('aria-expanded', 'true');
+    menu.addItem((item) =>
+      item
+        .setTitle('Open clipping')
+        .setIcon('file-text')
+        .onClick(() => {
+          if (this.current(source, generation))
+            void this.userAction('Open clipping', () =>
+              openExistingNote(this.app, path, source.path),
+            );
+        }),
+    );
+    menu.addItem((item) =>
+      item
+        .setTitle('Delete clipping…')
+        .setIcon('trash-2')
+        .onClick(() => {
+          if (this.current(source, generation))
+            void this.userAction('Delete clipping', () => this.deleteClipping(path));
+        }),
+    );
+    menu.onHide(() => {
+      if (this.articleMenu === menu) this.articleMenu = undefined;
+      mark.setAttribute('aria-expanded', 'false');
+      queueMicrotask(() => {
+        const doc = mark.ownerDocument;
+        if (
+          mark.isConnected &&
+          this.current(source, generation) &&
+          !doc.querySelector('.modal-container') &&
+          (doc.activeElement === doc.body || doc.activeElement?.closest('.menu'))
+        )
+          mark.focus();
+      });
+    });
+    if (event) menu.showAtMouseEvent(event);
+    else {
+      const rect = mark.getBoundingClientRect();
+      menu.showAtPosition({ x: rect.left, y: rect.bottom }, mark.ownerDocument);
+    }
+  }
+  private async deleteClipping(path: string): Promise<void> {
+    const source = this.snapshot,
+      service = this.host.clippings,
+      generation = this.generation;
+    if (!source || !service) throw new Error('This clipping is unavailable. Reopen the article.');
+    const lifetime = this.articleLifetime.signal;
+    const deletion = await service.prepareDelete(source, path, lifetime);
+    if (lifetime.aborted || !this.current(source, generation)) return;
+    confirmClippingDeletion(
+      this.app,
+      deletion.path,
+      async (signal) => {
+        try {
+          await this.operation(async () => {
+            const guard = () => {
+              if (signal.aborted || lifetime.aborted || !this.current(source, generation))
+                throw new Error('Clipping deletion cancelled or the article changed.');
+            };
+            guard();
+            await deletion.trash(guard);
+            if (!this.current(source, generation)) return;
+            this.refreshClippings();
+            this.actionOutcome?.remove();
+            this.actionOutcome = inlineOutcome(this.contentEl, 'Clipping moved to vault trash.');
+            this.contentEl.prepend(this.actionOutcome);
+          });
+        } catch (error) {
+          if (!this.host.signal.aborted) logReaderError(error, 'clipping.delete');
+          // A native trash operation can commit before rejecting. Reconcile decoration, never retry blindly.
+          if (this.current(source, generation)) this.refreshClippings();
+          throw error;
+        }
+      },
+      lifetime,
+    );
   }
   private selectionChanged(): void {
     if (this.stopping || this.host.signal.aborted || this.dialog) return;

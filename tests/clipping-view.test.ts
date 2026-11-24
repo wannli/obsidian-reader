@@ -112,10 +112,87 @@ it('offers explicit Keep and collection on selection, then saves through the rea
   f.surface.body
     .querySelector<HTMLElement>('[data-reader-clipping]')!
     .dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
+  expect(mocks.menus.at(-1)?.has('Open clipping')).toBe(true);
+  expect(mocks.menus.at(-1)?.has('Delete clipping…')).toBe(true);
+  expect(f.opened.openFile).not.toHaveBeenCalled();
+  mocks.menus.at(-1)!.get('Open clipping')!();
   await vi.waitFor(() =>
     expect(f.opened.openFile).toHaveBeenCalledWith(card, expect.objectContaining({ active: true })),
   );
 });
+async function savedFixture() {
+  const f = await fixture();
+  await f.select();
+  passageButton(f.view, 'Keep passage').click();
+  await f.probe.operations;
+  await vi.waitFor(() =>
+    expect(f.surface.body.querySelector('[data-reader-clipping]')).not.toBeNull(),
+  );
+  passageButton(f.view, 'Done').click();
+  const mark = f.surface.body.querySelector<HTMLElement>('[data-reader-clipping]')!;
+  return { ...f, mark, card: f.vault.file('Nodes/Alpha phrase.md')! };
+}
+
+it('opens a native clipping action menu and only trashes after explicit confirmation', async () => {
+  const f = await savedFixture();
+  const source = await f.vault.read(f.article);
+  f.vault.bytes.set(f.card, (await f.vault.read(f.card)) + '\nPersonal writing');
+  f.mark.click();
+  expect(f.mark.getAttribute('role')).toBe('button');
+  expect(f.mark.getAttribute('aria-haspopup')).toBe('menu');
+  mocks.menus.at(-1)!.get('Delete clipping…')!();
+  await vi.waitFor(() => expect(mocks.confirmClippingDeletion).toHaveBeenCalledOnce());
+  expect(f.vault.file(f.card.path)).toBe(f.card);
+  expect(mocks.confirmClippingDeletion.mock.calls[0][1]).toBe(f.card.path);
+  const trash = mocks.confirmClippingDeletion.mock.calls[0][2];
+  await trash(new AbortController().signal);
+  expect(f.vault.trashed).toContain(f.card.path);
+  expect(await f.vault.read(f.article)).toBe(source);
+  await vi.waitFor(() => expect(f.surface.body.querySelector('[data-reader-clipping]')).toBeNull());
+  expect(f.view.contentEl.textContent).toContain('Clipping moved to vault trash.');
+});
+it('supports Space and held-key guards for clipping actions', async () => {
+  const f = await savedFixture();
+  f.mark.dispatchEvent(new KeyboardEvent('keydown', { key: ' ', bubbles: true, cancelable: true }));
+  expect(mocks.menus).toHaveLength(1);
+  f.mark.dispatchEvent(
+    new KeyboardEvent('keydown', { key: ' ', repeat: true, bubbles: true, cancelable: true }),
+  );
+  expect(mocks.menus).toHaveLength(1);
+});
+it('preserves modifier-click opening without showing the menu', async () => {
+  const f = await savedFixture();
+  f.mark.dispatchEvent(new MouseEvent('click', { ctrlKey: true, bubbles: true, cancelable: true }));
+  await vi.waitFor(() => expect(f.opened.openFile).toHaveBeenCalled());
+  expect(mocks.menus).toHaveLength(0);
+  expect(mocks.confirmClippingDeletion).not.toHaveBeenCalled();
+});
+it('rejects edits made while confirmation is open and preserves the clipping mark', async () => {
+  const f = await savedFixture();
+  f.mark.click();
+  mocks.menus.at(-1)!.get('Delete clipping…')!();
+  await vi.waitFor(() => expect(mocks.confirmClippingDeletion).toHaveBeenCalledOnce());
+  f.vault.bytes.set(f.card, (await f.vault.read(f.card)) + '\nNew writing after confirmation');
+  await expect(
+    mocks.confirmClippingDeletion.mock.calls[0][2](new AbortController().signal),
+  ).rejects.toThrow('changed');
+  expect(f.vault.trashed).toEqual([]);
+  expect(f.surface.body.querySelector('[data-reader-clipping]')).not.toBeNull();
+  expect(f.view.contentEl.textContent).toContain('clipping changed');
+});
+it('cancels clipping deletion when the article is left', async () => {
+  const f = await savedFixture();
+  f.mark.click();
+  mocks.menus.at(-1)!.get('Delete clipping…')!();
+  await vi.waitFor(() => expect(mocks.confirmClippingDeletion).toHaveBeenCalledOnce());
+  const [, , trash, signal] = mocks.confirmClippingDeletion.mock.calls[0];
+  await f.view.readingList();
+  expect(signal.aborted).toBe(true);
+  await trash(new AbortController().signal).catch(() => {});
+  expect(f.vault.file(f.card.path)).toBe(f.card);
+  expect(f.vault.trashed).toEqual([]);
+});
+
 it('keeps unconfigured capture non-mutating and offers one-time setup without replaying the selection', async () => {
   const f = await fixture(false);
   await f.select();

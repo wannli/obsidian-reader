@@ -1,7 +1,11 @@
 // @vitest-environment node
 import { afterAll, beforeEach, expect, it, vi } from 'vitest';
 import type { App } from 'obsidian';
-import { confirmArticleReplacement, confirmWebLink } from '../src/host/dialogs';
+import {
+  confirmArticleReplacement,
+  confirmClippingDeletion,
+  confirmWebLink,
+} from '../src/host/dialogs';
 
 const dom = await vi.hoisted(async () => {
   const { builtinEnvironments } = await import('vitest/runtime');
@@ -73,6 +77,56 @@ const click = (label: string) =>
 beforeEach(() => {
   document.body.replaceChildren();
   vi.restoreAllMocks();
+});
+
+it('names the clipping, warns about personal writing, and leaves Cancel non-mutating', () => {
+  const trash = vi.fn();
+  confirmClippingDeletion(
+    {} as App,
+    'Nodes/Selected clipping.md',
+    trash,
+    new AbortController().signal,
+  );
+  expect(document.body.textContent).toContain('Nodes/Selected clipping.md');
+  expect(document.body.textContent).toContain('including any personal writing');
+  expect(document.body.textContent).toContain('recoverable vault trash');
+  click('Cancel');
+  expect(trash).not.toHaveBeenCalled();
+});
+it('requires a deliberate delete click, prevents repeat dispatch and reports uncertain failure without blind retry', async () => {
+  let reject!: (error: Error) => void;
+  const trash = vi.fn(
+    () =>
+      new Promise<void>((_resolve, fail) => {
+        reject = fail;
+      }),
+  );
+  confirmClippingDeletion({} as App, 'Nodes/Clipping.md', trash, new AbortController().signal);
+  click('Delete clipping');
+  click('Delete clipping');
+  expect(trash).toHaveBeenCalledTimes(1);
+  reject(new Error('Native trash failed'));
+  await vi.waitFor(() =>
+    expect(document.body.textContent).toContain('deletion may already have completed'),
+  );
+  expect(document.body.querySelector('button:last-child')?.hasAttribute('disabled')).toBe(true);
+  click('Cancel');
+});
+it('closes clipping confirmation after a successful explicit trash', async () => {
+  const trash = vi.fn(async (_signal: AbortSignal) => {});
+  confirmClippingDeletion({} as App, 'Nodes/Clipping.md', trash, new AbortController().signal);
+  click('Delete clipping');
+  await vi.waitFor(() => expect(document.body.textContent).toBe(''));
+  expect(trash).toHaveBeenCalledOnce();
+  expect(trash.mock.calls[0][0].aborted).toBe(true);
+});
+it('closes clipping confirmation on article navigation and aborts its write signal', async () => {
+  const controller = new AbortController();
+  const trash = vi.fn(async () => {});
+  confirmClippingDeletion({} as App, 'Nodes/Clipping.md', trash, controller.signal);
+  controller.abort();
+  expect(document.body.textContent).toBe('');
+  expect(trash).not.toHaveBeenCalled();
 });
 
 it('warns about destructive article replacement, names the target, and Cancel does nothing', () => {

@@ -167,6 +167,56 @@ export function confirmArticleReplacement(
   modal.open();
 }
 
+export function confirmClippingDeletion(
+  app: App,
+  path: string,
+  trash: (signal: AbortSignal) => Promise<void>,
+  signal: AbortSignal,
+): void {
+  const lifetime = new AbortController();
+  class Deletion extends Modal {
+    onOpen(): void {
+      this.setTitle('Delete clipping?');
+      this.contentEl.createEl('p', { text: path });
+      this.contentEl.createEl('p', {
+        text: 'Move this entire clipping note, including any personal writing, to recoverable vault trash? The article, its paragraph reference and other clippings stay unchanged.',
+      });
+      const error = this.contentEl.createEl('p', { attr: { role: 'alert' } });
+      let pending = false;
+      new Setting(this.contentEl)
+        .addButton((button) => button.setButtonText('Cancel').onClick(() => this.close()))
+        .addButton((button) =>
+          button
+            .setButtonText('Delete clipping')
+            .setWarning()
+            .onClick(async () => {
+              if (pending || lifetime.signal.aborted || signal.aborted) return;
+              pending = true;
+              button.setDisabled(true);
+              try {
+                await trash(lifetime.signal);
+                this.close();
+              } catch (failure) {
+                if (lifetime.signal.aborted) return;
+                error.textContent = `${failure instanceof Error ? failure.message : String(failure)} Check the clipping note before trying again; deletion may already have completed.`;
+                // A failed native operation may already have committed. Require a new confirmation.
+              }
+            }),
+        );
+    }
+    onClose(): void {
+      lifetime.abort();
+      signal.removeEventListener('abort', abort);
+      this.contentEl.empty();
+    }
+  }
+  const modal = new Deletion(app),
+    abort = () => modal.close();
+  if (signal.aborted) return;
+  signal.addEventListener('abort', abort, { once: true });
+  modal.open();
+}
+
 export function confirmWebLink(
   app: App,
   url: string,

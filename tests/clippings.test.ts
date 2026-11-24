@@ -71,6 +71,79 @@ async function fixture(body = 'Streets shape our choices.', status = 'inbox') {
     bump: () => revision++,
   };
 }
+describe('explicit clipping deletion', () => {
+  it('trashes the whole confirmed card including personal writing, without changing its article or another card', async () => {
+    const f = await fixture();
+    const kept = await f.keep();
+    const card = f.vault.file(kept.path)!;
+    f.vault.bytes.set(card, (await f.vault.read(card)) + '\nMy personal writing.\n');
+    const otherRaw = await f.vault.read(card);
+    const other = await f.vault.create('Nodes/Other clipping.md', otherRaw);
+    const sourceRaw = await f.vault.read(f.file);
+    const deletion = await f.clippings.prepareDelete(f.snapshot, card.path, f.controller.signal);
+    expect(f.vault.trashed).toEqual([]);
+    await deletion.trash(() => {});
+    expect(f.vault.trashed).toEqual([kept.path]);
+    expect(await f.vault.read(f.file)).toBe(sourceRaw);
+    expect(await f.vault.read(other)).toBe(otherRaw);
+    expect(
+      (await f.clippings.scan(f.snapshot, f.controller.signal)).items.map((item) => item.path),
+    ).toEqual([other.path]);
+    expect(f.port.prepare).toHaveBeenCalledTimes(1);
+  });
+  it('rejects arbitrary notes and the article itself', async () => {
+    const f = await fixture();
+    const note = await f.vault.create(
+      'Nodes/Personal.md',
+      createDocument({ fileClass: 'Clipping', origin: '[[Other#^x]]' }, '> Words'),
+    );
+    await expect(
+      f.clippings.prepareDelete(f.snapshot, note.path, f.controller.signal),
+    ).rejects.toThrow('no longer a clipping');
+    await expect(
+      f.clippings.prepareDelete(f.snapshot, f.file.path, f.controller.signal),
+    ).rejects.toThrow('safely inspected');
+    expect(f.vault.trashed).toEqual([]);
+  });
+  it.each(['edit', 'replace', 'rename', 'dirty', 'cancel', 'rebind'] as const)(
+    'preserves a card on %s after confirmation was prepared',
+    async (change) => {
+      const f = await fixture();
+      const kept = await f.keep();
+      const card = f.vault.file(kept.path)!;
+      const deletion = await f.clippings.prepareDelete(f.snapshot, card.path, f.controller.signal);
+      if (change === 'edit') f.vault.bytes.set(card, (await f.vault.read(card)) + '\nNew writing');
+      if (change === 'replace') {
+        const raw = f.vault.bytes.get(card)!;
+        f.vault.files.delete(card.path);
+        await f.vault.create(card.path, raw);
+      }
+      if (change === 'rename') await f.vault.move(card, 'Nodes/Renamed.md');
+      if (change === 'dirty') f.vault.dirty.add(card);
+      if (change === 'cancel') f.controller.abort();
+      if (change === 'rebind') f.port.bindings = () => [];
+      await expect(deletion.trash(() => {})).rejects.toThrow();
+      expect(f.vault.trashed).toEqual([]);
+    },
+  );
+  it('rechecks bytes, cancellation and source identity at final trash dispatch', async () => {
+    for (const change of ['bytes', 'cancel', 'source']) {
+      const f = await fixture();
+      const kept = await f.keep();
+      const card = f.vault.file(kept.path)!;
+      const deletion = await f.clippings.prepareDelete(f.snapshot, card.path, f.controller.signal);
+      f.vault.beforeTrash = async () => {
+        if (change === 'bytes')
+          f.vault.bytes.set(card, (await f.vault.read(card)) + '\nConcurrent writing');
+        if (change === 'cancel') f.controller.abort();
+        if (change === 'source') f.vault.files.set(f.file.path, { path: f.file.path });
+      };
+      await expect(deletion.trash(() => {})).rejects.toThrow();
+      expect(f.vault.trashed).toEqual([]);
+    }
+  });
+});
+
 describe('clipping Markdown contract', () => {
   it('saves only provider binding and origin metadata, with a rich multiline blockquote', () => {
     const quote = '**Important** [words](https://example.org).\n\nAnother sentence.';
