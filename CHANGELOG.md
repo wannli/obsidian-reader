@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.35.0](https://github.com/wannli/obsidian-reader/compare/0.34.0...0.35.0) (2026-11-24)
+
+
+### Added
+
+* delete clipping notes from Reader ([64d37d4](https://github.com/wannli/obsidian-reader/commit/64d37d47987b57a02561cbeef9ad46ae0e9c3c7b))
+
 ## [0.34.0](https://github.com/wannli/obsidian-reader/compare/0.33.1...0.34.0) (2026-11-23)
 
 
